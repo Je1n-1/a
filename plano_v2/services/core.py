@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 import json
+from pathlib import Path
 import re
 import sqlite3
 import unicodedata
@@ -51,16 +52,76 @@ def _active_formation(conn, ident):
 
 
 FORMATION = {"name", "institution", "modality", "start_date", "expected_end_date", "status", "focus_priority"}
-CURRICULUM = {"name", "code", "period", "workload_minutes", "academic_status", "sort_order", "start_date", "end_date", "notes"}
+CURRICULUM = {
+    "name", "code", "period", "workload_minutes", "academic_status", "sort_order",
+    "start_date", "end_date", "notes", "review_status", "review_priority", "review_notes",
+    "item_type",
+}
 STUDY = {"favorite", "priority", "difficulty", "weekly_goal_minutes", "start_date", "target_date", "status", "academic_period", "result", "final_score"}
+
+ACADEMIC_STATUSES = tuple(grade_import.ACADEMIC_STATUSES)
+REVIEW_STATUSES = ("none", "queued", "in_progress", "reviewed")
+ITEM_TYPES = ("subject", "section")
+STUDY_ARCHIVE_REASONS = ("manual", "formation", "curriculum", "removed_current")
 
 
 def formations(conn, visibility="active"):
     if visibility not in {"active", "archived", "all"}:
         raise DomainError("Filtro de formações inválido.")
     where = {"active": "WHERE f.archived_at IS NULL", "archived": "WHERE f.archived_at IS NOT NULL", "all": ""}[visibility]
-    sql = "SELECT f.*,COUNT(DISTINCT d.id) curriculum_count,COUNT(DISTINCT s.id) active_studies FROM formacoes f LEFT JOIN disciplinas_grade d ON d.formation_id=f.id AND d.archived_at IS NULL LEFT JOIN materias_estudo s ON (s.related_formation_id=f.id OR s.curriculum_subject_id=d.id) AND s.status IN ('active','paused') " + where + " GROUP BY f.id ORDER BY f.created_at DESC"
-    return repo.many(conn, sql)
+    # Os agregados são calculados por formação antes do SELECT principal para não
+    # multiplicar disciplinas por estudos ativos no JOIN.
+    sql = """
+        WITH curriculum_stats AS (
+            SELECT d.formation_id,
+                COUNT(*) FILTER (WHERE d.archived_at IS NULL) AS curriculum_count,
+                COUNT(*) FILTER (WHERE d.archived_at IS NULL AND d.item_type='subject') AS valid_subjects,
+                COUNT(*) FILTER (WHERE d.archived_at IS NULL AND d.item_type='subject' AND d.academic_status='completed') AS completed_subjects,
+                COUNT(*) FILTER (WHERE d.archived_at IS NULL AND d.item_type='subject' AND d.academic_status='exempted') AS exempted_subjects,
+                COUNT(*) FILTER (WHERE d.archived_at IS NULL AND d.item_type='subject' AND d.academic_status='in_progress') AS in_progress_subjects,
+                COUNT(*) FILTER (WHERE d.archived_at IS NULL AND d.item_type='subject' AND d.academic_status NOT IN ('completed','exempted')) AS pending_subjects,
+                COUNT(*) FILTER (WHERE d.archived_at IS NULL AND d.item_type='subject' AND d.review_status IN ('queued','in_progress')) AS review_subjects,
+                COUNT(*) FILTER (WHERE d.archived_at IS NULL AND d.item_type='subject' AND d.academic_status='failed') AS failed_subjects,
+                COUNT(*) FILTER (WHERE d.archived_at IS NULL AND d.item_type='subject' AND d.academic_status='locked') AS locked_subjects,
+                COUNT(*) FILTER (WHERE d.archived_at IS NULL AND d.item_type='subject' AND d.academic_status='available') AS available_subjects,
+                COUNT(*) FILTER (WHERE d.archived_at IS NULL AND d.item_type='subject' AND d.academic_status='not_available') AS not_available_subjects
+            FROM disciplinas_grade d GROUP BY d.formation_id
+        ), study_stats AS (
+            SELECT COALESCE(s.related_formation_id,d.formation_id) formation_id,
+                COUNT(*) FILTER (WHERE s.status IN ('active','paused') AND s.archived_at IS NULL) AS active_studies
+            FROM materias_estudo s LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id
+            GROUP BY COALESCE(s.related_formation_id,d.formation_id)
+        )
+        SELECT f.*, COALESCE(c.curriculum_count,0) curriculum_count,
+            COALESCE(c.valid_subjects,0) valid_subjects,
+            COALESCE(c.completed_subjects,0) completed_subjects,
+            COALESCE(c.exempted_subjects,0) exempted_subjects,
+            COALESCE(c.in_progress_subjects,0) in_progress_subjects,
+            COALESCE(c.pending_subjects,0) pending_subjects,
+            COALESCE(c.review_subjects,0) review_subjects,
+            COALESCE(c.failed_subjects,0) failed_subjects,
+            COALESCE(c.locked_subjects,0) locked_subjects,
+            COALESCE(c.available_subjects,0) available_subjects,
+            COALESCE(c.not_available_subjects,0) not_available_subjects,
+            COALESCE(st.active_studies,0) active_studies
+        FROM formacoes f
+        LEFT JOIN curriculum_stats c ON c.formation_id=f.id
+        LEFT JOIN study_stats st ON st.formation_id=f.id
+    """ + where + " ORDER BY f.created_at DESC"
+    values = repo.many(conn, sql)
+    for formation in values:
+        total = int(formation["valid_subjects"] or 0)
+        satisfied = int(formation["completed_subjects"] or 0) + int(formation["exempted_subjects"] or 0)
+        formation["academic_progress_percent"] = round(satisfied * 100 / total, 1) if total else 0
+        formation["academic_progress"] = {
+            "total": total, "completed": int(formation["completed_subjects"] or 0),
+            "exempted": int(formation["exempted_subjects"] or 0),
+            "in_progress": int(formation["in_progress_subjects"] or 0),
+            "pending": int(formation["pending_subjects"] or 0),
+            "review": int(formation["review_subjects"] or 0),
+            "percent": formation["academic_progress_percent"],
+        }
+    return values
 
 
 def _formation_data(values, current=None):
@@ -101,12 +162,125 @@ def change_formation(conn, ident, values):
     repo.update(conn, "formacoes", ident, data); return _get(conn, "formacoes", ident)
 
 
+def _formation_study_ids(conn, formation_id, active_only=False):
+    status = " AND s.status IN ('active','paused')" if active_only else ""
+    rows = repo.many(conn, """
+        SELECT s.id FROM materias_estudo s
+        LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id
+        WHERE (s.related_formation_id=? OR d.formation_id=?)
+    """ + status, (formation_id, formation_id))
+    return [row["id"] for row in rows]
+
+
+def _cancel_future_planned(conn, study_ids):
+    if not study_ids:
+        return {"count": 0, "ids": []}
+    markers = ",".join("?" for _ in study_ids)
+    rows = conn.execute(
+        "UPDATE sessoes_planejadas SET status='cancelled',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+        f"WHERE study_subject_id IN ({markers}) AND status='planned' AND scheduled_date>=? RETURNING id",
+        (*study_ids, _today()),
+    ).fetchall()
+    return {"count": len(rows), "ids": [row["id"] for row in rows]}
+
+
+def _archive_study_row(conn, ident, reason="manual", formation_id=None):
+    study = _get(conn, "materias_estudo", ident)
+    if study["status"] == "archived" or study["archived_at"]:
+        return study
+    if reason not in STUDY_ARCHIVE_REASONS:
+        raise DomainError("Motivo de arquivamento inválido.")
+    previous = study["status"] if study["status"] in {"active", "paused", "completed"} else "active"
+    repo.update(conn, "materias_estudo", ident, {
+        "status": "archived", "archived_at": _now(), "archive_reason": reason,
+        "archived_by_formation_id": formation_id, "status_before_archive": previous,
+    })
+    return _get(conn, "materias_estudo", ident)
+
+
+def _restore_study_row(conn, ident):
+    study = _get(conn, "materias_estudo", ident)
+    formation_id = study["related_formation_id"]
+    if study["curriculum_subject_id"]:
+        curriculum_item = _get(conn, "disciplinas_grade", study["curriculum_subject_id"])
+        formation_id = curriculum_item["formation_id"]
+        if curriculum_item["archived_at"]:
+            raise DomainError("Restaure a disciplina antes de restaurar este estudo.", 409, "curriculum_archived")
+    if formation_id:
+        _active_formation(conn, formation_id)
+    restored_status = study["status_before_archive"] or "active"
+    repo.update(conn, "materias_estudo", ident, {
+        "status": restored_status, "archived_at": None, "archive_reason": None,
+        "archived_by_formation_id": None, "status_before_archive": None,
+    })
+    return _get(conn, "materias_estudo", ident)
+
+
+def archive_formation(conn, ident, study_policy="archive_studies"):
+    formation = _get(conn, "formacoes", ident)
+    if formation["archived_at"]:
+        raise DomainError("Esta formação já está arquivada.", 409, "formation_already_archived")
+    if study_policy not in {"archive_studies", "hide_studies"}:
+        raise DomainError("Escolha inválida para os estudos vinculados.", 400, "invalid_archive_policy")
+    active_ids = _formation_study_ids(conn, ident, active_only=True)
+    archived_ids = []
+    cancelled = {"count": 0, "ids": []}
+    if study_policy == "archive_studies":
+        for study_id in active_ids:
+            _archive_study_row(conn, study_id, "formation", ident)
+            archived_ids.append(study_id)
+        cancelled = _cancel_future_planned(conn, active_ids)
+    repo.update(conn, "formacoes", ident, {"status": "archived", "archived_at": _now()})
+    saved = _get(conn, "formacoes", ident)
+    return {
+        **saved, "formation": saved, "study_policy": study_policy,
+        "archived_studies": {"count": len(archived_ids), "ids": archived_ids},
+        "cancelled_future_blocks": cancelled,
+    }
+
+
+def restore_formation(conn, ident, restore_studies=False):
+    formation = _get(conn, "formacoes", ident)
+    if not formation["archived_at"]:
+        raise DomainError("Esta formação já está ativa.", 409, "formation_already_active")
+    repo.update(conn, "formacoes", ident, {"status": "active", "archived_at": None})
+    restored_ids = []
+    if _confirmed(restore_studies):
+        for study_id in _formation_study_ids(conn, ident):
+            study = _get(conn, "materias_estudo", study_id)
+            if study["status"] == "archived" and study["archive_reason"] == "formation" and study["archived_by_formation_id"] == ident:
+                _restore_study_row(conn, study_id)
+                restored_ids.append(study_id)
+    saved = _get(conn, "formacoes", ident)
+    return {**saved, "formation": saved, "restored_studies": {"count": len(restored_ids), "ids": restored_ids}}
+
+
+def archive_study(conn, ident, restore=False):
+    return _restore_study_row(conn, ident) if restore else _archive_study_row(conn, ident, "manual")
+
+
+def archive_curriculum(conn, ident, restore=False):
+    current = _get(conn, "disciplinas_grade", ident)
+    if restore:
+        _active_formation(conn, current["formation_id"])
+        repo.update(conn, "disciplinas_grade", ident, {"archived_at": None})
+    else:
+        _active_formation(conn, current["formation_id"])
+        repo.update(conn, "disciplinas_grade", ident, {"archived_at": _now()})
+    return _get(conn, "disciplinas_grade", ident)
+
+
 def archive(conn, table, ident, restore=False):
+    """Compatibilidade para as rotas antigas; regras específicas ficam acima."""
+    if table == "formacoes":
+        return restore_formation(conn, ident) if restore else archive_formation(conn, ident)
+    if table == "materias_estudo":
+        return archive_study(conn, ident, restore)
+    if table == "disciplinas_grade":
+        return archive_curriculum(conn, ident, restore)
     _get(conn, table, ident)
-    values = {"archived_at": None if restore else _now()}
-    if table == "formacoes": values["status"] = "active" if restore else "archived"
-    if table == "materias_estudo": values["status"] = "active" if restore else "archived"
-    repo.update(conn, table, ident, values); return _get(conn, table, ident)
+    repo.update(conn, table, ident, {"archived_at": None if restore else _now()})
+    return _get(conn, table, ident)
 
 
 def remove(conn, table, ident):
@@ -167,18 +341,334 @@ def delete_formation(conn, ident):
             "formation_has_dependencies",
             blockers,
         )
+    _create_destructive_backup(conn)
     repo.delete(conn, "formacoes", ident)
+    _assert_foreign_keys(conn)
+
+
+def _sql_ids(values):
+    identifiers = [int(value) for value in values if value is not None]
+    if not identifiers:
+        return "(NULL)", []
+    return "(" + ",".join("?" for _ in identifiers) + ")", identifiers
+
+
+def _selected_ids(conn, sql, params=()):
+    return [row["id"] for row in repo.many(conn, sql, params)]
+
+
+def _count_ids(values):
+    return {"count": len(values), "ids": values}
+
+
+def _dependency_scope(conn, curriculum_ids=(), study_ids=()):
+    curriculum_ids = list(dict.fromkeys(int(value) for value in curriculum_ids))
+    study_ids = list(dict.fromkeys(int(value) for value in study_ids))
+    if curriculum_ids:
+        marks, params = _sql_ids(curriculum_ids)
+        study_ids.extend(_selected_ids(conn, f"SELECT id FROM materias_estudo WHERE curriculum_subject_id IN {marks}", params))
+    study_ids = list(dict.fromkeys(study_ids))
+    marks, params = _sql_ids(study_ids)
+    group_ids = _selected_ids(conn, f"SELECT id FROM grupos_topicos WHERE study_subject_id IN {marks}", params)
+    topic_ids = _selected_ids(conn, f"SELECT id FROM topicos WHERE study_subject_id IN {marks}", params)
+    planned_rows = repo.many(conn, f"SELECT id,status FROM sessoes_planejadas WHERE study_subject_id IN {marks}", params)
+    session_ids = _selected_ids(conn, f"SELECT id FROM sessoes_estudo WHERE study_subject_id IN {marks}", params)
+    note_ids = _selected_ids(conn, f"SELECT id FROM anotacoes_estudo WHERE study_subject_id IN {marks}", params)
+    review_marks, review_params = _sql_ids(topic_ids)
+    review_ids = _selected_ids(conn, f"SELECT id FROM revisoes WHERE topic_id IN {review_marks}", review_params)
+    evaluation_ids = _selected_ids(conn, f"SELECT id FROM avaliacoes WHERE study_subject_id IN {marks}", params)
+    evaluation_marks, evaluation_params = _sql_ids(evaluation_ids)
+    link_ids = _selected_ids(conn, f"SELECT rowid id FROM avaliacao_topicos WHERE evaluation_id IN {evaluation_marks}", evaluation_params)
+    history_marks, history_params = _sql_ids(curriculum_ids)
+    history_ids = _selected_ids(conn, f"SELECT id FROM curriculum_status_history WHERE curriculum_subject_id IN {history_marks}", history_params)
+    by_status = {status: 0 for status in ("planned", "completed", "skipped", "rescheduled", "cancelled")}
+    for row in planned_rows:
+        by_status[row["status"]] = by_status.get(row["status"], 0) + 1
+    return {
+        "curriculum_subjects": _count_ids(curriculum_ids),
+        "study_subjects": _count_ids(study_ids),
+        "groups": _count_ids(group_ids), "topics": _count_ids(topic_ids),
+        "planned_sessions": {**_count_ids([row["id"] for row in planned_rows]), "by_status": by_status},
+        "study_sessions": _count_ids(session_ids), "notes": _count_ids(note_ids),
+        "reviews": _count_ids(review_ids), "evaluations": _count_ids(evaluation_ids),
+        "evaluation_topic_links": _count_ids(link_ids), "status_history": _count_ids(history_ids),
+    }
+
+
+def _dependencies_payload(entity, dependencies):
+    return {
+        "entity": entity, "dependencies": dependencies,
+        "has_dependencies": any(data["count"] for data in dependencies.values()),
+    }
+
+
+def curriculum_dependencies(conn, ident):
+    item = _get(conn, "disciplinas_grade", ident)
+    return _dependencies_payload(item, _dependency_scope(conn, [ident]))
+
+
+def study_dependencies(conn, ident):
+    study = _get(conn, "materias_estudo", ident)
+    return _dependencies_payload(study, _dependency_scope(conn, [], [study["id"]]))
+
+
+def formation_dependencies(conn, ident):
+    formation = _get(conn, "formacoes", ident)
+    curriculum_ids = _selected_ids(conn, "SELECT id FROM disciplinas_grade WHERE formation_id=?", (ident,))
+    direct_studies = _selected_ids(conn, "SELECT id FROM materias_estudo WHERE related_formation_id=?", (ident,))
+    dependencies = _dependency_scope(conn, curriculum_ids, direct_studies)
+    # A categoria explícita permite ao diálogo explicar que a formação contém
+    # disciplinas mesmo quando elas ainda não possuem estudo atual.
+    return _dependencies_payload(formation, dependencies)
+
+
+def _database_backup_path(conn):
+    row = conn.execute("PRAGMA database_list").fetchone()
+    database_file = row[2] if row else ""
+    if not database_file or database_file == ":memory:":
+        return None
+    source = Path(database_file)
+    if not source.exists():
+        return None
+    stamp = _local_now().strftime("%Y%m%d-%H%M%S")
+    candidate = source.with_name(f"{source.stem}.{stamp}.before-destructive-delete{source.suffix}")
+    suffix = 2
+    while candidate.exists():
+        candidate = source.with_name(f"{source.stem}.{stamp}.before-destructive-delete-{suffix}{source.suffix}")
+        suffix += 1
+    return candidate
+
+
+def _create_destructive_backup(conn):
+    target = _database_backup_path(conn)
+    if not target:
+        return None
+    try:
+        target_conn = sqlite3.connect(target)
+        try:
+            conn.backup(target_conn)
+        finally:
+            target_conn.close()
+    except sqlite3.Error as error:
+        raise DomainError("Não foi possível criar a cópia de segurança antes da exclusão.", 500, "backup_failed") from error
+    return str(target)
+
+
+def _assert_foreign_keys(conn):
+    violations = [tuple(row) for row in conn.execute("PRAGMA foreign_key_check").fetchall()]
+    if violations:
+        raise DomainError("A validação de integridade falhou; a exclusão foi desfeita.", 500, "foreign_key_check_failed", details={"violations": violations})
+
+
+def _delete_study_graph(conn, study_ids):
+    marks, params = _sql_ids(study_ids)
+    if not study_ids:
+        return
+    topic_ids = _selected_ids(conn, f"SELECT id FROM topicos WHERE study_subject_id IN {marks}", params)
+    topic_marks, topic_params = _sql_ids(topic_ids)
+    evaluation_ids = _selected_ids(conn, f"SELECT id FROM avaliacoes WHERE study_subject_id IN {marks}", params)
+    evaluation_marks, evaluation_params = _sql_ids(evaluation_ids)
+    # A ordem é deliberada: remove referências opcionais antes das entidades
+    # referenciadas e nunca depende de uma cascata ampla para ocultar a lógica.
+    conn.execute(f"DELETE FROM anotacoes_estudo WHERE study_subject_id IN {marks}", params)
+    conn.execute(f"DELETE FROM avaliacao_topicos WHERE evaluation_id IN {evaluation_marks} OR topic_id IN {topic_marks}", (*evaluation_params, *topic_params))
+    conn.execute(f"DELETE FROM revisoes WHERE topic_id IN {topic_marks}", topic_params)
+    conn.execute(f"DELETE FROM sessoes_estudo WHERE study_subject_id IN {marks}", params)
+    conn.execute(f"DELETE FROM sessoes_planejadas WHERE study_subject_id IN {marks}", params)
+    conn.execute(f"DELETE FROM avaliacoes WHERE id IN {evaluation_marks}", evaluation_params)
+    conn.execute(f"DELETE FROM topicos WHERE study_subject_id IN {marks}", params)
+    conn.execute(f"DELETE FROM grupos_topicos WHERE study_subject_id IN {marks}", params)
+    conn.execute(f"DELETE FROM materias_estudo WHERE id IN {marks}", params)
+
+
+def _require_destroy_confirmation(entity, confirmation, has_dependencies, include_dependencies):
+    expected = entity["name"] if "name" in entity else entity.get("personal_name")
+    if str(confirmation or "").strip() != str(expected or "").strip():
+        raise DomainError(
+            "Digite exatamente o nome do registro para confirmar a exclusão definitiva.", 400,
+            "typed_confirmation_required", details={"expected_confirmation": expected},
+        )
+    if has_dependencies and not _confirmed(include_dependencies):
+        raise DomainError(
+            "Confirme que os dados dependentes exibidos na prévia também serão excluídos.", 400,
+            "dependency_confirmation_required",
+        )
+
+
+def destructive_preview(conn, kind, ident):
+    handlers = {"formation": formation_dependencies, "curriculum": curriculum_dependencies, "study": study_dependencies}
+    if kind not in handlers: raise DomainError("Tipo de exclusão inválido.")
+    preview = handlers[kind](conn, ident)
+    expected = preview["entity"].get("name") or preview["entity"].get("personal_name")
+    preview["required_confirmation"] = expected
+    preview["destructive_action"] = True
+    return preview
+
+
+def destroy(conn, kind, ident, confirmation, include_dependencies=False):
+    preview = destructive_preview(conn, kind, ident)
+    entity = preview["entity"]
+    _require_destroy_confirmation(entity, confirmation, preview["has_dependencies"], include_dependencies)
+    backup = _create_destructive_backup(conn)
+    dependencies = preview["dependencies"]
+    if kind == "study":
+        _delete_study_graph(conn, dependencies["study_subjects"]["ids"])
+    elif kind == "curriculum":
+        _delete_study_graph(conn, dependencies["study_subjects"]["ids"])
+        marks, params = _sql_ids(dependencies["curriculum_subjects"]["ids"])
+        conn.execute(f"DELETE FROM curriculum_status_history WHERE curriculum_subject_id IN {marks}", params)
+        conn.execute(f"DELETE FROM disciplinas_grade WHERE id IN {marks}", params)
+    elif kind == "formation":
+        _delete_study_graph(conn, dependencies["study_subjects"]["ids"])
+        marks, params = _sql_ids(dependencies["curriculum_subjects"]["ids"])
+        conn.execute(f"DELETE FROM curriculum_status_history WHERE curriculum_subject_id IN {marks}", params)
+        conn.execute(f"DELETE FROM disciplinas_grade WHERE id IN {marks}", params)
+        conn.execute("DELETE FROM formacoes WHERE id=?", (ident,))
+    else:
+        raise DomainError("Tipo de exclusão inválido.")
+    _assert_foreign_keys(conn)
+    return {"deleted": True, "kind": kind, "id": ident, "backup": backup, "preview": preview}
+
+
+def delete_curriculum(conn, ident):
+    preview = curriculum_dependencies(conn, ident)
+    # Histórico de status é técnico, mas ainda é dependência auditável: a remoção
+    # simples continua permitida apenas quando não há nenhum vínculo.
+    if preview["has_dependencies"]:
+        raise DomainError("Não é possível excluir porque há dados relacionados. Consulte as dependências ou use a exclusão definitiva confirmada.", 409, "curriculum_has_dependencies", preview["dependencies"])
+    _create_destructive_backup(conn)
+    repo.delete(conn, "disciplinas_grade", ident); _assert_foreign_keys(conn)
+
+
+def delete_study(conn, ident):
+    preview = study_dependencies(conn, ident)
+    if preview["has_dependencies"]:
+        raise DomainError("Não é possível excluir porque há dados relacionados. Consulte as dependências ou use a exclusão definitiva confirmada.", 409, "study_has_dependencies", preview["dependencies"])
+    _create_destructive_backup(conn)
+    repo.delete(conn, "materias_estudo", ident); _assert_foreign_keys(conn)
+
+
+def _curriculum_summary(conn, formation_id):
+    totals = repo.one(conn, """
+        SELECT
+          COUNT(*) FILTER (WHERE archived_at IS NULL) all_active_items,
+          COUNT(*) FILTER (WHERE archived_at IS NULL AND item_type='subject') total_subjects,
+          COUNT(*) FILTER (WHERE archived_at IS NULL AND item_type='subject' AND academic_status='completed') completed,
+          COUNT(*) FILTER (WHERE archived_at IS NULL AND item_type='subject' AND academic_status='exempted') exempted,
+          COUNT(*) FILTER (WHERE archived_at IS NULL AND item_type='subject' AND academic_status='in_progress') in_progress,
+          COUNT(*) FILTER (WHERE archived_at IS NULL AND item_type='subject' AND academic_status='failed') failed,
+          COUNT(*) FILTER (WHERE archived_at IS NULL AND item_type='subject' AND academic_status='locked') locked,
+          COUNT(*) FILTER (WHERE archived_at IS NULL AND item_type='subject' AND academic_status='available') available,
+          COUNT(*) FILTER (WHERE archived_at IS NULL AND item_type='subject' AND academic_status='not_available') not_available,
+          COUNT(*) FILTER (WHERE archived_at IS NULL AND item_type='subject' AND academic_status NOT IN ('completed','exempted')) pending,
+          COUNT(*) FILTER (WHERE archived_at IS NULL AND item_type='subject' AND review_status IN ('queued','in_progress')) review,
+          COUNT(*) FILTER (WHERE archived_at IS NOT NULL) archived,
+          COUNT(*) FILTER (WHERE archived_at IS NULL AND item_type='section') sections
+        FROM disciplinas_grade WHERE formation_id=?
+    """, (formation_id,))
+    summary = {key: int(value or 0) for key, value in totals.items()}
+    summary["satisfied"] = summary["completed"] + summary["exempted"]
+    summary["academic_progress_percent"] = round(summary["satisfied"] * 100 / summary["total_subjects"], 1) if summary["total_subjects"] else 0
+    summary["by_status"] = {key: summary[key] for key in ACADEMIC_STATUSES}
+    summary["by_review_status"] = {
+        status: int(repo.one(conn, "SELECT COUNT(*) count FROM disciplinas_grade WHERE formation_id=? AND archived_at IS NULL AND item_type='subject' AND review_status=?", (formation_id, status))["count"])
+        for status in REVIEW_STATUSES
+    }
+    periods = repo.many(conn, """
+        SELECT COALESCE(NULLIF(period,''),'Sem período') period,
+          COUNT(*) FILTER (WHERE item_type='subject') total_subjects,
+          COUNT(*) FILTER (WHERE item_type='subject' AND academic_status='completed') completed,
+          COUNT(*) FILTER (WHERE item_type='subject' AND academic_status='exempted') exempted,
+          COUNT(*) FILTER (WHERE item_type='subject' AND academic_status='in_progress') in_progress,
+          COUNT(*) FILTER (WHERE item_type='subject' AND academic_status NOT IN ('completed','exempted')) pending,
+          COUNT(*) FILTER (WHERE item_type='subject' AND review_status IN ('queued','in_progress')) review
+        FROM disciplinas_grade
+        WHERE formation_id=? AND archived_at IS NULL
+        GROUP BY COALESCE(NULLIF(period,''),'Sem período')
+        ORDER BY MIN(sort_order), period
+    """, (formation_id,))
+    for period in periods:
+        period["academic_progress_percent"] = round((period["completed"] + period["exempted"]) * 100 / period["total_subjects"], 1) if period["total_subjects"] else 0
+    summary["by_period"] = periods
+    return summary
+
+
+def _curriculum_query(conn, formation_id, filters=None):
+    filters = filters or {}
+    clauses, params = ["d.formation_id=?"], [formation_id]
+    visibility = filters.get("visibility")
+    if visibility is None:
+        visibility = "all" if filters.get("include_archived") else "active"
+    if visibility not in {"active", "archived", "all"}:
+        raise DomainError("Filtro de arquivamento da grade inválido.")
+    if visibility == "active": clauses.append("d.archived_at IS NULL")
+    elif visibility == "archived": clauses.append("d.archived_at IS NOT NULL")
+    quick = filters.get("quick")
+    quick_conditions = {
+        "all": None, "available": "d.academic_status='available'", "in_progress": "d.academic_status='in_progress'",
+        "review": "d.review_status IN ('queued','in_progress')", "completed": "d.academic_status='completed'",
+        "pending": "d.academic_status NOT IN ('completed','exempted')", "failed": "d.academic_status='failed'",
+        "locked": "d.academic_status='locked'", "exempted": "d.academic_status='exempted'", "archived": "d.archived_at IS NOT NULL",
+    }
+    if quick:
+        if quick not in quick_conditions:
+            raise DomainError("Filtro rápido da grade inválido.")
+        if quick == "archived":
+            clauses = [clause for clause in clauses if clause != "d.archived_at IS NULL"]
+        if quick_conditions[quick]: clauses.append(quick_conditions[quick])
+    for field, column, allowed in (
+        ("academic_status", "d.academic_status", ACADEMIC_STATUSES),
+        ("review_status", "d.review_status", REVIEW_STATUSES),
+        ("item_type", "d.item_type", ITEM_TYPES),
+    ):
+        value = filters.get(field)
+        if value:
+            values = [item.strip() for item in str(value).split(",") if item.strip()]
+            if not values or any(item not in allowed for item in values):
+                raise DomainError(f"Filtro {field} inválido.")
+            clauses.append(f"{column} IN ({','.join('?' for _ in values)})")
+            params.extend(values)
+    period = filters.get("period")
+    if period:
+        clauses.append("COALESCE(d.period,'')=?"); params.append(str(period))
+    query = str(filters.get("q") or "").strip()
+    if query:
+        clauses.append("(d.name LIKE ? COLLATE NOCASE OR d.code LIKE ? COLLATE NOCASE)")
+        params.extend([f"%{query}%", f"%{query}%"])
+    order = filters.get("sort", "period")
+    orders = {
+        "period": "COALESCE(d.period,''),d.sort_order,d.name COLLATE NOCASE",
+        "order": "d.sort_order,d.name COLLATE NOCASE", "name": "d.name COLLATE NOCASE",
+        "status": "d.academic_status,d.name COLLATE NOCASE", "updated": "d.updated_at DESC,d.name COLLATE NOCASE",
+    }
+    if order not in orders: raise DomainError("Ordenação da grade inválida.")
+    sql = """
+        SELECT d.*, s.id active_study_id, s.status active_study_status
+        FROM disciplinas_grade d
+        LEFT JOIN materias_estudo s ON s.curriculum_subject_id=d.id
+          AND s.status IN ('active','paused') AND s.archived_at IS NULL
+        WHERE """ + " AND ".join(clauses) + " ORDER BY " + orders[order]
+    return repo.many(conn, sql, params)
 
 
 def curriculum(conn, formation_id, include_archived=False):
     _get(conn, "formacoes", formation_id)
-    hidden = "" if include_archived else "AND d.archived_at IS NULL"
-    return repo.many(conn, "SELECT d.*,s.id active_study_id FROM disciplinas_grade d LEFT JOIN materias_estudo s ON s.curriculum_subject_id=d.id AND s.status IN ('active','paused') WHERE d.formation_id=? " + hidden + " ORDER BY d.sort_order,d.name", (formation_id,))
+    return _curriculum_query(conn, formation_id, {"include_archived": include_archived})
+
+
+def curriculum_management(conn, formation_id, filters=None):
+    formation = _get(conn, "formacoes", formation_id)
+    items = _curriculum_query(conn, formation_id, filters)
+    all_periods = repo.many(conn, "SELECT DISTINCT period FROM disciplinas_grade WHERE formation_id=? AND period IS NOT NULL AND trim(period)<>'' ORDER BY period", (formation_id,))
+    return {
+        "formation": formation, "items": items, "summary": _curriculum_summary(conn, formation_id),
+        "periods": [row["period"] for row in all_periods], "filters": filters or {},
+    }
 
 
 def _curriculum_data(values, current=None):
     data = _fields(values, CURRICULUM)
-    for key in ("code", "period", "start_date", "end_date", "notes"):
+    for key in ("code", "period", "start_date", "end_date", "notes", "review_notes"):
         if data.get(key) == "":
             data[key] = None
     candidate = {**(current or {}), **data}
@@ -195,8 +685,21 @@ def _curriculum_data(values, current=None):
             raise DomainError("Carga horária deve ser maior que zero.")
         data["workload_minutes"] = minutes
     status = candidate.get("academic_status", "not_available")
-    if status not in grade_import.ACADEMIC_STATUSES:
+    if status not in ACADEMIC_STATUSES:
         raise DomainError("Status acadêmico inválido.")
+    review_status = candidate.get("review_status", "none")
+    if review_status not in REVIEW_STATUSES:
+        raise DomainError("Status de revisão inválido.")
+    item_type = candidate.get("item_type", "subject")
+    if item_type not in ITEM_TYPES:
+        raise DomainError("Tipo de item curricular inválido.")
+    if "review_priority" in data and data["review_priority"] not in (None, ""):
+        try: priority = int(data["review_priority"])
+        except (TypeError, ValueError) as error: raise DomainError("Prioridade de revisão deve ser um número de 1 a 5.") from error
+        if not 1 <= priority <= 5: raise DomainError("Prioridade de revisão deve estar entre 1 e 5.")
+        data["review_priority"] = priority
+    elif data.get("review_priority") == "":
+        data["review_priority"] = None
     if "sort_order" in data:
         try:
             order = int(data["sort_order"])
@@ -219,17 +722,54 @@ def create_curriculum(conn, formation_id, values):
     _active_formation(conn, formation_id)
     data = _curriculum_data(values)
     data.update({"formation_id": formation_id})
-    data.setdefault("academic_status", "not_available"); data.setdefault("sort_order", 0)
+    data.setdefault("academic_status", "not_available"); data.setdefault("review_status", "none")
+    data.setdefault("item_type", "subject"); data.setdefault("sort_order", 0)
     try: ident = repo.insert(conn, "disciplinas_grade", data)
     except sqlite3.IntegrityError as error: raise DomainError("Já existe uma disciplina com esse nome nesta formação.", 409) from error
     return _get(conn, "disciplinas_grade", ident)
 
 
+def _record_curriculum_status(conn, current, saved, origin="manual", notes=None):
+    if current["academic_status"] == saved["academic_status"] and current["review_status"] == saved["review_status"]:
+        return None
+    return repo.insert(conn, "curriculum_status_history", {
+        "curriculum_subject_id": saved["id"],
+        "previous_academic_status": current["academic_status"], "academic_status": saved["academic_status"],
+        "previous_review_status": current["review_status"], "review_status": saved["review_status"],
+        "origin": origin, "notes": notes,
+    })
+
+
+def change_curriculum_status(conn, ident, values, origin="manual", notes=None):
+    current = _get(conn, "disciplinas_grade", ident)
+    _active_formation(conn, current["formation_id"])
+    if current["archived_at"]:
+        raise DomainError("Restaure a disciplina antes de alterar seu estado.", 409, "curriculum_archived")
+    data = _curriculum_data(values, current)
+    status_data = _fields(data, {"academic_status", "review_status", "review_priority", "review_notes"})
+    if status_data:
+        repo.update(conn, "disciplinas_grade", ident, status_data)
+    saved = _get(conn, "disciplinas_grade", ident)
+    _record_curriculum_status(conn, current, saved, origin, notes)
+    return saved
+
+
 def update_curriculum(conn, ident, values):
     current = _get(conn, "disciplinas_grade", ident)
     _active_formation(conn, current["formation_id"])
+    if current["archived_at"]:
+        raise DomainError("Restaure a disciplina antes de editá-la.", 409, "curriculum_archived")
     data = _curriculum_data(values, current)
-    repo.update(conn, "disciplinas_grade", ident, data); return _get(conn, "disciplinas_grade", ident)
+    ordinary = {key: value for key, value in data.items() if key not in {"academic_status", "review_status", "review_priority", "review_notes"}}
+    if ordinary: repo.update(conn, "disciplinas_grade", ident, ordinary)
+    if any(key in data for key in {"academic_status", "review_status", "review_priority", "review_notes"}):
+        return change_curriculum_status(conn, ident, data, "manual", values.get("status_notes"))
+    return _get(conn, "disciplinas_grade", ident)
+
+
+def curriculum_status_history(conn, ident):
+    _get(conn, "disciplinas_grade", ident)
+    return repo.many(conn, "SELECT * FROM curriculum_status_history WHERE curriculum_subject_id=? ORDER BY created_at DESC,id DESC", (ident,))
 
 
 def curriculum_import_preview(conn, formation_id, result):
@@ -329,8 +869,15 @@ def import_curriculum(conn, formation_id, items, confirmed=False):
         if operation == "insert":
             inserted.append(create_curriculum(conn, formation_id, values))
         else:
-            repo.update(conn, "disciplinas_grade", existing_id, _curriculum_data(values, _get(conn, "disciplinas_grade", existing_id)))
-            updated.append(_get(conn, "disciplinas_grade", existing_id))
+            previous = _get(conn, "disciplinas_grade", existing_id)
+            data = _curriculum_data(values, previous)
+            ordinary = {key: value for key, value in data.items() if key not in {"academic_status", "review_status", "review_priority", "review_notes"}}
+            if ordinary:
+                repo.update(conn, "disciplinas_grade", existing_id, ordinary)
+            if any(key in data for key in {"academic_status", "review_status", "review_priority", "review_notes"}):
+                updated.append(change_curriculum_status(conn, existing_id, data, "import"))
+            else:
+                updated.append(_get(conn, "disciplinas_grade", existing_id))
     return {
         "inserted": inserted,
         "updated": updated,
@@ -339,36 +886,315 @@ def import_curriculum(conn, formation_id, items, confirmed=False):
     }
 
 
-def studies(conn, include_archived=False, week_reference=None):
+def _comparison_key(value):
+    raw = unicodedata.normalize("NFKD", str(value or ""))
+    raw = "".join(character for character in raw if not unicodedata.combining(character))
+    raw = raw.casefold()
+    return re.sub(r"\s+", " ", re.sub(r"[^\w]+", " ", raw)).strip()
+
+
+def _candidate_summary(conn, item):
+    dependencies = _dependency_scope(conn, [item["id"]])
+    return {
+        "id": item["id"], "name": item["name"], "code": item["code"], "period": item["period"],
+        "workload_minutes": item["workload_minutes"], "academic_status": item["academic_status"],
+        "review_status": item["review_status"], "review_priority": item["review_priority"],
+        "item_type": item["item_type"], "archived_at": item["archived_at"],
+        "dependencies": {key: value["count"] for key, value in dependencies.items()},
+    }
+
+
+def duplicate_candidates(conn, formation_id):
+    _get(conn, "formacoes", formation_id)
+    rows = repo.many(conn, "SELECT * FROM disciplinas_grade WHERE formation_id=? AND item_type='subject' ORDER BY sort_order,name", (formation_id,))
+    full_keys = {_comparison_key(row["name"]) for row in rows}
+    groups = defaultdict(list)
+    for row in rows:
+        key = _comparison_key(row["name"])
+        trailing = re.fullmatch(r"(.+?)\s+(\d{2,4})", key)
+        if trailing and trailing.group(1) in full_keys:
+            # Só retira o número quando há uma disciplina irmã com o nome-base;
+            # assim Cálculo I e Circuitos II nunca perdem seu identificador.
+            key = trailing.group(1)
+        groups[key].append(row)
+    candidates = []
+    for key, items in groups.items():
+        if len(items) < 2: continue
+        candidates.append({
+            "comparison_key": key,
+            "candidates": [_candidate_summary(conn, item) for item in items],
+            "requires_manual_merge": True,
+        })
+    return {"formation_id": formation_id, "groups": candidates, "count": len(candidates)}
+
+
+def structural_candidates(conn, formation_id):
+    _get(conn, "formacoes", formation_id)
+    rows = repo.many(conn, """
+        SELECT * FROM disciplinas_grade
+        WHERE formation_id=? AND item_type='subject' AND name LIKE 'UCFC %' COLLATE NOCASE
+        ORDER BY sort_order,name
+    """, (formation_id,))
+    return {"formation_id": formation_id, "items": [_candidate_summary(conn, item) for item in rows], "count": len(rows)}
+
+
+def merge_curriculum(conn, formation_id, primary_id, duplicate_ids, preserve=None, confirmation=None):
+    _active_formation(conn, formation_id)
+    try:
+        primary_id = int(primary_id)
+        duplicate_ids = [int(item) for item in duplicate_ids or [] if int(item) != primary_id]
+    except (TypeError, ValueError) as error:
+        raise DomainError("Seleção de possíveis duplicidades inválida.") from error
+    duplicate_ids = list(dict.fromkeys(duplicate_ids))
+    if not duplicate_ids: raise DomainError("Escolha ao menos um registro duplicado para mesclar.")
+    primary = _get(conn, "disciplinas_grade", primary_id)
+    if primary["formation_id"] != formation_id:
+        raise DomainError("O registro principal não pertence a esta formação.", 409, "cross_formation_merge")
+    marks, params = _sql_ids(duplicate_ids)
+    duplicates = repo.many(conn, f"SELECT * FROM disciplinas_grade WHERE id IN {marks}", params)
+    if len(duplicates) != len(duplicate_ids) or any(item["formation_id"] != formation_id for item in duplicates):
+        raise DomainError("Possíveis duplicidades de outra formação não podem ser mescladas.", 409, "cross_formation_merge")
+    if str(confirmation or "").strip() != primary["name"].strip():
+        raise DomainError("Digite exatamente o nome do registro principal para confirmar a mesclagem.", 400, "typed_confirmation_required", details={"expected_confirmation": primary["name"]})
+    all_ids = [primary_id, *duplicate_ids]
+    all_marks, all_params = _sql_ids(all_ids)
+    active_studies = repo.many(conn, f"SELECT id,curriculum_subject_id FROM materias_estudo WHERE curriculum_subject_id IN {all_marks} AND status IN ('active','paused') AND archived_at IS NULL", all_params)
+    if len(active_studies) > 1:
+        raise DomainError("Há mais de um estudo atual entre os registros escolhidos. Arquive ou encerre um deles antes de mesclar.", 409, "merge_active_study_conflict", details={"study_ids": [item["id"] for item in active_studies]})
+    data = _curriculum_data(preserve or {}, primary)
+    # Uma cópia datada é criada antes de redirecionar vínculos e eliminar linhas.
+    backup = _create_destructive_backup(conn)
+    conn.execute(f"UPDATE materias_estudo SET curriculum_subject_id=? WHERE curriculum_subject_id IN {marks}", (primary_id, *params))
+    conn.execute(f"UPDATE curriculum_status_history SET curriculum_subject_id=? WHERE curriculum_subject_id IN {marks}", (primary_id, *params))
+    conn.execute(f"DELETE FROM disciplinas_grade WHERE id IN {marks}", params)
+    ordinary = {key: value for key, value in data.items() if key not in {"academic_status", "review_status", "review_priority", "review_notes"}}
+    if ordinary: repo.update(conn, "disciplinas_grade", primary_id, ordinary)
+    if any(key in data for key in {"academic_status", "review_status", "review_priority", "review_notes"}):
+        change_curriculum_status(conn, primary_id, data, "merge", (preserve or {}).get("history_notes"))
+    saved = _get(conn, "disciplinas_grade", primary_id)
+    _assert_foreign_keys(conn)
+    return {"primary": saved, "merged_ids": duplicate_ids, "backup": backup}
+
+
+def _batch_curriculum_ids(conn, formation_id, values):
+    raw_ids = values.get("ids", values.get("curriculum_ids", []))
+    if not isinstance(raw_ids, list) or not raw_ids:
+        raise DomainError("Selecione ao menos uma disciplina.")
+    try: ids = list(dict.fromkeys(int(item) for item in raw_ids))
+    except (TypeError, ValueError) as error: raise DomainError("Seleção de disciplinas inválida.") from error
+    marks, params = _sql_ids(ids)
+    actual = _selected_ids(conn, f"SELECT id FROM disciplinas_grade WHERE formation_id=? AND id IN {marks}", (formation_id, *params))
+    if len(actual) != len(ids):
+        raise DomainError("Todas as disciplinas selecionadas devem pertencer à mesma formação.", 409, "cross_formation_batch")
+    return ids
+
+
+def curriculum_batch_preview(conn, formation_id, values):
+    _get(conn, "formacoes", formation_id)
+    ids = _batch_curriculum_ids(conn, formation_id, values)
+    action = values.get("action")
+    dependencies = _dependency_scope(conn, ids)
+    expected = f"EXCLUIR {len(ids)} DISCIPLINAS"
+    return {
+        "formation_id": formation_id, "ids": ids, "action": action, "affected": len(ids),
+        "dependencies": dependencies, "has_dependencies": any(value["count"] for value in dependencies.values()),
+        "required_confirmation": expected if action in {"destroy", "delete"} else None,
+    }
+
+
+def curriculum_batch(conn, formation_id, values):
+    _active_formation(conn, formation_id)
+    preview = curriculum_batch_preview(conn, formation_id, values)
+    ids, action = preview["ids"], values.get("action")
+    if action == "set_status":
+        status = values.get("academic_status")
+        for ident in ids: change_curriculum_status(conn, ident, {"academic_status": status}, "manual", values.get("notes"))
+    elif action == "set_review":
+        status = values.get("review_status")
+        for ident in ids: change_curriculum_status(conn, ident, {"review_status": status, "review_priority": values.get("review_priority"), "review_notes": values.get("review_notes")}, "review", values.get("notes"))
+    elif action == "archive":
+        for ident in ids: archive_curriculum(conn, ident)
+    elif action == "restore":
+        for ident in ids: archive_curriculum(conn, ident, True)
+    elif action == "classify":
+        item_type = values.get("item_type")
+        if item_type not in ITEM_TYPES: raise DomainError("Tipo de item curricular inválido.")
+        for ident in ids: update_curriculum(conn, ident, {"item_type": item_type})
+    elif action in {"destroy", "delete"}:
+        expected = preview["required_confirmation"]
+        if str(values.get("confirmation") or "").strip() != expected:
+            raise DomainError("Digite a confirmação exibida para excluir as disciplinas selecionadas.", 400, "typed_confirmation_required", details={"expected_confirmation": expected})
+        if preview["has_dependencies"] and not _confirmed(values.get("include_dependencies")):
+            raise DomainError("Confirme a exclusão dos dados dependentes exibidos na prévia.", 400, "dependency_confirmation_required")
+        backup = _create_destructive_backup(conn)
+        _delete_study_graph(conn, preview["dependencies"]["study_subjects"]["ids"])
+        marks, params = _sql_ids(ids)
+        conn.execute(f"DELETE FROM curriculum_status_history WHERE curriculum_subject_id IN {marks}", params)
+        conn.execute(f"DELETE FROM disciplinas_grade WHERE id IN {marks}", params)
+        _assert_foreign_keys(conn)
+        preview["backup"] = backup
+    else:
+        raise DomainError("Ação em lote inválida.")
+    return {"affected": len(ids), "action": action, "preview": preview, "summary": _curriculum_summary(conn, formation_id)}
+
+
+def _study_formation_id(study, curriculum_item=None):
+    return study["related_formation_id"] or (curriculum_item or {}).get("formation_id")
+
+
+def _assert_study_accessible(conn, ident, require_current=False):
+    study = _get(conn, "materias_estudo", ident)
+    if study["archived_at"] or study["status"] == "archived":
+        raise DomainError("Este estudo está arquivado. Restaure-o antes de iniciar o foco.", 409, "study_archived")
+    curriculum_item = _get(conn, "disciplinas_grade", study["curriculum_subject_id"]) if study["curriculum_subject_id"] else None
+    if curriculum_item and curriculum_item["archived_at"]:
+        raise DomainError("A disciplina deste estudo está arquivada. Restaure-a antes de iniciar o foco.", 409, "archived_parent")
+    formation_id = _study_formation_id(study, curriculum_item)
+    if formation_id and _get(conn, "formacoes", formation_id)["archived_at"]:
+        raise DomainError("A formação deste estudo está arquivada. Restaure-a antes de iniciar o foco.", 409, "archived_parent")
+    if require_current and study["status"] not in {"active", "paused"}:
+        raise DomainError("Este estudo não está nos estudos atuais.", 409, "study_not_current")
+    return study
+
+
+def studies(conn, include_archived=False, week_reference=None, visibility=None, formation_id=None, q=None, review=None):
+    """Lista estudos respeitando o arquivamento próprio e de seus pais.
+
+    ``include_archived`` permanece aceito para a interface anterior; os filtros
+    novos usam ``visibility`` e nunca fazem um estudo ativo sob pai arquivado
+    parecer atual.
+    """
     week_start, week_end = _week_bounds(week_reference)
-    visibility = "" if include_archived else "WHERE s.archived_at IS NULL"
-    sql = "SELECT s.*,COALESCE(d.name,s.personal_name) name,f.name formation_name,COALESCE((SELECT ROUND(AVG(t.mastery),1) FROM topicos t WHERE t.study_subject_id=s.id AND t.archived_at IS NULL),0) mastery_average,(SELECT COUNT(*) FROM topicos t WHERE t.study_subject_id=s.id AND t.archived_at IS NULL AND t.status<>'completed') pending_topics,(SELECT COUNT(*) FROM topicos t WHERE t.study_subject_id=s.id AND t.archived_at IS NULL) topic_count,(SELECT COUNT(*) FROM topicos t WHERE t.study_subject_id=s.id AND t.archived_at IS NULL AND t.status='completed') completed_topics,COALESCE((SELECT SUM(x.duration_seconds) FROM sessoes_estudo x WHERE x.study_subject_id=s.id AND x.date BETWEEN ? AND ?),0) week_seconds,COALESCE((SELECT SUM(p.planned_duration_minutes) FROM sessoes_planejadas p WHERE p.study_subject_id=s.id AND p.status='planned' AND p.scheduled_date BETWEEN ? AND ?),0) planned_week_minutes FROM materias_estudo s LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id LEFT JOIN formacoes f ON f.id=COALESCE(s.related_formation_id,d.formation_id) " + visibility + " ORDER BY s.favorite DESC,s.priority DESC,s.created_at DESC"
-    values = repo.many(conn, sql, (week_start.isoformat(), week_end.isoformat(), week_start.isoformat(), week_end.isoformat()))
+    if visibility is None:
+        visibility = "all" if include_archived else "active"
+    if visibility not in {"active", "paused", "review", "completed", "archived", "all"}:
+        raise DomainError("Filtro de estudos inválido.")
+    parent_active = "s.archived_at IS NULL AND s.status<>'archived' AND (d.id IS NULL OR d.archived_at IS NULL) AND (f.id IS NULL OR f.archived_at IS NULL)"
+    clauses, params = [], []
+    if visibility == "active": clauses.append(parent_active + " AND s.status='active'")
+    elif visibility == "paused": clauses.append(parent_active + " AND s.status='paused'")
+    elif visibility == "review": clauses.append(parent_active + " AND d.review_status IN ('queued','in_progress')")
+    elif visibility == "completed": clauses.append(parent_active + " AND s.status='completed'")
+    elif visibility == "archived": clauses.append("s.archived_at IS NOT NULL OR s.status='archived' OR d.archived_at IS NOT NULL OR f.archived_at IS NOT NULL")
+    if formation_id not in (None, ""):
+        try: selected_formation = int(formation_id)
+        except (TypeError, ValueError) as error: raise DomainError("Formação do filtro é inválida.") from error
+        clauses.append("COALESCE(s.related_formation_id,d.formation_id)=?"); params.append(selected_formation)
+    if q and str(q).strip():
+        clauses.append("COALESCE(d.name,s.personal_name) LIKE ? COLLATE NOCASE"); params.append(f"%{str(q).strip()}%")
+    if review:
+        if review not in REVIEW_STATUSES: raise DomainError("Filtro de revisão inválido.")
+        clauses.append("COALESCE(d.review_status,'none')=?"); params.append(review)
+    where = (" WHERE " + " AND ".join(f"({clause})" for clause in clauses)) if clauses else ""
+    sql = """
+        SELECT s.*, COALESCE(d.name,s.personal_name) name, f.name formation_name,
+          d.academic_status, d.review_status, d.item_type, d.archived_at curriculum_archived_at,
+          f.archived_at formation_archived_at,
+          CASE WHEN s.archived_at IS NOT NULL OR s.status='archived' THEN 'study_archived'
+               WHEN d.archived_at IS NOT NULL THEN 'curriculum_archived'
+               WHEN f.archived_at IS NOT NULL THEN 'formation_archived'
+               ELSE NULL END visibility_reason,
+          COALESCE((SELECT ROUND(AVG(t.mastery),1) FROM topicos t WHERE t.study_subject_id=s.id AND t.archived_at IS NULL),0) mastery_average,
+          (SELECT COUNT(*) FROM topicos t WHERE t.study_subject_id=s.id AND t.archived_at IS NULL AND t.status<>'completed') pending_topics,
+          (SELECT COUNT(*) FROM topicos t WHERE t.study_subject_id=s.id AND t.archived_at IS NULL) topic_count,
+          (SELECT COUNT(*) FROM topicos t WHERE t.study_subject_id=s.id AND t.archived_at IS NULL AND t.status='completed') completed_topics,
+          COALESCE((SELECT SUM(x.duration_seconds) FROM sessoes_estudo x WHERE x.study_subject_id=s.id AND x.date BETWEEN ? AND ?),0) week_seconds,
+          COALESCE((SELECT SUM(p.planned_duration_minutes) FROM sessoes_planejadas p WHERE p.study_subject_id=s.id AND p.status='planned' AND p.scheduled_date BETWEEN ? AND ?),0) planned_week_minutes
+        FROM materias_estudo s
+        LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id
+        LEFT JOIN formacoes f ON f.id=COALESCE(s.related_formation_id,d.formation_id)
+    """ + where + " ORDER BY s.favorite DESC,s.priority DESC,s.created_at DESC"
+    values = repo.many(conn, sql, (week_start.isoformat(), week_end.isoformat(), week_start.isoformat(), week_end.isoformat(), *params))
     for value in values:
         value["progress_percent"] = round(value["completed_topics"] * 100 / value["topic_count"]) if value["topic_count"] else 0
+        value["visibility_reason_label"] = {
+            "study_archived": "Estudo arquivado", "curriculum_archived": "Disciplina arquivada",
+            "formation_archived": "Formação arquivada",
+        }.get(value["visibility_reason"])
     return values
 
 
 def add_curriculum_study(conn, curriculum_id, values):
     curriculum_item = _get(conn, "disciplinas_grade", curriculum_id)
     _active_formation(conn, curriculum_item["formation_id"])
+    if curriculum_item["archived_at"]:
+        raise DomainError("Restaure a disciplina antes de adicioná-la aos estudos atuais.", 409, "curriculum_archived")
+    if curriculum_item["item_type"] != "subject":
+        raise DomainError("Uma linha estrutural não pode ser adicionada aos estudos atuais.", 409, "curriculum_section")
     if curriculum_item["academic_status"] not in ("available", "in_progress"): raise DomainError("A disciplina precisa estar disponível para entrar nos estudos atuais.")
     data = _fields(values, STUDY); data.update({"origin":"curriculum", "curriculum_subject_id":curriculum_id, "priority":data.get("priority",3), "difficulty":data.get("difficulty",3), "status":"active"})
     try: ident = repo.insert(conn, "materias_estudo", data)
     except sqlite3.IntegrityError as error: raise DomainError("Esta disciplina já está nos estudos atuais.", 409) from error
-    repo.update(conn, "disciplinas_grade", curriculum_id, {"academic_status":"in_progress"})
+    change_curriculum_status(conn, curriculum_id, {"academic_status":"in_progress"}, "manual")
+    return _get(conn, "materias_estudo", ident)
+
+
+def set_curriculum_review(conn, ident, values):
+    current = _get(conn, "disciplinas_grade", ident)
+    review_status = values.get("status", values.get("review_status"))
+    if review_status not in REVIEW_STATUSES:
+        raise DomainError("Status de revisão inválido.")
+    review_values = {"review_status": review_status}
+    if review_status == "none":
+        # Desmarcar revisão remove a fila e seus metadados, mas não altera o
+        # resultado acadêmico que a disciplina já possuía.
+        repo.update(conn, "disciplinas_grade", ident, {"review_priority": None, "review_notes": None})
+    else:
+        review_values.update({
+            "review_priority": values.get("priority", values.get("review_priority")),
+            "review_notes": values.get("notes", values.get("review_notes")),
+        })
+    updated = change_curriculum_status(conn, ident, review_values, "review", values.get("history_notes"))
+    if _confirmed(values.get("start_study")):
+        study = start_curriculum_review(conn, ident, values)
+        updated["study"] = study
+    return updated
+
+
+def start_curriculum_review(conn, curriculum_id, values=None):
+    curriculum_item = _get(conn, "disciplinas_grade", curriculum_id)
+    _active_formation(conn, curriculum_item["formation_id"])
+    if curriculum_item["archived_at"]:
+        raise DomainError("Restaure a disciplina antes de iniciar uma revisão.", 409, "curriculum_archived")
+    if curriculum_item["item_type"] != "subject":
+        raise DomainError("Uma linha estrutural não pode ser revisada.", 409, "curriculum_section")
+    values = values or {}
+    change_curriculum_status(conn, curriculum_id, {"review_status": "in_progress"}, "review")
+    current = repo.one(conn, "SELECT * FROM materias_estudo WHERE curriculum_subject_id=? AND status IN ('active','paused') AND archived_at IS NULL", (curriculum_id,))
+    if current:
+        return current
+    # Uma revisão não é uma nova matrícula: preservar academic_status é crucial.
+    try:
+        ident = repo.insert(conn, "materias_estudo", {
+            "origin": "curriculum", "curriculum_subject_id": curriculum_id,
+            "priority": values.get("priority", 3), "difficulty": values.get("difficulty", 3),
+            "weekly_goal_minutes": values.get("weekly_goal_minutes"), "start_date": values.get("start_date") or _today(),
+            "target_date": values.get("target_date"), "status": "active", "academic_period": values.get("academic_period"),
+        })
+    except sqlite3.IntegrityError as error:
+        raise DomainError("Já existe um estudo atual para esta disciplina.", 409, "study_already_current") from error
     return _get(conn, "materias_estudo", ident)
 
 
 def create_personal_study(conn, values):
     data = _fields(values, STUDY | {"related_formation_id", "personal_name"})
+    if data.get("related_formation_id"):
+        _active_formation(conn, int(data["related_formation_id"]))
     data.update({"origin":"personal", "personal_name":_need(data.get("personal_name"), "Nome do estudo"), "priority":data.get("priority",3), "difficulty":data.get("difficulty",3), "status":"active"})
     return _get(conn, "materias_estudo", repo.insert(conn, "materias_estudo", data))
 
 
 def update_study(conn, ident, values):
     study = _get(conn, "materias_estudo", ident); data = _fields(values, STUDY | {"personal_name", "related_formation_id"})
+    if study["archived_at"] or study["status"] == "archived":
+        raise DomainError("Restaure o estudo antes de editá-lo.", 409, "study_archived")
+    if data.get("status") == "archived":
+        raise DomainError("Use a ação Arquivar para arquivar um estudo.", 400, "use_archive_action")
+    if study["origin"] == "curriculum" and data.get("status") == "completed":
+        raise DomainError("Use a ação Finalizar para encerrar um estudo curricular.", 400, "use_finish_action")
     if study["origin"] == "curriculum": data.pop("personal_name", None); data.pop("related_formation_id", None)
+    elif data.get("related_formation_id"):
+        _active_formation(conn, int(data["related_formation_id"]))
     repo.update(conn, "materias_estudo", ident, data); return _get(conn, "materias_estudo", ident)
 
 
@@ -376,20 +1202,59 @@ def finish_study(conn, ident, result, final_score=None):
     study = _get(conn, "materias_estudo", ident)
     statuses = {"approved":"completed", "failed":"failed", "withdrawn":"available", "exempted":"exempted"}
     if study["origin"] != "curriculum" or result not in statuses: raise DomainError("Resultado acadêmico inválido.")
+    _assert_study_accessible(conn, ident)
     repo.update(conn, "materias_estudo", ident, {"status":"completed", "completed_at":_today(), "result":result, "final_score":final_score})
-    repo.update(conn, "disciplinas_grade", study["curriculum_subject_id"], {"academic_status":statuses[result]})
+    change_curriculum_status(conn, study["curriculum_subject_id"], {"academic_status":statuses[result]}, "finish_study", result)
     return _get(conn, "materias_estudo", ident)
+
+
+def pause_study(conn, ident, resume=False):
+    study = _assert_study_accessible(conn, ident)
+    if resume:
+        if study["status"] != "paused": raise DomainError("Somente um estudo pausado pode continuar.", 409, "study_not_paused")
+        status = "active"
+    else:
+        if study["status"] != "active": raise DomainError("Somente um estudo ativo pode ser pausado.", 409, "study_not_active")
+        status = "paused"
+    repo.update(conn, "materias_estudo", ident, {"status": status})
+    return _get(conn, "materias_estudo", ident)
+
+
+def remove_current_study(conn, ident, resolution="available", cancel_future_blocks=True):
+    study = _get(conn, "materias_estudo", ident)
+    if study["origin"] != "curriculum":
+        raise DomainError("Remover dos estudos atuais é uma ação exclusiva de uma disciplina curricular.", 400, "not_curriculum_study")
+    if study["status"] not in {"active", "paused"} or study["archived_at"]:
+        raise DomainError("Este estudo já não está nos estudos atuais.", 409, "study_not_current")
+    resolution = {"in_progress": "keep_in_progress"}.get(resolution, resolution)
+    resolutions = {
+        "available": "available", "keep_in_progress": "in_progress", "approved": "completed",
+        "failed": "failed", "withdrawn": "available", "exempted": "exempted",
+    }
+    if resolution not in resolutions:
+        raise DomainError("Resultado para encerrar o estudo é inválido.")
+    current = _get(conn, "disciplinas_grade", study["curriculum_subject_id"])
+    _active_formation(conn, current["formation_id"])
+    if current["archived_at"]:
+        raise DomainError("Restaure a disciplina antes de encerrar o estudo.", 409, "curriculum_archived")
+    _archive_study_row(conn, ident, "removed_current")
+    if resolution in {"approved", "failed", "withdrawn", "exempted"}:
+        repo.update(conn, "materias_estudo", ident, {"result": resolution, "completed_at": _today()})
+    change_curriculum_status(conn, current["id"], {"academic_status": resolutions[resolution]}, "remove_current", resolution)
+    cancelled = _cancel_future_planned(conn, [ident]) if _confirmed(cancel_future_blocks) else {"count": 0, "ids": []}
+    return {"study": _get(conn, "materias_estudo", ident), "academic_status": resolutions[resolution], "cancelled_future_blocks": cancelled}
 
 
 def new_academic_attempt(conn, ident, values=None):
     previous = _get(conn, "materias_estudo", ident)
     if previous["origin"] != "curriculum" or previous["result"] not in ("failed", "withdrawn"):
         raise DomainError("Uma nova tentativa só está disponível após reprovação ou retirada.", 409)
+    _assert_study_accessible(conn, ident)
     curriculum_id = previous["curriculum_subject_id"]
     maximum = repo.one(conn, "SELECT MAX(attempt_number) attempt FROM materias_estudo WHERE curriculum_subject_id=?", (curriculum_id,))
     copied = {"origin":"curriculum", "curriculum_subject_id":curriculum_id, "priority":previous["priority"], "difficulty":previous["difficulty"], "weekly_goal_minutes":previous["weekly_goal_minutes"], "start_date":(values or {}).get("start_date") or _today(), "target_date":(values or {}).get("target_date"), "status":"active", "academic_period":(values or {}).get("academic_period") or previous["academic_period"], "attempt_number":int(maximum["attempt"] or 0) + 1}
     created = _get(conn, "materias_estudo", repo.insert(conn, "materias_estudo", copied))
-    repo.update(conn, "disciplinas_grade", curriculum_id, {"academic_status":"in_progress"})
+    change_curriculum_status(conn, curriculum_id, {"academic_status":"in_progress"}, "new_attempt")
     return created
 
 
@@ -434,7 +1299,7 @@ def _recalculate_mastery(conn, topic_id):
 
 
 def create_session(conn, values):
-    study_id = _need(values.get("study_subject_id"),"Matéria"); _get(conn,"materias_estudo",study_id); topic_id=values.get("topic_id")
+    study_id = _need(values.get("study_subject_id"),"Matéria"); _assert_study_accessible(conn, study_id); topic_id=values.get("topic_id")
     if topic_id and _get(conn,"topicos",topic_id)["study_subject_id"] != study_id: raise DomainError("O tópico precisa pertencer à matéria selecionada.")
     seconds=int(_need(values.get("duration_seconds"),"Duração"))
     if seconds<=0: raise DomainError("A duração deve ser maior que zero.")
@@ -888,7 +1753,7 @@ def availability_windows(conn, current):
 
 
 def planned(conn,start,end):
-    sql="SELECT p.*,COALESCE(s.personal_name,d.name) subject_name,t.name topic_name FROM sessoes_planejadas p JOIN materias_estudo s ON s.id=p.study_subject_id LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id LEFT JOIN topicos t ON t.id=p.topic_id WHERE p.scheduled_date BETWEEN ? AND ? AND p.status='planned' ORDER BY p.scheduled_date,p.start_time"
+    sql="SELECT p.*,COALESCE(s.personal_name,d.name) subject_name,t.name topic_name FROM sessoes_planejadas p JOIN materias_estudo s ON s.id=p.study_subject_id LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id LEFT JOIN formacoes f ON f.id=COALESCE(s.related_formation_id,d.formation_id) LEFT JOIN topicos t ON t.id=p.topic_id WHERE p.scheduled_date BETWEEN ? AND ? AND p.status='planned' AND s.archived_at IS NULL AND s.status<>'archived' AND (d.id IS NULL OR d.archived_at IS NULL) AND (f.id IS NULL OR f.archived_at IS NULL) ORDER BY p.scheduled_date,p.start_time"
     return repo.many(conn,sql,(start,end))
 
 
@@ -917,7 +1782,7 @@ def delete_planned_day(conn, scheduled_date):
 
 
 def create_planned(conn,values,source="manual"):
-    study=int(_need(values.get("study_subject_id"),"Matéria")); _get(conn,"materias_estudo",study)
+    study=int(_need(values.get("study_subject_id"),"Matéria")); _assert_study_accessible(conn, study)
     data=_fields(values,{"study_subject_id","topic_id","scheduled_date","start_time","planned_duration_minutes"}); data.update({"study_subject_id":study,"scheduled_date":_need(data.get("scheduled_date"),"Data"),"planned_duration_minutes":int(_need(data.get("planned_duration_minutes"),"Duração")),"source":source})
     if data["planned_duration_minutes"] <= 0: raise DomainError("A duração deve ser maior que zero.")
     if data.get("start_time") is not None: _clock_minutes(data["start_time"])
@@ -932,7 +1797,7 @@ def update_planned(conn, ident, values):
     if candidate["status"] not in ("planned","completed","skipped","rescheduled","cancelled"): raise DomainError("Status de planejamento inválido.")
     if int(candidate["planned_duration_minutes"]) <= 0: raise DomainError("A duração deve ser maior que zero.")
     if candidate.get("start_time") is not None: _clock_minutes(candidate["start_time"])
-    _get(conn,"materias_estudo",candidate["study_subject_id"])
+    _assert_study_accessible(conn, candidate["study_subject_id"])
     if candidate.get("topic_id") and _get(conn,"topicos",candidate["topic_id"])["study_subject_id"] != candidate["study_subject_id"]: raise DomainError("O tópico precisa pertencer à matéria selecionada.")
     repo.update(conn,"sessoes_planejadas",ident,data); return planned_detail(conn,ident)
 
@@ -1046,7 +1911,34 @@ def analytics(conn):
     week=repo.one(conn,"SELECT COALESCE(SUM(duration_seconds),0) seconds FROM sessoes_estudo WHERE date BETWEEN ? AND ?",(week_start.isoformat(),week_end.isoformat()))
     month=repo.one(conn,"SELECT COALESCE(SUM(duration_seconds),0) seconds FROM sessoes_estudo WHERE date BETWEEN ? AND ?",(month_start.isoformat(),month_end.isoformat()))
     subjects=repo.many(conn,"SELECT COALESCE(s.personal_name,d.name) name,SUM(x.duration_seconds) seconds FROM sessoes_estudo x JOIN materias_estudo s ON s.id=x.study_subject_id LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id GROUP BY s.id ORDER BY seconds DESC")
-    return {"total_seconds":total["seconds"],"sessions":total["sessions"],"days_studied":total["days"],"today_seconds":today_total["seconds"],"week_seconds":week["seconds"],"month_seconds":month["seconds"],"by_subject":subjects}
+    completed_blocks = repo.one(conn, "SELECT COUNT(*) count FROM sessoes_planejadas WHERE status='completed'")
+    orphan_completed_blocks = repo.one(conn, """
+        SELECT COUNT(*) count FROM sessoes_planejadas p
+        WHERE p.status='completed' AND NOT EXISTS (
+          SELECT 1 FROM sessoes_estudo s WHERE s.planned_session_id=p.id
+        )
+    """)
+    academic_distribution = repo.many(conn, """
+        SELECT academic_status status, COUNT(*) count FROM disciplinas_grade
+        WHERE archived_at IS NULL AND item_type='subject' GROUP BY academic_status
+    """)
+    next_pending = repo.many(conn, """
+        SELECT d.id,d.name,d.formation_id,f.name formation_name,d.period,d.academic_status,d.review_status
+        FROM disciplinas_grade d JOIN formacoes f ON f.id=d.formation_id
+        WHERE d.archived_at IS NULL AND d.item_type='subject' AND f.archived_at IS NULL
+          AND d.academic_status NOT IN ('completed','exempted')
+        ORDER BY CASE d.academic_status WHEN 'in_progress' THEN 0 WHEN 'available' THEN 1 ELSE 2 END,d.sort_order,d.name
+        LIMIT 12
+    """)
+    return {
+        "total_seconds":total["seconds"], "sessions":total["sessions"], "real_sessions":total["sessions"],
+        "days_studied":total["days"], "today_seconds":today_total["seconds"], "week_seconds":week["seconds"],
+        "month_seconds":month["seconds"], "by_subject":subjects,
+        "completed_planned_blocks": int(completed_blocks["count"] or 0),
+        "completed_planned_without_real_session": int(orphan_completed_blocks["count"] or 0),
+        "academic_progress": formations(conn, "all"), "academic_distribution": academic_distribution,
+        "next_pending_subjects": next_pending,
+    }
 
 
 def projects(conn, include_archived=False):

@@ -63,14 +63,38 @@ def formation_item(ident):
     return run(lambda conn: core.change_formation(conn,ident,body()) if request.method=="PATCH" else core.delete_formation(conn,ident) or {"deleted":True})
 @api.post("/formations/<int:ident>/<action>")
 def formation_action(ident,action):
-    if action not in ("archive","restore"): return respond({"error":"Ação de formação inválida."},400)
-    return run(lambda conn: core.archive(conn,"formacoes",ident,action=="restore"))
+    data = body()
+    if action == "archive":
+        return run(lambda conn: core.archive_formation(conn, ident, data.get("study_policy", "archive_studies")))
+    if action == "restore":
+        return run(lambda conn: core.restore_formation(conn, ident, data.get("restore_studies")))
+    if action == "destroy":
+        return run(lambda conn: core.destroy(conn, "formation", ident, data.get("confirmation"), data.get("include_dependencies")))
+    return respond({"error":"Ação de formação inválida."},400)
+@api.get("/formations/<int:ident>/dependencies")
+def formation_dependencies(ident): return run(lambda conn: core.formation_dependencies(conn, ident))
 
 
 @api.get("/formations/<int:formation_id>/curriculum")
 def curriculum(formation_id): return run(lambda conn: core.curriculum(conn,formation_id,request.args.get("archived")=="1"))
+@api.get("/formations/<int:formation_id>/curriculum/management")
+def curriculum_management(formation_id):
+    filters = {key: request.args.get(key) for key in ("q", "period", "academic_status", "review_status", "visibility", "quick", "sort", "item_type") if request.args.get(key) is not None}
+    return run(lambda conn: core.curriculum_management(conn, formation_id, filters))
 @api.post("/formations/<int:formation_id>/curriculum")
 def curriculum_create(formation_id): return run(lambda conn: core.create_curriculum(conn,formation_id,body()))
+@api.post("/formations/<int:formation_id>/curriculum/batch/preview")
+def curriculum_batch_preview(formation_id): return run(lambda conn: core.curriculum_batch_preview(conn, formation_id, body()))
+@api.post("/formations/<int:formation_id>/curriculum/batch")
+def curriculum_batch(formation_id): return run(lambda conn: core.curriculum_batch(conn, formation_id, body()))
+@api.get("/formations/<int:formation_id>/curriculum/duplicates")
+def curriculum_duplicates(formation_id): return run(lambda conn: core.duplicate_candidates(conn, formation_id))
+@api.get("/formations/<int:formation_id>/curriculum/structural-candidates")
+def curriculum_structural_candidates(formation_id): return run(lambda conn: core.structural_candidates(conn, formation_id))
+@api.post("/formations/<int:formation_id>/curriculum/merge")
+def curriculum_merge(formation_id):
+    data = body()
+    return run(lambda conn: core.merge_curriculum(conn, formation_id, data.get("primary_id"), data.get("duplicate_ids"), data.get("preserve"), data.get("confirmation")))
 @api.get("/curriculum/template")
 def curriculum_template():
     if not CURRICULUM_TEMPLATE_PATH.is_file():
@@ -99,25 +123,50 @@ def curriculum_import(formation_id):
     data = body()
     return run(lambda conn: core.import_curriculum(conn, formation_id, data.get("items", []), data.get("confirmed")))
 @api.route("/curriculum/<int:ident>",methods=["PATCH","DELETE"])
-def curriculum_item(ident): return run(lambda conn: core.update_curriculum(conn,ident,body()) if request.method=="PATCH" else core.remove(conn,"disciplinas_grade",ident) or {"deleted":True})
+def curriculum_item(ident): return run(lambda conn: core.update_curriculum(conn,ident,body()) if request.method=="PATCH" else core.delete_curriculum(conn,ident) or {"deleted":True})
+@api.get("/curriculum/<int:ident>/dependencies")
+def curriculum_dependencies(ident): return run(lambda conn: core.curriculum_dependencies(conn, ident))
+@api.get("/curriculum/<int:ident>/history")
+def curriculum_history(ident): return run(lambda conn: core.curriculum_status_history(conn, ident))
+@api.post("/curriculum/<int:ident>/status")
+def curriculum_status(ident): return run(lambda conn: core.change_curriculum_status(conn, ident, body(), "manual", body().get("notes")))
+@api.post("/curriculum/<int:ident>/review")
+def curriculum_review(ident): return run(lambda conn: core.set_curriculum_review(conn, ident, body()))
 @api.post("/curriculum/<int:ident>/<action>")
 def curriculum_action(ident,action):
-    if action not in ("archive","restore"): return respond({"error":"Ação de disciplina inválida."},400)
-    return run(lambda conn: core.archive(conn,"disciplinas_grade",ident,action=="restore"))
+    if action == "archive": return run(lambda conn: core.archive_curriculum(conn,ident))
+    if action == "restore": return run(lambda conn: core.archive_curriculum(conn,ident,True))
+    if action == "destroy": return run(lambda conn: core.destroy(conn,"curriculum",ident,body().get("confirmation"),body().get("include_dependencies")))
+    return respond({"error":"Ação de disciplina inválida."},400)
 @api.post("/curriculum/<int:ident>/add-study")
 def curriculum_add_study(ident): return run(lambda conn: core.add_curriculum_study(conn,ident,body()))
 
 
 @api.route("/studies",methods=["GET","POST"])
-def study_collection(): return run(lambda conn: core.studies(conn,request.args.get("archived")=="1") if request.method=="GET" else core.create_personal_study(conn,body()))
+def study_collection():
+    if request.method == "POST": return run(lambda conn: core.create_personal_study(conn,body()))
+    visibility = request.args.get("visibility")
+    return run(lambda conn: core.studies(
+        conn, request.args.get("archived")=="1", request.args.get("week_reference"), visibility,
+        request.args.get("formation_id"), request.args.get("q"), request.args.get("review_status"),
+    ))
 @api.get("/studies/<int:ident>")
 def study_detail(ident): return run(lambda conn: core.subject_detail(conn,ident))
 @api.route("/studies/<int:ident>",methods=["PATCH","DELETE"])
-def study_item(ident): return run(lambda conn: core.update_study(conn,ident,body()) if request.method=="PATCH" else core.remove(conn,"materias_estudo",ident) or {"deleted":True})
+def study_item(ident): return run(lambda conn: core.update_study(conn,ident,body()) if request.method=="PATCH" else core.delete_study(conn,ident) or {"deleted":True})
+@api.get("/studies/<int:ident>/dependencies")
+def study_dependencies(ident): return run(lambda conn: core.study_dependencies(conn, ident))
 @api.post("/studies/<int:ident>/<action>")
 def study_action(ident,action):
-    if action not in ("finish","archive","restore"): return respond({"error":"Ação de estudo inválida."},400)
-    return run(lambda conn: core.finish_study(conn,ident,body().get("result"),body().get("final_score")) if action=="finish" else core.archive(conn,"materias_estudo",ident,action=="restore"))
+    data = body()
+    if action == "finish": return run(lambda conn: core.finish_study(conn,ident,data.get("result"),data.get("final_score")))
+    if action == "archive": return run(lambda conn: core.archive_study(conn,ident))
+    if action == "restore": return run(lambda conn: core.archive_study(conn,ident,True))
+    if action == "pause": return run(lambda conn: core.pause_study(conn,ident))
+    if action == "resume": return run(lambda conn: core.pause_study(conn,ident,True))
+    if action == "remove-current": return run(lambda conn: core.remove_current_study(conn,ident,data.get("resolution", data.get("academic_status", "available")),data.get("cancel_future_blocks", True)))
+    if action == "destroy": return run(lambda conn: core.destroy(conn,"study",ident,data.get("confirmation"),data.get("include_dependencies")))
+    return respond({"error":"Ação de estudo inválida."},400)
 @api.post("/studies/<int:ident>/groups")
 def group_create(ident): return run(lambda conn: core.create_group(conn,ident,body()))
 @api.post("/studies/<int:ident>/new-attempt")
