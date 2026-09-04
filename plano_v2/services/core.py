@@ -11,13 +11,16 @@ from zoneinfo import ZoneInfo
 
 from config import TIMEZONE
 from database.repositories import core as repo
+from services import grade_import
 
 
 class DomainError(ValueError):
-    def __init__(self, message, status=400, code="domain_error"):
+    def __init__(self, message, status=400, code="domain_error", blockers=None, details=None):
         super().__init__(message)
         self.status = status
         self.code = code
+        self.blockers = blockers
+        self.details = details
 
 
 def _local_now(): return datetime.now(ZoneInfo(TIMEZONE))
@@ -48,7 +51,7 @@ def _active_formation(conn, ident):
 
 
 FORMATION = {"name", "institution", "modality", "start_date", "expected_end_date", "status", "focus_priority"}
-CURRICULUM = {"name", "code", "period", "workload_minutes", "academic_status", "sort_order"}
+CURRICULUM = {"name", "code", "period", "workload_minutes", "academic_status", "sort_order", "start_date", "end_date", "notes"}
 STUDY = {"favorite", "priority", "difficulty", "weekly_goal_minutes", "start_date", "target_date", "status", "academic_period", "result", "final_score"}
 
 
@@ -112,16 +115,110 @@ def remove(conn, table, ident):
     except sqlite3.IntegrityError as error: raise DomainError("Não é possível excluir porque há dados relacionados. Arquive o registro.", 409) from error
 
 
+def formation_delete_blockers(conn, ident):
+    """Conta vínculos que tornam insegura a exclusão definitiva de uma formação.
+
+    A contagem inclui registros arquivados e históricos: eles ainda possuem chaves
+    estrangeiras para a formação e, principalmente, não devem ser apagados como
+    efeito colateral de uma ação na tela de Formações.
+    """
+    row = repo.one(conn, """
+        WITH formation_studies AS (
+            SELECT s.id
+            FROM materias_estudo s
+            LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id
+            WHERE s.related_formation_id=? OR d.formation_id=?
+        ), formation_topics AS (
+            SELECT t.id
+            FROM topicos t
+            WHERE t.study_subject_id IN (SELECT id FROM formation_studies)
+        )
+        SELECT
+            (SELECT COUNT(*) FROM disciplinas_grade WHERE formation_id=?) AS curriculum_subjects,
+            (SELECT COUNT(*) FROM formation_studies) AS study_subjects,
+            (SELECT COUNT(*) FROM formation_topics) AS topics,
+            (SELECT COUNT(*) FROM sessoes_planejadas WHERE study_subject_id IN (SELECT id FROM formation_studies)) AS planned_sessions,
+            (SELECT COUNT(*) FROM sessoes_estudo WHERE study_subject_id IN (SELECT id FROM formation_studies)) AS study_sessions,
+            (SELECT COUNT(*) FROM anotacoes_estudo WHERE study_subject_id IN (SELECT id FROM formation_studies)) AS notes,
+            (SELECT COUNT(*) FROM revisoes WHERE topic_id IN (SELECT id FROM formation_topics)) AS reviews,
+            (SELECT COUNT(*) FROM avaliacoes WHERE study_subject_id IN (SELECT id FROM formation_studies)) AS evaluations
+    """, (ident, ident, ident))
+    return {key: int(value or 0) for key, value in row.items()}
+
+
+def delete_formation(conn, ident):
+    formation = _get(conn, "formacoes", ident)
+    blockers = formation_delete_blockers(conn, ident)
+    if any(blockers.values()):
+        labels = (
+            ("curriculum_subjects", "disciplina da grade", "disciplinas da grade"),
+            ("study_subjects", "estudo", "estudos"),
+            ("planned_sessions", "bloco de planejamento", "blocos de planejamento"),
+            ("study_sessions", "sessão de estudo registrada", "sessões de estudo registradas"),
+            ("notes", "anotação", "anotações"),
+            ("reviews", "revisão", "revisões"),
+            ("evaluations", "avaliação", "avaliações"),
+        )
+        related = [f"{blockers[key]} {singular if blockers[key] == 1 else plural}" for key, singular, plural in labels if blockers[key]]
+        raise DomainError(
+            f"Não é possível excluir “{formation['name']}” definitivamente: a formação ainda possui "
+            f"{', '.join(related)}. Arquive a formação para preservar seu histórico.",
+            409,
+            "formation_has_dependencies",
+            blockers,
+        )
+    repo.delete(conn, "formacoes", ident)
+
+
 def curriculum(conn, formation_id, include_archived=False):
     _get(conn, "formacoes", formation_id)
     hidden = "" if include_archived else "AND d.archived_at IS NULL"
     return repo.many(conn, "SELECT d.*,s.id active_study_id FROM disciplinas_grade d LEFT JOIN materias_estudo s ON s.curriculum_subject_id=d.id AND s.status IN ('active','paused') WHERE d.formation_id=? " + hidden + " ORDER BY d.sort_order,d.name", (formation_id,))
 
 
+def _curriculum_data(values, current=None):
+    data = _fields(values, CURRICULUM)
+    for key in ("code", "period", "start_date", "end_date", "notes"):
+        if data.get(key) == "":
+            data[key] = None
+    candidate = {**(current or {}), **data}
+    if current is None:
+        data["name"] = _need(data.get("name"), "Nome da disciplina")
+    elif "name" in data:
+        data["name"] = _need(data["name"], "Nome da disciplina")
+    if "workload_minutes" in data and data["workload_minutes"] is not None:
+        try:
+            minutes = int(data["workload_minutes"])
+        except (TypeError, ValueError) as error:
+            raise DomainError("Carga horária deve ser informada em minutos como um número inteiro.") from error
+        if minutes <= 0:
+            raise DomainError("Carga horária deve ser maior que zero.")
+        data["workload_minutes"] = minutes
+    status = candidate.get("academic_status", "not_available")
+    if status not in grade_import.ACADEMIC_STATUSES:
+        raise DomainError("Status acadêmico inválido.")
+    if "sort_order" in data:
+        try:
+            order = int(data["sort_order"])
+        except (TypeError, ValueError) as error:
+            raise DomainError("Ordem deve ser um número inteiro igual ou maior que zero.") from error
+        if order < 0:
+            raise DomainError("Ordem deve ser igual ou maior que zero.")
+        data["sort_order"] = order
+    start, end = candidate.get("start_date"), candidate.get("end_date")
+    if start:
+        _date(start, "Data de início")
+    if end:
+        _date(end, "Data de término")
+    if start and end and start > end:
+        raise DomainError("A data de término não pode ser anterior à data de início.")
+    return data
+
+
 def create_curriculum(conn, formation_id, values):
     _active_formation(conn, formation_id)
-    data = _fields(values, CURRICULUM)
-    data.update({"formation_id": formation_id, "name": _need(data.get("name"), "Nome da disciplina")})
+    data = _curriculum_data(values)
+    data.update({"formation_id": formation_id})
     data.setdefault("academic_status", "not_available"); data.setdefault("sort_order", 0)
     try: ident = repo.insert(conn, "disciplinas_grade", data)
     except sqlite3.IntegrityError as error: raise DomainError("Já existe uma disciplina com esse nome nesta formação.", 409) from error
@@ -131,19 +228,115 @@ def create_curriculum(conn, formation_id, values):
 def update_curriculum(conn, ident, values):
     current = _get(conn, "disciplinas_grade", ident)
     _active_formation(conn, current["formation_id"])
-    data = _fields(values, CURRICULUM)
-    if "name" in data: data["name"] = _need(data["name"], "Nome da disciplina")
+    data = _curriculum_data(values, current)
     repo.update(conn, "disciplinas_grade", ident, data); return _get(conn, "disciplinas_grade", ident)
 
 
-def import_curriculum(conn, formation_id, items):
-    _active_formation(conn, formation_id); inserted, duplicates = [], []
-    for item in items:
-        try: inserted.append(create_curriculum(conn, formation_id, item))
-        except DomainError as error:
-            if error.status != 409: raise
-            duplicates.append(str(item.get("name", "")))
-    return {"inserted": inserted, "duplicates": duplicates}
+def curriculum_import_preview(conn, formation_id, result):
+    _get(conn, "formacoes", formation_id)
+    existing = repo.many(conn, "SELECT id,name FROM disciplinas_grade WHERE formation_id=?", (formation_id,))
+    return grade_import.annotate_duplicates(result, existing)
+
+
+def _confirmed(value):
+    return value in (True, 1, "1", "true", "True", "sim", "Sim")
+
+
+def _duplicate_action(value):
+    action = grade_import.normalized(value or "skip")
+    aliases = {"skip": "skip", "ignore": "skip", "ignorar": "skip", "update": "update", "atualizar": "update", "keep both": "keep_both", "keep_both": "keep_both", "manter as duas": "keep_both"}
+    return aliases.get(action)
+
+
+def _import_payload_item(value, index):
+    if not isinstance(value, dict):
+        return None, {"row": index + 1, "name": "", "errors": ["Linha de importação inválida."]}
+    row = grade_import.normalize_row(
+        value,
+        source="Prévia confirmada",
+        source_index=index + 1,
+        default_order=index + 1,
+    )
+    return row, None
+
+
+def _curriculum_item_from_preview(row):
+    return {
+        "name": row["name"],
+        "code": row["code"],
+        "period": row["period"],
+        "workload_minutes": row["workload_minutes"],
+        "academic_status": row["academic_status"],
+        "sort_order": row["sort_order"],
+        "start_date": row["start_date"],
+        "end_date": row["end_date"],
+        "notes": row["notes"],
+    }
+
+
+def import_curriculum(conn, formation_id, items, confirmed=False):
+    _active_formation(conn, formation_id)
+    if not _confirmed(confirmed):
+        raise DomainError("Revise a prévia e confirme a importação antes de gravar a grade.", 400, "import_confirmation_required")
+    if not isinstance(items, list):
+        raise DomainError("As disciplinas da importação devem ser uma lista.")
+    if len(items) > grade_import.MAX_ROWS:
+        raise DomainError(f"A importação aceita no máximo {grade_import.MAX_ROWS} linhas.")
+
+    existing_rows = repo.many(conn, "SELECT * FROM disciplinas_grade WHERE formation_id=?", (formation_id,))
+    existing = {grade_import.normalized_name(row["name"]): row for row in existing_rows}
+    planned, skipped, errors, seen = [], [], [], set()
+    for index, value in enumerate(items):
+        row, row_error = _import_payload_item(value, index)
+        if row_error:
+            errors.append(row_error)
+            continue
+        if not row["include"]:
+            skipped.append({"row": index + 1, "name": row["name"], "reason": "not_selected"})
+            continue
+        if row["errors"]:
+            errors.append({"row": index + 1, "name": row["name"], "errors": row["errors"]})
+            continue
+        key = grade_import.normalized_name(row["name"])
+        action = _duplicate_action(value.get("duplicate_action"))
+        if not action:
+            errors.append({"row": index + 1, "name": row["name"], "errors": ["Ação de duplicidade inválida."]})
+            continue
+        if key in seen:
+            if action == "skip":
+                skipped.append({"row": index + 1, "name": row["name"], "reason": "duplicate_in_preview"})
+                continue
+            errors.append({"row": index + 1, "name": row["name"], "errors": ["Há outra linha selecionada com o mesmo nome; renomeie ou ignore uma delas."]})
+            continue
+        if key in existing:
+            if action == "skip":
+                skipped.append({"row": index + 1, "name": row["name"], "reason": "duplicate", "existing_id": existing[key]["id"]})
+                continue
+            if action == "keep_both":
+                errors.append({"row": index + 1, "name": row["name"], "errors": ["Para manter as duas disciplinas, renomeie esta linha antes de confirmar."]})
+                continue
+            planned.append(("update", existing[key]["id"], row))
+            seen.add(key)
+            continue
+        seen.add(key)
+        planned.append(("insert", None, row))
+    if errors:
+        raise DomainError("Corrija as linhas destacadas antes de confirmar a importação.", 400, "curriculum_import_invalid", details={"rows": errors})
+
+    inserted, updated = [], []
+    for operation, existing_id, row in planned:
+        values = _curriculum_item_from_preview(row)
+        if operation == "insert":
+            inserted.append(create_curriculum(conn, formation_id, values))
+        else:
+            repo.update(conn, "disciplinas_grade", existing_id, _curriculum_data(values, _get(conn, "disciplinas_grade", existing_id)))
+            updated.append(_get(conn, "disciplinas_grade", existing_id))
+    return {
+        "inserted": inserted,
+        "updated": updated,
+        "skipped": skipped,
+        "summary": {"requested": len(items), "inserted": len(inserted), "updated": len(updated), "skipped": len(skipped)},
+    }
 
 
 def studies(conn, include_archived=False, week_reference=None):

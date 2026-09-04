@@ -1,6 +1,19 @@
-from flask import Blueprint, render_template
+from pathlib import Path
+
+from flask import Blueprint, current_app, render_template, url_for
 
 pages = Blueprint("pages", __name__)
+
+
+@pages.app_context_processor
+def static_assets():
+    def static_asset(filename):
+        """Gera uma URL que muda quando o arquivo estático é alterado."""
+        asset = Path(current_app.static_folder) / filename
+        version = asset.stat().st_mtime_ns if asset.is_file() else 0
+        return url_for("static", filename=filename, v=version)
+
+    return {"static_asset": static_asset}
 
 PAGE_META = {
     "today": ("Hoje", "O que estudar agora e por quê."),

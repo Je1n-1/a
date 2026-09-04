@@ -67,8 +67,18 @@ class FormationApiTest(unittest.TestCase):
         self.assertEqual(curriculum.status_code, 200, curriculum.get_json())
         blocked = self.client.delete(f"/api/formations/{formation['id']}")
         self.assertEqual(blocked.status_code, 409)
-        self.assertEqual(blocked.get_json()["code"], "domain_error")
+        self.assertEqual(blocked.get_json()["code"], "formation_has_dependencies")
         self.assertIn("Arquive", blocked.get_json()["error"])
+        self.assertEqual(blocked.get_json()["blockers"], {
+            "curriculum_subjects": 1,
+            "study_subjects": 0,
+            "topics": 0,
+            "planned_sessions": 0,
+            "study_sessions": 0,
+            "notes": 0,
+            "reviews": 0,
+            "evaluations": 0,
+        })
         archived = self.client.post(f"/api/formations/{formation['id']}/archive")
         self.assertEqual(archived.status_code, 200, archived.get_json())
         self.assertEqual([item["id"] for item in self.client.get("/api/formations?state=archived").get_json()], [formation["id"]])
@@ -85,6 +95,69 @@ class FormationApiTest(unittest.TestCase):
         self.assertEqual(restored.status_code, 200, restored.get_json())
         self.assertIsNone(restored.get_json()["archived_at"])
         self.assertEqual(restored.get_json()["status"], "active")
+
+    def test_formation_delete_reports_historic_links_without_removing_them(self):
+        formation = self.create_formation()
+        curriculum = self.client.post(f"/api/formations/{formation['id']}/curriculum", json={
+            "name": "Eletrônica I", "academic_status": "available",
+        }).get_json()
+        study = self.client.post(f"/api/curriculum/{curriculum['id']}/add-study", json={})
+        self.assertEqual(study.status_code, 200, study.get_json())
+        study = study.get_json()
+        topic = self.client.post(f"/api/studies/{study['id']}/topics", json={"name": "Diodos"})
+        self.assertEqual(topic.status_code, 200, topic.get_json())
+        topic = topic.get_json()
+        planned = self.client.post("/api/planned", json={
+            "study_subject_id": study["id"],
+            "topic_id": topic["id"],
+            "scheduled_date": "2026-09-04",
+            "start_time": "08:00",
+            "planned_duration_minutes": 50,
+        })
+        self.assertEqual(planned.status_code, 200, planned.get_json())
+        session = self.client.post("/api/sessions", json={
+            "study_subject_id": study["id"],
+            "topic_id": topic["id"],
+            "date": "2026-09-04",
+            "duration_seconds": 1500,
+            "entry_method": "manual",
+        })
+        self.assertEqual(session.status_code, 200, session.get_json())
+        note = self.client.post("/api/notes", json={
+            "study_subject_id": study["id"],
+            "topic_id": topic["id"],
+            "title": "Rascunho de diodos",
+            "content_markdown": "Anotação de estudo.",
+        })
+        self.assertEqual(note.status_code, 200, note.get_json())
+        evaluation = self.client.post("/api/evaluations", json={
+            "study_subject_id": study["id"],
+            "title": "Prova 1",
+            "date": "2026-09-10",
+        })
+        self.assertEqual(evaluation.status_code, 200, evaluation.get_json())
+
+        blocked = self.client.delete(f"/api/formations/{formation['id']}")
+        self.assertEqual(blocked.status_code, 409, blocked.get_json())
+        payload = blocked.get_json()
+        self.assertEqual(payload["code"], "formation_has_dependencies")
+        self.assertEqual(payload["blockers"], {
+            "curriculum_subjects": 1,
+            "study_subjects": 1,
+            "topics": 1,
+            "planned_sessions": 1,
+            "study_sessions": 1,
+            "notes": 1,
+            "reviews": 1,
+            "evaluations": 1,
+        })
+        self.assertIn("1 bloco de planejamento", payload["error"])
+        self.assertEqual(self.client.get(f"/api/formations/{formation['id']}/curriculum").status_code, 200)
+        self.assertEqual(self.client.get(f"/api/studies/{study['id']}").status_code, 200)
+        self.assertEqual(self.client.get(f"/api/planned/{planned.get_json()['id']}").status_code, 200)
+        sessions = self.client.get("/api/sessions?start=2026-09-04&end=2026-09-04")
+        self.assertEqual(sessions.status_code, 200, sessions.get_json())
+        self.assertIn(session.get_json()["id"], {item["id"] for item in sessions.get_json()})
 
     def test_formation_filter_and_validation_errors_are_friendly(self):
         active = self.create_formation(name="Ativa")

@@ -15,6 +15,7 @@ export async function api(path, options = {}) {
     const error = new Error(payload?.error || `Não foi possível concluir a ação (erro ${response.status}).`);
     error.status = response.status;
     error.code = payload?.code;
+    error.blockers = payload?.blockers;
     throw error;
   }
   return payload;

@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title }} · plano.</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+  <link rel="stylesheet" href="{{ static_asset('css/app.css') }}">
 </head>
 <body class="focus-page" data-focus-page="true">
   <main class="focus-shell">
@@ -16,6 +16,6 @@
   </main>
   <div id="focus-dialog-root"></div>
   <div id="focus-toast-root" aria-live="polite" aria-atomic="true"></div>
-  <script type="module" src="{{ url_for('static', filename='js/focus.js') }}"></script>
+  <script type="module" src="{{ static_asset('js/focus.js') }}"></script>
 </body>
 </html>

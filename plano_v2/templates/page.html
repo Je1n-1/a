@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title }} · plano.</title>
-  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+  <link rel="stylesheet" href="{{ static_asset('css/app.css') }}">
 </head>
 <body data-page="{{ page }}">
   <aside class="sidebar" aria-label="Navegação principal">
@@ -29,6 +29,6 @@
     <section id="app" aria-live="polite"></section>
   </main>
   <div id="modal-root"></div><div id="toast-root" aria-live="polite"></div>
-  <script type="module" src="{{ url_for('static', filename='js/app.js') }}"></script>
+  <script type="module" src="{{ static_asset('js/app.js') }}"></script>
 </body>
 </html>

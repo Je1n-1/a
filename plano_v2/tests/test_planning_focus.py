@@ -144,6 +144,14 @@ class PlanningAndFocusTest(unittest.TestCase):
         response = self.client.get("/focus")
         self.assertEqual(response.status_code, 200)
         self.assertIn(b"data-focus-page", response.data)
+        self.assertRegex(response.get_data(as_text=True), r"/static/js/focus\.js\?v=\d+")
+
+    def test_pages_version_static_assets_after_an_update(self):
+        response = self.client.get("/planning")
+        self.assertEqual(response.status_code, 200)
+        page = response.get_data(as_text=True)
+        self.assertRegex(page, r"/static/css/app\.css\?v=\d+")
+        self.assertRegex(page, r"/static/js/app\.js\?v=\d+")
 
     def test_focus_entrypoints_open_the_dedicated_page(self):
         source = (PROJECT_ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")

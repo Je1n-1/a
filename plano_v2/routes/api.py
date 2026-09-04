@@ -3,11 +3,12 @@ from io import BytesIO
 import sqlite3
 from zipfile import ZIP_DEFLATED, ZipFile
 
-from flask import Blueprint, Response, jsonify, request
+from flask import Blueprint, Response, jsonify, request, send_file
 
+from config import CURRICULUM_TEMPLATE_PATH
 from database.connection import connect
 from services import core
-from services.grade_import import preview
+from services.grade_import import preview, preview_paste
 
 
 api = Blueprint("api", __name__, url_prefix="/api")
@@ -18,7 +19,13 @@ def respond(value, status=200): return jsonify(value), status
 def run(operation):
     try:
         with connect() as conn: return respond(operation(conn))
-    except core.DomainError as error: return respond({"error":str(error),"code":error.code},error.status)
+    except core.DomainError as error:
+        payload = {"error": str(error), "code": error.code}
+        if error.blockers is not None:
+            payload["blockers"] = error.blockers
+        if error.details is not None:
+            payload["details"] = error.details
+        return respond(payload, error.status)
     except ValueError as error: return respond({"error":str(error),"code":"validation_error"},400)
     except sqlite3.IntegrityError: return respond({"error":"Não foi possível salvar porque os dados conflitam com um registro existente.","code":"integrity_error"},409)
 
@@ -53,7 +60,7 @@ def formation_collection():
     return run(lambda conn: core.create_formation(conn,body()))
 @api.route("/formations/<int:ident>",methods=["PATCH","DELETE"])
 def formation_item(ident):
-    return run(lambda conn: core.change_formation(conn,ident,body()) if request.method=="PATCH" else core.remove(conn,"formacoes",ident) or {"deleted":True})
+    return run(lambda conn: core.change_formation(conn,ident,body()) if request.method=="PATCH" else core.delete_formation(conn,ident) or {"deleted":True})
 @api.post("/formations/<int:ident>/<action>")
 def formation_action(ident,action):
     if action not in ("archive","restore"): return respond({"error":"Ação de formação inválida."},400)
@@ -64,16 +71,33 @@ def formation_action(ident,action):
 def curriculum(formation_id): return run(lambda conn: core.curriculum(conn,formation_id,request.args.get("archived")=="1"))
 @api.post("/formations/<int:formation_id>/curriculum")
 def curriculum_create(formation_id): return run(lambda conn: core.create_curriculum(conn,formation_id,body()))
+@api.get("/curriculum/template")
+def curriculum_template():
+    if not CURRICULUM_TEMPLATE_PATH.is_file():
+        return respond({"error":"O modelo oficial de grade não está disponível neste momento.","code":"curriculum_template_missing"}, 404)
+    return send_file(
+        CURRICULUM_TEMPLATE_PATH,
+        as_attachment=True,
+        download_name="modelo_grade_curricular.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
 @api.post("/formations/<int:formation_id>/curriculum/preview")
 def curriculum_preview(formation_id):
     def operation(conn):
         core._get(conn,"formacoes",formation_id)
         upload=request.files.get("file")
         if not upload or not upload.filename: raise core.DomainError("Selecione um arquivo.")
-        return {"items":preview(upload,upload.filename)}
+        result = preview(upload, upload.filename, request.form.get("sheet") or request.args.get("sheet"))
+        return core.curriculum_import_preview(conn, formation_id, result)
     return run(operation)
+@api.post("/formations/<int:formation_id>/curriculum/preview/paste")
+def curriculum_preview_paste(formation_id):
+    data = body()
+    return run(lambda conn: core.curriculum_import_preview(conn, formation_id, preview_paste(data.get("text"))))
 @api.post("/formations/<int:formation_id>/curriculum/import")
-def curriculum_import(formation_id): return run(lambda conn: core.import_curriculum(conn,formation_id,body().get("items",[])))
+def curriculum_import(formation_id):
+    data = body()
+    return run(lambda conn: core.import_curriculum(conn, formation_id, data.get("items", []), data.get("confirmed")))
 @api.route("/curriculum/<int:ident>",methods=["PATCH","DELETE"])
 def curriculum_item(ident): return run(lambda conn: core.update_curriculum(conn,ident,body()) if request.method=="PATCH" else core.remove(conn,"disciplinas_grade",ident) or {"deleted":True})
 @api.post("/curriculum/<int:ident>/<action>")
