@@ -21,7 +21,7 @@ app = create_app()
 
 if __name__ == "__main__":
     app.run(
-        debug=True,
+        debug=os.environ.get("FLASK_DEBUG", "").lower() in {"1", "true", "yes"},
         host="127.0.0.1",
         port=int(os.environ.get("PLANO_PORT", "5051")),
     )

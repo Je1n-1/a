@@ -19,6 +19,11 @@ def root():
     return page("today")
 
 
+@pages.route("/focus")
+def focus():
+    return render_template("focus.html", title="Foco")
+
+
 @pages.route("/<page>")
 def page(page):
     if page not in PAGE_META:

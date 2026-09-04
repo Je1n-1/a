@@ -1,7 +1,9 @@
 from datetime import timedelta
+from io import BytesIO
 import sqlite3
+from zipfile import ZIP_DEFLATED, ZipFile
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request
 
 from database.connection import connect
 from services import core
@@ -16,9 +18,21 @@ def respond(value, status=200): return jsonify(value), status
 def run(operation):
     try:
         with connect() as conn: return respond(operation(conn))
-    except core.DomainError as error: return respond({"error":str(error)},error.status)
-    except ValueError as error: return respond({"error":str(error)},400)
-    except sqlite3.IntegrityError as error: return respond({"error":str(error)},409)
+    except core.DomainError as error: return respond({"error":str(error),"code":error.code},error.status)
+    except ValueError as error: return respond({"error":str(error),"code":"validation_error"},400)
+    except sqlite3.IntegrityError: return respond({"error":"Não foi possível salvar porque os dados conflitam com um registro existente.","code":"integrity_error"},409)
+
+
+def download(operation, mimetype, filename):
+    try:
+        with connect() as conn:
+            payload = operation(conn)
+        response = Response(payload, mimetype=mimetype)
+        response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
+    except core.DomainError as error: return respond({"error":str(error),"code":error.code},error.status)
+    except ValueError as error: return respond({"error":str(error),"code":"validation_error"},400)
+    except sqlite3.IntegrityError: return respond({"error":"Não foi possível preparar a exportação porque os dados conflitam com um registro existente.","code":"integrity_error"},409)
 
 
 @api.get("/bootstrap")
@@ -31,7 +45,12 @@ def bootstrap():
 
 @api.route("/formations",methods=["GET","POST"])
 def formation_collection():
-    return run(lambda conn: core.formations(conn,request.args.get("archived")=="1") if request.method=="GET" else core.create_formation(conn,body()))
+    if request.method == "GET":
+        state = request.args.get("state")
+        if state is None:
+            state = "all" if request.args.get("archived") == "1" else "active"
+        return run(lambda conn: core.formations(conn, state))
+    return run(lambda conn: core.create_formation(conn,body()))
 @api.route("/formations/<int:ident>",methods=["PATCH","DELETE"])
 def formation_item(ident):
     return run(lambda conn: core.change_formation(conn,ident,body()) if request.method=="PATCH" else core.remove(conn,"formacoes",ident) or {"deleted":True})
@@ -91,6 +110,61 @@ def session_collection(): return run(lambda conn: core.history(conn,request.args
 def session_item(ident): return run(lambda conn: core.update_session(conn,ident,body()) if request.method=="PATCH" else core.delete_session(conn,ident) or {"deleted":True})
 
 
+@api.route("/notes", methods=["GET", "POST"])
+def note_collection():
+    if request.method == "GET":
+        selected_date = request.args.get("date")
+        return run(lambda conn: core.notes(
+            conn,
+            request.args.get("study_subject_id") or request.args.get("subject_id"),
+            request.args.get("topic_id"),
+            request.args.get("start") or selected_date,
+            request.args.get("end") or selected_date,
+            request.args.get("status"),
+        ))
+    return run(lambda conn: core.create_note(conn, body()))
+
+
+@api.route("/notes/<int:ident>", methods=["GET", "PATCH", "DELETE"])
+def note_item(ident):
+    if request.method == "GET":
+        return run(lambda conn: core.note_detail(conn, ident))
+    if request.method == "PATCH":
+        return run(lambda conn: core.autosave_note(conn, ident, body()))
+    return run(lambda conn: core.delete_note(conn, ident) or {"deleted": True})
+
+
+@api.post("/notes/<int:ident>/finalize")
+def note_finalize(ident):
+    return run(lambda conn: core.finalize_note(conn, ident, body()))
+
+
+@api.get("/notes/<int:ident>/export")
+def note_export(ident):
+    exported = {}
+    # O nome retornado é ASCII seguro; o conteúdo continua UTF-8 e preserva acentos.
+    try:
+        with connect() as conn:
+            exported.update(core.note_markdown(conn, ident))
+        response = Response(exported["markdown"], mimetype="text/markdown")
+        response.headers["Content-Disposition"] = f'attachment; filename="{exported["filename"]}"'
+        return response
+    except core.DomainError as error: return respond({"error":str(error),"code":error.code},error.status)
+    except ValueError as error: return respond({"error":str(error),"code":"validation_error"},400)
+
+
+@api.post("/notes/export/obsidian")
+def notes_obsidian_export():
+    selected = body().get("ids", body().get("note_ids"))
+    def operation(conn):
+        archive = BytesIO()
+        with ZipFile(archive, "w", compression=ZIP_DEFLATED) as bundle:
+            for item in core.notes_for_obsidian_export(conn, selected):
+                bundle.writestr(item["filename"], item["markdown"].encode("utf-8"))
+        return archive.getvalue()
+    return download(operation, "application/zip", "anotacoes-obsidian.zip")
+
+
 @api.route("/evaluations",methods=["GET","POST"])
 def evaluation_collection(): return run(lambda conn: core.evaluations(conn,request.args.get("study_id")) if request.method=="GET" else core.create_evaluation(conn,body()))
 @api.route("/evaluations/<int:ident>",methods=["PATCH","DELETE"])
@@ -119,6 +193,9 @@ def availability_exception_item(ident): return run(lambda conn:core.update_avail
 def planned_collection():
     today = core._today()
     return run(lambda conn: core.planned(conn,request.args.get("start",today),request.args.get("end",(core._local_now().date()+timedelta(days=6)).isoformat())) if request.method=="GET" else core.create_planned(conn,body()))
+@api.delete("/planned/day/<scheduled_date>")
+def planned_day_delete(scheduled_date):
+    return run(lambda conn: core.delete_planned_day(conn, scheduled_date))
 @api.route("/planned/<int:ident>",methods=["GET","PATCH","DELETE"])
 def planned_item(ident):
     if request.method=="GET": return run(lambda conn:core.planned_detail(conn,ident))

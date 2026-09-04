@@ -3,7 +3,10 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date, datetime, timedelta
+import json
+import re
 import sqlite3
+import unicodedata
 from zoneinfo import ZoneInfo
 
 from config import TIMEZONE
@@ -11,9 +14,10 @@ from database.repositories import core as repo
 
 
 class DomainError(ValueError):
-    def __init__(self, message, status=400):
+    def __init__(self, message, status=400, code="domain_error"):
         super().__init__(message)
         self.status = status
+        self.code = code
 
 
 def _local_now(): return datetime.now(ZoneInfo(TIMEZONE))
@@ -36,26 +40,61 @@ def _get(conn, table, ident):
 def _fields(values, allowed): return {key: value for key, value in values.items() if key in allowed and value is not None}
 
 
+def _active_formation(conn, ident):
+    formation = _get(conn, "formacoes", ident)
+    if formation["archived_at"]:
+        raise DomainError("Restaure a formação antes de fazer alterações.", 409, "formation_archived")
+    return formation
+
+
 FORMATION = {"name", "institution", "modality", "start_date", "expected_end_date", "status", "focus_priority"}
 CURRICULUM = {"name", "code", "period", "workload_minutes", "academic_status", "sort_order"}
 STUDY = {"favorite", "priority", "difficulty", "weekly_goal_minutes", "start_date", "target_date", "status", "academic_period", "result", "final_score"}
 
 
-def formations(conn, include_archived=False):
-    visibility = "" if include_archived else "WHERE f.archived_at IS NULL"
-    sql = "SELECT f.*,COUNT(DISTINCT d.id) curriculum_count,COUNT(DISTINCT s.id) active_studies FROM formacoes f LEFT JOIN disciplinas_grade d ON d.formation_id=f.id AND d.archived_at IS NULL LEFT JOIN materias_estudo s ON (s.related_formation_id=f.id OR s.curriculum_subject_id=d.id) AND s.status IN ('active','paused') " + visibility + " GROUP BY f.id ORDER BY f.created_at DESC"
+def formations(conn, visibility="active"):
+    if visibility not in {"active", "archived", "all"}:
+        raise DomainError("Filtro de formações inválido.")
+    where = {"active": "WHERE f.archived_at IS NULL", "archived": "WHERE f.archived_at IS NOT NULL", "all": ""}[visibility]
+    sql = "SELECT f.*,COUNT(DISTINCT d.id) curriculum_count,COUNT(DISTINCT s.id) active_studies FROM formacoes f LEFT JOIN disciplinas_grade d ON d.formation_id=f.id AND d.archived_at IS NULL LEFT JOIN materias_estudo s ON (s.related_formation_id=f.id OR s.curriculum_subject_id=d.id) AND s.status IN ('active','paused') " + where + " GROUP BY f.id ORDER BY f.created_at DESC"
     return repo.many(conn, sql)
 
 
+def _formation_data(values, current=None):
+    data = _fields(values, FORMATION)
+    if current is None and data.get("status") == "archived":
+        raise DomainError("Use a ação Arquivar depois de criar a formação.", 400, "use_archive_action")
+    for key in ("institution", "modality", "start_date", "expected_end_date"):
+        if data.get(key) == "": data[key] = None
+    candidate = {**(current or {}), **data}
+    if "name" in candidate: data["name"] = _need(candidate["name"], "Nome")
+    else: data["name"] = _need(data.get("name"), "Nome")
+    if candidate.get("focus_priority") is not None:
+        try: priority = int(candidate["focus_priority"])
+        except (TypeError, ValueError) as error: raise DomainError("Prioridade de foco deve ser um número de 1 a 5.") from error
+        if not 1 <= priority <= 5: raise DomainError("Prioridade de foco deve estar entre 1 e 5.")
+        data["focus_priority"] = priority
+    if candidate.get("status", "active") not in {"active", "paused", "completed", "cancelled", "archived"}:
+        raise DomainError("Status da formação inválido.")
+    start = candidate.get("start_date")
+    end = candidate.get("expected_end_date")
+    if start: _date(start, "Data de início")
+    if end: _date(end, "Previsão de conclusão")
+    if start and end and start > end: raise DomainError("A previsão de conclusão não pode ser anterior ao início.")
+    return data
+
+
 def create_formation(conn, values):
-    data = _fields(values, FORMATION); data["name"] = _need(data.get("name"), "Nome")
+    data = _formation_data(values)
     data.setdefault("focus_priority", 3); data.setdefault("status", "active")
     return _get(conn, "formacoes", repo.insert(conn, "formacoes", data))
 
 
 def change_formation(conn, ident, values):
-    _get(conn, "formacoes", ident); data = _fields(values, FORMATION)
-    if "name" in data: data["name"] = _need(data["name"], "Nome")
+    current = _active_formation(conn, ident)
+    if values.get("status") == "archived":
+        raise DomainError("Use a ação Arquivar para arquivar uma formação.", 400, "use_archive_action")
+    data = _formation_data(values, current)
     repo.update(conn, "formacoes", ident, data); return _get(conn, "formacoes", ident)
 
 
@@ -80,7 +119,8 @@ def curriculum(conn, formation_id, include_archived=False):
 
 
 def create_curriculum(conn, formation_id, values):
-    _get(conn, "formacoes", formation_id); data = _fields(values, CURRICULUM)
+    _active_formation(conn, formation_id)
+    data = _fields(values, CURRICULUM)
     data.update({"formation_id": formation_id, "name": _need(data.get("name"), "Nome da disciplina")})
     data.setdefault("academic_status", "not_available"); data.setdefault("sort_order", 0)
     try: ident = repo.insert(conn, "disciplinas_grade", data)
@@ -89,13 +129,15 @@ def create_curriculum(conn, formation_id, values):
 
 
 def update_curriculum(conn, ident, values):
-    _get(conn, "disciplinas_grade", ident); data = _fields(values, CURRICULUM)
+    current = _get(conn, "disciplinas_grade", ident)
+    _active_formation(conn, current["formation_id"])
+    data = _fields(values, CURRICULUM)
     if "name" in data: data["name"] = _need(data["name"], "Nome da disciplina")
     repo.update(conn, "disciplinas_grade", ident, data); return _get(conn, "disciplinas_grade", ident)
 
 
 def import_curriculum(conn, formation_id, items):
-    _get(conn, "formacoes", formation_id); inserted, duplicates = [], []
+    _active_formation(conn, formation_id); inserted, duplicates = [], []
     for item in items:
         try: inserted.append(create_curriculum(conn, formation_id, item))
         except DomainError as error:
@@ -116,6 +158,7 @@ def studies(conn, include_archived=False, week_reference=None):
 
 def add_curriculum_study(conn, curriculum_id, values):
     curriculum_item = _get(conn, "disciplinas_grade", curriculum_id)
+    _active_formation(conn, curriculum_item["formation_id"])
     if curriculum_item["academic_status"] not in ("available", "in_progress"): raise DomainError("A disciplina precisa estar disponível para entrar nos estudos atuais.")
     data = _fields(values, STUDY); data.update({"origin":"curriculum", "curriculum_subject_id":curriculum_id, "priority":data.get("priority",3), "difficulty":data.get("difficulty",3), "status":"active"})
     try: ident = repo.insert(conn, "materias_estudo", data)
@@ -210,6 +253,19 @@ def create_session(conn, values):
     if planned_id:
         planned_item = planned_detail(conn, planned_id)
         if planned_item["study_subject_id"] != study_id: raise DomainError("A sessão planejada precisa pertencer à mesma matéria.")
+        # A transição condicional é feita antes da inserção, na mesma transação.
+        # Assim, duas requisições quase simultâneas não conseguem registrar duas
+        # sessões para o mesmo bloco planejado.
+        claimed = conn.execute(
+            "UPDATE sessoes_planejadas SET status='completed',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+            "WHERE id=? AND status IN ('planned','skipped')",
+            (planned_id,),
+        ).rowcount
+        if not claimed:
+            fresh = planned_detail(conn, planned_id)
+            if fresh["status"] == "completed":
+                raise DomainError("Esta sessão planejada já foi concluída.", 409, "planned_already_completed")
+            raise DomainError("Esta sessão planejada não está disponível para conclusão.", 409, "planned_not_active")
     if topic_id and data.get("mastery_before") is None: data["mastery_before"]=_get(conn,"topicos",topic_id)["mastery"]
     if data.get("started_at") and data.get("ended_at"):
         data["duration_seconds"] = max(1, int((datetime.fromisoformat(str(data["ended_at"]).replace("Z","+00:00")) - datetime.fromisoformat(str(data["started_at"]).replace("Z","+00:00"))).total_seconds()))
@@ -221,7 +277,6 @@ def create_session(conn, values):
     if topic_id and data["entry_method"] != "review":
         if _get(conn,"topicos",topic_id)["status"] == "not_started": repo.update(conn,"topicos",topic_id,{"status":"in_progress"})
         _start_review_chain(conn, topic_id, ident, _date(data["date"]))
-    if planned_id: repo.update(conn,"sessoes_planejadas",planned_id,{"status":"completed"})
     session = _get(conn,"sessoes_estudo",ident)
     if completed: session["topic_completed"] = True
     return session
@@ -247,6 +302,271 @@ def update_session(conn, ident, values):
 
 def delete_session(conn, ident):
     old=_get(conn,"sessoes_estudo",ident); conn.execute("UPDATE revisoes SET status='cancelled' WHERE root_session_id=? AND status='pending'",(ident,)); remove(conn,"sessoes_estudo",ident); _recalculate_mastery(conn,old["topic_id"])
+
+
+# Anotações são um registro próprio: uma sessão pode ter uma nota, mas um rascunho
+# também sobrevive antes de existir uma sessão concluída.
+
+
+def _note_id(value, label):
+    if value is None or value == "":
+        return None
+    try:
+        ident = int(value)
+    except (TypeError, ValueError) as error:
+        raise DomainError(f"{label} inválido.") from error
+    if ident <= 0:
+        raise DomainError(f"{label} inválido.")
+    return ident
+
+
+def _note_tags(value):
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        items = value.split(",")
+    elif isinstance(value, list):
+        items = value
+    else:
+        raise DomainError("Tags devem ser uma lista ou texto separado por vírgulas.")
+    cleaned, seen = [], set()
+    for item in items:
+        if not isinstance(item, str):
+            raise DomainError("Cada tag deve ser um texto.")
+        tag = " ".join(item.strip().lstrip("#").split())
+        if not tag or tag.casefold() in seen:
+            continue
+        seen.add(tag.casefold())
+        cleaned.append(tag)
+    return ", ".join(cleaned)
+
+
+def _note_content(value):
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise DomainError("O conteúdo da anotação deve ser texto em Markdown.")
+    return value
+
+
+def _default_note_title():
+    return f"Anotação de estudo — {_today()}"
+
+
+def _note_title(value, use_default=False):
+    if value is None or (isinstance(value, str) and not value.strip()):
+        if use_default:
+            return _default_note_title()
+        raise DomainError("Título é obrigatório.")
+    if not isinstance(value, str):
+        raise DomainError("Título deve ser texto.")
+    return _need(value, "Título")
+
+
+def _note_relationships(conn, study_subject_id, topic_id=None, planned_session_id=None, study_session_id=None):
+    study_subject_id = _note_id(study_subject_id, "Matéria")
+    if study_subject_id is None:
+        raise DomainError("Matéria é obrigatória.")
+    _get(conn, "materias_estudo", study_subject_id)
+    topic_id = _note_id(topic_id, "Tópico")
+    planned_session_id = _note_id(planned_session_id, "Sessão planejada")
+    study_session_id = _note_id(study_session_id, "Sessão de estudo")
+    if topic_id:
+        topic = _get(conn, "topicos", topic_id)
+        if topic["study_subject_id"] != study_subject_id:
+            raise DomainError("O tópico precisa pertencer à matéria selecionada.")
+    if planned_session_id:
+        planned_item = planned_detail(conn, planned_session_id)
+        if planned_item["study_subject_id"] != study_subject_id:
+            raise DomainError("A sessão planejada precisa pertencer à matéria selecionada.")
+    if study_session_id:
+        session = _get(conn, "sessoes_estudo", study_session_id)
+        if session["study_subject_id"] != study_subject_id:
+            raise DomainError("A sessão de estudo precisa pertencer à matéria selecionada.")
+    return {
+        "study_subject_id": study_subject_id,
+        "topic_id": topic_id,
+        "planned_session_id": planned_session_id,
+        "study_session_id": study_session_id,
+    }
+
+
+def _note_select(where="", params=()):
+    sql = "SELECT n.*,COALESCE(d.name,s.personal_name) subject_name,t.name topic_name FROM anotacoes_estudo n JOIN materias_estudo s ON s.id=n.study_subject_id LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id LEFT JOIN topicos t ON t.id=n.topic_id " + where
+    return sql, params
+
+
+def note_detail(conn, ident):
+    sql, params = _note_select("WHERE n.id=?", (ident,))
+    note = repo.one(conn, sql, params)
+    if not note:
+        raise DomainError("Anotação não encontrada.", 404, "note_not_found")
+    return note
+
+
+def create_note(conn, values):
+    status = values.get("status", "draft")
+    if status != "draft":
+        raise DomainError("Crie a anotação como rascunho e use Finalizar após concluir a sessão.", 400, "use_note_finalize")
+    links = _note_relationships(
+        conn,
+        values.get("study_subject_id"),
+        values.get("topic_id"),
+        values.get("planned_session_id"),
+    )
+    title = _note_title(values.get("title"), use_default=True)
+    data = {
+        **links,
+        "title": title,
+        "content_markdown": _note_content(values.get("content_markdown", "")),
+        "tags": _note_tags(values.get("tags", "")),
+        "status": "draft",
+    }
+    data.pop("study_session_id")
+    return note_detail(conn, repo.insert(conn, "anotacoes_estudo", data))
+
+
+def autosave_note(conn, ident, values):
+    current = note_detail(conn, ident)
+    data = {}
+    if "title" in values:
+        data["title"] = _note_title(values["title"])
+    if "content_markdown" in values:
+        data["content_markdown"] = _note_content(values["content_markdown"])
+    if "tags" in values:
+        data["tags"] = _note_tags(values["tags"])
+    relationship_keys = {"topic_id", "planned_session_id"}
+    if relationship_keys.intersection(values):
+        if current["status"] == "final":
+            raise DomainError("Uma anotação final não pode ser reassociada a outro tópico ou planejamento.", 409, "note_finalized")
+        links = _note_relationships(
+            conn,
+            current["study_subject_id"],
+            values.get("topic_id", current["topic_id"]),
+            values.get("planned_session_id", current["planned_session_id"]),
+        )
+        data.update({key: links[key] for key in relationship_keys})
+    repo.update(conn, "anotacoes_estudo", ident, data)
+    return note_detail(conn, ident)
+
+
+def finalize_note(conn, ident, values):
+    current = note_detail(conn, ident)
+    requested_session_id = _note_id(values.get("study_session_id"), "Sessão de estudo")
+    effective_session_id = requested_session_id or current["study_session_id"]
+    if not effective_session_id:
+        raise DomainError("Informe a sessão concluída antes de finalizar a anotação.")
+    _note_relationships(
+        conn,
+        current["study_subject_id"],
+        current["topic_id"],
+        current["planned_session_id"],
+        effective_session_id,
+    )
+    if current["status"] == "final":
+        if requested_session_id and requested_session_id != current["study_session_id"]:
+            raise DomainError("A anotação já foi finalizada com outra sessão.", 409, "note_finalized")
+        return current
+    # A condição no UPDATE faz com que dois cliques quase simultâneos não possam
+    # transformar o mesmo rascunho em duas finalizações diferentes.
+    updated = conn.execute(
+        "UPDATE anotacoes_estudo SET status='final',study_session_id=?,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=? AND status='draft'",
+        (effective_session_id, ident),
+    ).rowcount
+    if not updated:
+        fresh = note_detail(conn, ident)
+        if fresh["status"] == "final" and (not requested_session_id or requested_session_id == fresh["study_session_id"]):
+            return fresh
+        raise DomainError("A anotação já foi finalizada com outra sessão.", 409, "note_finalized")
+    return note_detail(conn, ident)
+
+
+def delete_note(conn, ident):
+    note = note_detail(conn, ident)
+    if note["status"] != "draft":
+        raise DomainError("Anotações finalizadas não podem ser descartadas por esta ação.", 409, "note_finalized")
+    repo.delete(conn, "anotacoes_estudo", ident)
+
+
+def notes(conn, study_subject_id=None, topic_id=None, start=None, end=None, status=None):
+    clauses, params = [], []
+    if study_subject_id not in (None, ""):
+        subject_id = _note_id(study_subject_id, "Matéria")
+        _get(conn, "materias_estudo", subject_id)
+        clauses.append("n.study_subject_id=?"); params.append(subject_id)
+    if topic_id not in (None, ""):
+        topic_ident = _note_id(topic_id, "Tópico")
+        _get(conn, "topicos", topic_ident)
+        clauses.append("n.topic_id=?"); params.append(topic_ident)
+    if start:
+        _date(start, "Data inicial")
+        clauses.append("substr(n.created_at,1,10)>=?"); params.append(start)
+    if end:
+        _date(end, "Data final")
+        clauses.append("substr(n.created_at,1,10)<=?"); params.append(end)
+    if start and end and start > end:
+        raise DomainError("A data final não pode ser anterior à data inicial.")
+    if status and status != "all":
+        if status not in ("draft", "final"):
+            raise DomainError("Filtro de status de anotações inválido.")
+        clauses.append("n.status=?"); params.append(status)
+    where = "WHERE " + " AND ".join(clauses) if clauses else ""
+    sql, query_params = _note_select(where + " ORDER BY n.updated_at DESC,n.id DESC", tuple(params))
+    return repo.many(conn, sql, query_params)
+
+
+def _note_tags_for_export(value):
+    return [item.strip() for item in str(value or "").split(",") if item.strip()]
+
+
+def _yaml_string(value):
+    # JSON quoted strings are valid YAML scalars and escape line breaks/quotes safely.
+    return json.dumps(str(value), ensure_ascii=False)
+
+
+def _safe_note_filename_part(value, fallback):
+    ascii_value = unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode("ascii").lower()
+    slug = re.sub(r"[^a-z0-9]+", "-", ascii_value).strip("-")
+    return (slug or fallback)[:56].rstrip("-") or fallback
+
+
+def note_markdown(conn, ident):
+    note = note_detail(conn, ident)
+    tags = _note_tags_for_export(note["tags"])
+    lines = [
+        "---",
+        f"title: {_yaml_string(note['title'])}",
+        f"date: {str(note['created_at'])[:10]}",
+        f"subject: {_yaml_string(note['subject_name'])}",
+        f"topic: {_yaml_string(note['topic_name'])}" if note["topic_name"] else "topic: null",
+    ]
+    if tags:
+        lines.append("tags:")
+        lines.extend(f"  - {_yaml_string(tag)}" for tag in tags)
+    else:
+        lines.append("tags: []")
+    lines.extend([
+        f"session_id: {note['study_session_id']}" if note["study_session_id"] else "session_id: null",
+        "---",
+        "",
+        note["content_markdown"],
+    ])
+    filename = f"{int(note['id']):06d}-{_safe_note_filename_part(note['subject_name'], 'materia')}-{_safe_note_filename_part(note['title'], 'anotacao')}.md"
+    return {"note": note, "filename": filename, "markdown": "\n".join(lines)}
+
+
+def notes_for_obsidian_export(conn, identifiers):
+    if not isinstance(identifiers, list) or not identifiers:
+        raise DomainError("Selecione ao menos uma anotação para exportar.")
+    selected, seen = [], set()
+    for value in identifiers:
+        ident = _note_id(value, "Anotação")
+        if ident is None:
+            raise DomainError("Anotação inválida.")
+        if ident not in seen:
+            seen.add(ident)
+            selected.append(note_markdown(conn, ident))
+    return selected
 
 
 def evaluations(conn, study_id=None):
@@ -383,6 +703,24 @@ def planned_detail(conn, ident):
     row = repo.one(conn,"SELECT p.*,COALESCE(s.personal_name,d.name) subject_name,t.name topic_name FROM sessoes_planejadas p JOIN materias_estudo s ON s.id=p.study_subject_id LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id LEFT JOIN topicos t ON t.id=p.topic_id WHERE p.id=?",(ident,))
     if not row: raise DomainError("Sessão planejada não encontrada.",404)
     return row
+
+
+def delete_planned_day(conn, scheduled_date):
+    """Remove, em uma única operação, os blocos ativos de uma data específica."""
+    raw_date = str(scheduled_date)
+    selected_date = _date(raw_date, "Data do planejamento")
+    # ``date.fromisoformat`` também aceita a forma básica (AAAAMMDD), mas a rota
+    # pública precisa manter um contrato inequívoco para datas.
+    if raw_date != selected_date.isoformat():
+        raise DomainError("Data do planejamento deve usar AAAA-MM-DD.")
+    rows = conn.execute(
+        "DELETE FROM sessoes_planejadas "
+        "WHERE scheduled_date=? AND status='planned' "
+        "RETURNING id",
+        (selected_date.isoformat(),),
+    ).fetchall()
+    ids = sorted(row["id"] for row in rows)
+    return {"deleted": len(ids), "ids": ids}
 
 
 def create_planned(conn,values,source="manual"):

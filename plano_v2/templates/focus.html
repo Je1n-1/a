@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{ title }} · plano.</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/app.css') }}">
+</head>
+<body class="focus-page" data-focus-page="true">
+  <main class="focus-shell">
+    <header class="focus-header">
+      <a class="focus-back" href="/" aria-label="Voltar ao plano">← plano.</a>
+      <p class="focus-label">SESSÃO DE ESTUDO</p>
+    </header>
+    <section id="focus-app" aria-live="polite"></section>
+  </main>
+  <div id="focus-dialog-root"></div>
+  <div id="focus-toast-root" aria-live="polite" aria-atomic="true"></div>
+  <script type="module" src="{{ url_for('static', filename='js/focus.js') }}"></script>
+</body>
+</html>
