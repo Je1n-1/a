@@ -2395,6 +2395,87 @@ textarea[aria-invalid="true"],
 }
 
 .planning-preview-warning ul { margin: 0.45rem 0 0; padding-left: 1.2rem; }
+.preview-session-context { margin-top: 0.2rem; font-size: 0.72rem; }
+
+/* Diagnóstico da prévia: motivos acionáveis sem transformar o modal em painel */
+
+.planning-preview-diagnostic {
+  display: grid;
+  gap: 0.7rem;
+  margin: 0.85rem 0;
+  padding: 0.8rem;
+  border: 1px solid rgb(104 138 194 / 38%);
+  border-radius: var(--ui-radius-xs);
+  background: rgb(39 70 116 / 12%);
+}
+
+.planning-diagnostic-heading strong,
+.planning-diagnostic-heading span { display: block; }
+.planning-diagnostic-heading strong { color: var(--ui-text); font-size: 0.88rem; }
+.planning-diagnostic-heading span,
+.planning-diagnostic-empty { color: var(--ui-muted); font-size: 0.76rem; }
+.planning-diagnostic-future-note { margin: 0; color: var(--ui-muted); font-size: 0.74rem; line-height: 1.4; }
+
+.planning-diagnostic-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.planning-diagnostic-summary span {
+  padding: 0.32rem 0.48rem;
+  border: 1px solid rgb(91 121 169 / 34%);
+  border-radius: 999px;
+  color: var(--ui-muted);
+  background: rgb(4 9 23 / 24%);
+  font-size: 0.7rem;
+}
+
+.planning-diagnostic-summary b { color: var(--ui-text); }
+
+.planning-diagnostic-details > summary {
+  cursor: pointer;
+  color: var(--ui-text-soft);
+  font-size: 0.78rem;
+}
+
+.planning-diagnostic-list {
+  display: grid;
+  gap: 0.55rem;
+  margin: 0.65rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.planning-diagnostic-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.65rem;
+  border: 1px solid rgb(91 121 169 / 28%);
+  border-radius: var(--ui-radius-xs);
+  background: rgb(5 13 30 / 32%);
+}
+
+.planning-diagnostic-item > div { display: grid; gap: 0.2rem; min-width: 0; }
+.planning-diagnostic-item strong { color: var(--ui-text); font-size: 0.8rem; }
+.planning-diagnostic-item .muted { font-size: 0.7rem; }
+.planning-diagnostic-item p { margin: 0; color: var(--ui-muted); font-size: 0.74rem; line-height: 1.35; }
+
+.planning-diagnostic-state {
+  width: fit-content;
+  padding: 0.15rem 0.38rem;
+  border-radius: 999px;
+  color: #f0c36d;
+  background: rgb(189 132 41 / 16%);
+  font-size: 0.65rem;
+  font-weight: 700;
+}
+
+.planning-diagnostic-state.is-future { color: #a9b9da; background: rgb(110 134 178 / 17%); }
+.planning-diagnostic-state.is-attention { color: #f5d47e; background: rgb(195 135 37 / 18%); }
+.planning-diagnostic-action { flex: 0 0 auto; white-space: nowrap; }
 
 @media (max-width: 1100px) {
   .formation-layout.formation-curriculum-open { grid-template-columns: 1fr; }
@@ -2404,6 +2485,7 @@ textarea[aria-invalid="true"],
   .planning-preview-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .study-topic-row { flex-direction: column; }
   .study-topic-actions { justify-content: flex-start; }
+  .planning-diagnostic-item { align-items: flex-start; flex-direction: column; }
   .curriculum-table { min-width: 47rem; }
   .curriculum-table th:nth-child(8),
   .curriculum-table td:nth-child(8) { display: none; }

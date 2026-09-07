@@ -30,6 +30,21 @@ def _now(): return _local_now().isoformat(timespec="seconds")
 def _date(value, label="Data"):
     try: return date.fromisoformat(str(value))
     except ValueError as error: raise DomainError(f"{label} deve usar AAAA-MM-DD.") from error
+
+
+def _optional_date(value):
+    """Lê uma data legada sem deixar uma prévia inteira falhar.
+
+    Os formulários atuais validam datas, mas importações antigas podem conter
+    texto inválido. O gerador precisa explicar esse caso em vez de criar um
+    bloco em uma data incerta ou responder com erro interno.
+    """
+    if value in (None, ""):
+        return None, False
+    try:
+        return _date(value), False
+    except DomainError:
+        return None, True
 def _week_bounds(reference=None):
     current = _date(reference) if reference else _local_now().date()
     start = current - timedelta(days=current.weekday())
@@ -2396,17 +2411,17 @@ def _planning_candidate_rows(conn, formation_id=None, item_id=None, kind=None):
           d.required_study_minutes curriculum_required_study_minutes,
           d.priority_base,d.preferred_block_minutes curriculum_preferred_block_minutes,
           d.allowed_weekdays curriculum_allowed_weekdays,d.planning_enabled,d.minimum_grade,
-          f.archived_at formation_archived_at,d.archived_at curriculum_archived_at
+          f.name formation_name,f.status formation_status,f.archived_at formation_archived_at,
+          d.archived_at curriculum_archived_at
         FROM materias_estudo s
         LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id
         LEFT JOIN formacoes f ON f.id=COALESCE(s.related_formation_id,d.formation_id)
         WHERE s.status='active' AND s.archived_at IS NULL
           AND (d.id IS NULL OR (d.archived_at IS NULL AND d.item_type='subject'))
-          AND (f.id IS NULL OR f.archived_at IS NULL)
+          AND (f.id IS NULL OR (f.archived_at IS NULL AND f.status='active'))
           AND (
             s.origin='personal' OR (
                 d.academic_status='in_progress'
-                OR (d.academic_status='available' AND d.planning_enabled=1)
                 OR (d.academic_status='completed' AND d.review_status IN ('queued','in_progress'))
             )
           )
@@ -2523,81 +2538,140 @@ def planning_items(conn, start=None, end=None, formation_id=None, item_id=None, 
     contents_by_study, contents_by_curriculum = _contents_by_owner(conn, study_ids, curriculum_ids)
     evaluation_studies, evaluation_curricula = _evaluation_due_sets(conn, study_ids, curriculum_ids)
     # Cada prazo recebe sua capacidade real até a data; reutiliza janelas em vez
-    # de consultar a disponibilidade uma vez por item.
-    farthest = max([row.get("deadline_date") or row.get("curriculum_end_date") or row.get("target_date") or end_day.isoformat() for row in rows] + [end_day.isoformat()])
-    farthest_day = max(end_day, _date(farthest))
+    # de consultar a disponibilidade uma vez por item. Datas antigas inválidas
+    # não podem interromper a prévia inteira: serão explicadas no diagnóstico.
+    farthest_dates = [end_day]
+    for row in rows:
+        for value in (row.get("deadline_date"), row.get("curriculum_end_date"), row.get("target_date")):
+            parsed, _invalid = _optional_date(value)
+            if parsed:
+                farthest_dates.append(parsed)
+    farthest_day = max(farthest_dates)
     horizon = _planning_windows(conn, start_day.isoformat(), farthest_day.isoformat())
     plan_index = _planned_minutes_index(conn, study_ids, min(start_day, week_start).isoformat(), farthest_day.isoformat())
     items = []
+    today_day = _local_now().date()
+    current_monday = (today_day - timedelta(days=today_day.weekday())).isoformat()
     for row in rows:
         curriculum_id = row.get("curriculum_subject_id")
         kind = "curriculum" if curriculum_id else "personal"
         required = row.get("curriculum_required_study_minutes") if curriculum_id else row.get("required_study_minutes")
-        weekly_goal = row.get("weekly_goal_minutes") or 0
+        required = int(required) if required else 0
+        weekly_goal = int(row.get("weekly_goal_minutes") or 0)
+        minimum_weekly = int(row.get("minimum_weekly_minutes") or 0) if kind == "personal" else 0
         real = real_curriculum.get(curriculum_id, 0) if curriculum_id else real_study.get(row["id"], 0)
         week_real = week_real_study.get(row["id"], 0)
         deadline = (row.get("deadline_date") or row.get("curriculum_end_date") or row.get("target_date")) if curriculum_id else row.get("target_date")
-        deadline_day = _date(deadline) if deadline else None
-        cutoff = min(deadline_day, farthest_day) if deadline_day else end_day
-        planned_future = _indexed_planned_minutes(plan_index, row["id"], start_day.isoformat(), cutoff.isoformat())
-        if required:
-            remaining = max(0, int(required) - real)
-        else:
-            remaining = max(0, int(weekly_goal) - week_real)
-        unallocated = max(0, remaining - planned_future)
+        deadline_day, invalid_deadline = _optional_date(deadline)
+        study_start_day, invalid_study_start = _optional_date(row.get("start_date"))
+        curriculum_start_day, invalid_curriculum_start = _optional_date(row.get("curriculum_start_date"))
+        date_invalid = invalid_deadline or invalid_study_start or invalid_curriculum_start
+        effective_start = max([start_day, today_day, *[value for value in (study_start_day, curriculum_start_day) if value]])
+        allocation_end = min(deadline_day, end_day) if deadline_day else end_day
         allowed = _stored_weekdays(row.get("curriculum_allowed_weekdays") if curriculum_id else row.get("allowed_weekdays"))
-        capacity_end = deadline_day if deadline_day else end_day
-        if capacity_end < start_day: capacity, available_days = 0, 0
-        else: capacity, available_days = _item_capacity(horizon["windows"], start_day.isoformat(), capacity_end.isoformat(), allowed)
-        days_remaining = (deadline_day - _local_now().date()).days if deadline_day else None
-        raw = {
-            "id": row["id"], "study_subject_id": row["id"], "curriculum_subject_id": curriculum_id,
-            "kind": kind, "name": row.get("curriculum_name") or row.get("personal_name"),
-            "deadline": deadline, "deadline_date": deadline, "days_remaining": days_remaining,
-            "required_study_minutes": int(required) if required else None,
-            "real_minutes": real, "remaining_minutes": remaining, "future_planned_minutes": planned_future,
-            "unallocated_minutes": unallocated, "capacity_until_deadline_minutes": capacity,
-            "available_days_until_deadline": available_days, "priority_base": int(row.get("priority_base") or row.get("priority") or 3),
-            "preferred_block_minutes": row.get("curriculum_preferred_block_minutes") if curriculum_id else row.get("preferred_block_minutes"),
-            "allowed_weekdays": allowed, "minimum_weekly_minutes": int(row.get("minimum_weekly_minutes") or 0) if kind == "personal" else 0,
-            "weekly_goal_minutes": int(weekly_goal), "week_real_minutes": week_real,
-            "week_planned_minutes": _indexed_planned_minutes(plan_index, row["id"], week_start.isoformat(), week_end.isoformat()),
-            "contents": contents_by_curriculum.get(curriculum_id, []) if curriculum_id else contents_by_study.get(row["id"], []),
-            "review_mode": bool(curriculum_id and row.get("review_status") in {"queued", "in_progress"}),
-            "has_upcoming_evaluation": curriculum_id in evaluation_curricula if curriculum_id else row["id"] in evaluation_studies,
-        }
         planned_by_week = defaultdict(int)
         for planned_row in plan_index.get(row["id"], []):
             planned_day = _date(planned_row["scheduled_date"])
             monday = (planned_day - timedelta(days=planned_day.weekday())).isoformat()
             planned_by_week[monday] += int(planned_row["planned_duration_minutes"] or 0)
-        raw["planned_by_week"] = dict(planned_by_week)
+        if allocation_end >= effective_start:
+            planned_future = _indexed_planned_minutes(plan_index, row["id"], effective_start.isoformat(), allocation_end.isoformat())
+        else:
+            planned_future = 0
+        weekly_goal_by_week, minimum_by_week, weekly_demand_by_week = {}, {}, {}
+        if allocation_end >= effective_start:
+            for week_first, _week_last in smart_planning.weekly_buckets(effective_start, allocation_end):
+                monday = (week_first - timedelta(days=week_first.weekday())).isoformat()
+                actual_this_week = week_real if monday == current_monday else 0
+                planned_this_week = int(planned_by_week.get(monday, 0))
+                if not required and weekly_goal:
+                    weekly_goal_by_week[monday] = max(0, weekly_goal - actual_this_week - planned_this_week)
+                if minimum_weekly:
+                    minimum_by_week[monday] = max(0, minimum_weekly - actual_this_week - planned_this_week)
+                weekly_demand_by_week[monday] = max(
+                    weekly_goal_by_week.get(monday, 0), minimum_by_week.get(monday, 0),
+                )
+        if required:
+            remaining = max(0, required - real)
+            unallocated = max(0, remaining - planned_future)
+        else:
+            remaining = sum(weekly_demand_by_week.values())
+            unallocated = remaining
+        capacity_end = allocation_end
+        if date_invalid or capacity_end < effective_start:
+            capacity, available_days = 0, 0
+        else:
+            capacity, available_days = _item_capacity(horizon["windows"], effective_start.isoformat(), capacity_end.isoformat(), allowed)
+        days_remaining = (deadline_day - _local_now().date()).days if deadline_day else None
+        raw = {
+            "id": row["id"], "study_subject_id": row["id"], "curriculum_subject_id": curriculum_id,
+            "kind": kind, "name": row.get("curriculum_name") or row.get("personal_name"),
+            "formation_id": row.get("formation_id") or row.get("related_formation_id"),
+            "formation_name": row.get("formation_name"),
+            "deadline": deadline, "deadline_date": deadline, "days_remaining": days_remaining,
+            "required_study_minutes": required or None,
+            "real_minutes": real, "remaining_minutes": remaining, "future_planned_minutes": planned_future,
+            "unallocated_minutes": unallocated, "capacity_until_deadline_minutes": capacity,
+            "available_days_until_deadline": available_days, "priority_base": int(row.get("priority_base") or row.get("priority") or 3),
+            "preferred_block_minutes": row.get("curriculum_preferred_block_minutes") if curriculum_id else row.get("preferred_block_minutes"),
+            "allowed_weekdays": allowed, "minimum_weekly_minutes": minimum_weekly,
+            "weekly_goal_minutes": int(weekly_goal), "week_real_minutes": week_real,
+            "week_planned_minutes": int(planned_by_week.get(current_monday, 0)),
+            "planned_by_week": dict(planned_by_week), "weekly_goal_by_week": weekly_goal_by_week,
+            "minimum_by_week": minimum_by_week, "weekly_demand_by_week": weekly_demand_by_week,
+            "study_start_date": row.get("start_date"), "curriculum_start_date": row.get("curriculum_start_date"),
+            "effective_start_date": effective_start.isoformat(), "date_invalid": date_invalid,
+            "contents": contents_by_curriculum.get(curriculum_id, []) if curriculum_id else contents_by_study.get(row["id"], []),
+            "review_mode": bool(curriculum_id and row.get("review_status") in {"queued", "in_progress"}),
+            "has_upcoming_evaluation": curriculum_id in evaluation_curricula if curriculum_id else row["id"] in evaluation_studies,
+        }
+        has_configured_demand = bool(required or weekly_goal or minimum_weekly)
+        if date_invalid:
+            planning_state = "invalid_date"
+        elif deadline_day and deadline_day < start_day:
+            planning_state = "deadline_expired"
+        elif deadline_day and deadline_day < effective_start:
+            planning_state = "deadline_before_start"
+        elif effective_start > end_day:
+            planning_state = "starts_after_period"
+        elif not has_configured_demand:
+            planning_state = "missing_effort_or_goal"
+        elif required and remaining <= 0:
+            planning_state = "remaining_effort_zero"
+        elif required and unallocated <= 0:
+            planning_state = "already_covered_by_future_blocks"
+        elif not required and remaining <= 0:
+            planning_state = "already_covered_by_future_blocks"
+        else:
+            planning_state = "ready"
+        raw["planning_state"] = planning_state
+        raw["is_schedulable"] = planning_state == "ready"
         # A ausência de esforço pessoal não vira silenciosamente carga da grade.
         # Sem esforço total, a meta semanal ainda mantém o item planejável.
-        ideal_day = (remaining / available_days) if available_days else None
+        ideal_day = (unallocated / available_days) if available_days else None
         raw["ideal_minutes_per_available_day"] = round(ideal_day, 1) if ideal_day is not None else None
-        raw["ideal_minutes_per_week"] = round((remaining * 7 / max((days_remaining or 7) + 1, 1)), 1) if deadline_day else (int(weekly_goal) or None)
-        raw["behind_ideal_pace"] = bool(deadline_day and remaining > 0 and (capacity <= remaining or (unallocated > 0 and available_days <= 2)))
+        raw["ideal_minutes_per_week"] = round((remaining * 7 / max((days_remaining or 7) + 1, 1)), 1) if deadline_day else (max(weekly_goal, minimum_weekly) or None)
+        raw["behind_ideal_pace"] = bool(deadline_day and unallocated > 0 and (capacity <= unallocated or (unallocated > 0 and available_days <= 2)))
         urgency, reasons = smart_planning.urgency(raw)
         raw["automatic_urgency"] = urgency; raw["urgency_reasons"] = reasons
         raw["priority_effective"] = smart_planning.effective_priority(raw)
         raw["risk"], raw["risk_label"] = smart_planning.risk(raw)
-        raw["deficit_minutes"] = max(0, remaining - capacity)
+        raw["deficit_minutes"] = max(0, unallocated - capacity)
         raw["first_feasible_date"] = None
         items.append(raw)
-    feasibility = [item for item in items if item.get("deadline") and item["remaining_minutes"] and item["remaining_minutes"] > item["capacity_until_deadline_minutes"]]
+    feasibility = [item for item in items if item.get("is_schedulable") and item.get("deadline") and item["remaining_minutes"] and item["remaining_minutes"] > item["capacity_until_deadline_minutes"]]
     if feasibility:
         projection_end = start_day + timedelta(days=548)
         projection = _planning_windows(conn, start_day.isoformat(), projection_end.isoformat())["windows"]
         for item in feasibility:
-            item["first_feasible_date"] = _first_feasible_from_windows(item, start_day, item["remaining_minutes"], projection, projection_end)
+            item["first_feasible_date"] = _first_feasible_from_windows(item, _date(item["effective_start_date"]), item["remaining_minutes"], projection, projection_end)
     return {"start": start_day.isoformat(), "end": end_day.isoformat(), "items": items, "window_data": horizon}
 
 
 def planning_capacity(conn, start, end, formation_id=None, item_id=None, kind=None):
     calculated = planning_items(conn, start, end, formation_id, item_id, kind)
     window_data = _planning_windows(conn, calculated["start"], calculated["end"])
-    total_demand = sum(int(item["unallocated_minutes"] or 0) for item in calculated["items"])
+    total_demand = sum(int(item["unallocated_minutes"] or 0) for item in calculated["items"] if item.get("is_schedulable", True))
     return {
         "start": calculated["start"], "end": calculated["end"],
         "capacity_minutes": window_data["capacity_minutes"], "planned_minutes": window_data["planned_minutes"],
@@ -2623,9 +2697,186 @@ def planning_ideal(conn, start, end, formation_id=None, item_id=None, kind=None)
     return values
 
 
+def _planning_diagnostic_action(key, formation_id=None, study_id=None):
+    """Ação navegável para uma causa que impede ou limita a prévia."""
+    formation_query = f"?selected={int(formation_id)}" if formation_id else ""
+    studies_query = f"?study_filter=active&formation_id={int(formation_id)}" if formation_id else "?study_filter=active"
+    study_query = f"?study_filter=paused&selected={int(study_id)}" if study_id else "?study_filter=paused"
+    actions = {
+        "add_current_study": ("Adicionar aos Estudos atuais", f"/studies{studies_query}"),
+        "configure_effort": ("Configurar esforço ou meta", f"/formations{formation_query}" if formation_id else "/studies"),
+        "adjust_dates": ("Revisar datas da disciplina", f"/formations{formation_query}" if formation_id else "/studies"),
+        "resume_formation": ("Reativar formação", f"/formations{formation_query}"),
+        "resume_study": ("Retomar estudo", f"/studies{study_query}"),
+        "configure_availability": ("Ajustar disponibilidade", "/planning"),
+        "review_curriculum_state": ("Revisar estado da disciplina", f"/formations{formation_query}"),
+        "wait_availability": ("Ver disciplina futura", f"/formations{formation_query}"),
+    }
+    label, href = actions.get(key, ("Abrir planejamento", "/planning"))
+    return {"key": key, "label": label, "href": href}
+
+
+def _planning_diagnostic_item(*, state, code, message, name, formation_id=None, formation_name=None,
+                              study_subject_id=None, curriculum_subject_id=None, action_key="configure_availability"):
+    return {
+        "entity": "curriculum" if curriculum_subject_id else "study",
+        "study_subject_id": study_subject_id,
+        "curriculum_subject_id": curriculum_subject_id,
+        "formation_id": formation_id,
+        "formation_name": formation_name,
+        "name": name,
+        "state": state,
+        "reason_codes": [code],
+        "reasons": [{"code": code, "message": message, "action": _planning_diagnostic_action(action_key, formation_id, study_subject_id)}],
+    }
+
+
+def _planning_diagnostics(conn, start, end, calculated, capacity, allocation):
+    """Explica o que entrou, o que ficou fora e qual ação resolve cada caso.
+
+    A consulta é deliberadamente mais ampla que o filtro do gerador: um estudo
+    pausado ou uma disciplina em andamento sem vínculo não podem virar demanda,
+    mas precisam aparecer de maneira acionável quando a prévia ficar vazia.
+    """
+    candidates_by_study = {item["study_subject_id"]: item for item in calculated["items"]}
+    candidates_by_curriculum = {item["curriculum_subject_id"]: item for item in calculated["items"] if item.get("curriculum_subject_id")}
+    diagnostics, seen = [], set()
+
+    def add(state, code, message, name, *, formation_id=None, formation_name=None,
+            study_subject_id=None, curriculum_subject_id=None, action_key="configure_availability"):
+        identity = (state, code, study_subject_id, curriculum_subject_id)
+        if identity in seen:
+            return
+        seen.add(identity)
+        diagnostics.append(_planning_diagnostic_item(
+            state=state, code=code, message=message, name=name,
+            formation_id=formation_id, formation_name=formation_name,
+            study_subject_id=study_subject_id, curriculum_subject_id=curriculum_subject_id,
+            action_key=action_key,
+        ))
+
+    calculated_messages = {
+        "invalid_date": ("invalid_date", "Há uma data inválida neste estudo; revise início e prazo.", "adjust_dates"),
+        "deadline_expired": ("deadline_expired", "O prazo já passou para o período escolhido.", "adjust_dates"),
+        "deadline_before_start": ("deadline_before_start", "O prazo ocorre antes da data em que o estudo pode começar.", "adjust_dates"),
+        "starts_after_period": ("starts_after_period", "O estudo começa depois do fim desta prévia.", "adjust_dates"),
+        "missing_effort_or_goal": ("missing_effort_or_goal", "Defina esforço total, meta semanal ou mínimo semanal para gerar blocos.", "configure_effort"),
+        "remaining_effort_zero": ("remaining_effort_zero", "O esforço desta matéria já foi concluído em sessões reais.", "review_curriculum_state"),
+        "already_covered_by_future_blocks": ("effort_already_covered_by_planned_blocks", "Os blocos já salvos cobrem a demanda deste período.", "configure_effort"),
+    }
+    for item in calculated["items"]:
+        planning_state = item.get("planning_state", "ready")
+        if planning_state == "ready":
+            continue
+        code, message, action_key = calculated_messages.get(planning_state, ("planning_not_ready", "Este estudo ainda não está pronto para ser distribuído.", "configure_effort"))
+        add(
+            "ignored", code, message, item["name"], formation_id=item.get("formation_id"),
+            formation_name=item.get("formation_name"), study_subject_id=item["study_subject_id"],
+            curriculum_subject_id=item.get("curriculum_subject_id"), action_key=action_key,
+        )
+
+    curriculum_rows = repo.many(conn, """
+        SELECT d.id curriculum_subject_id,d.name,d.academic_status,d.review_status,d.archived_at curriculum_archived_at,
+          f.id formation_id,f.name formation_name,f.status formation_status,f.archived_at formation_archived_at,
+          s.id study_subject_id,s.status study_status,s.archived_at study_archived_at
+        FROM disciplinas_grade d
+        JOIN formacoes f ON f.id=d.formation_id
+        LEFT JOIN materias_estudo s ON s.curriculum_subject_id=d.id
+          AND s.status IN ('active','paused') AND s.archived_at IS NULL
+        WHERE d.item_type='subject'
+          AND (d.academic_status IN ('available','in_progress','not_available','locked')
+            OR d.review_status IN ('queued','in_progress') OR s.id IS NOT NULL)
+        ORDER BY d.id
+    """)
+    for row in curriculum_rows:
+        curriculum_id = row["curriculum_subject_id"]
+        if curriculum_id in candidates_by_curriculum:
+            continue
+        formation_id = row["formation_id"]
+        common = {
+            "formation_id": formation_id, "formation_name": row.get("formation_name"),
+            "study_subject_id": row.get("study_subject_id"), "curriculum_subject_id": curriculum_id,
+        }
+        if row.get("academic_status") == "not_available":
+            add("future", "not_available_future", "Esta disciplina é futura e não cria demanda no planejamento.", row["name"], action_key="wait_availability", **common)
+        elif row.get("curriculum_archived_at"):
+            add("ignored", "curriculum_archived", "A disciplina está arquivada e não pode receber novos blocos.", row["name"], action_key="review_curriculum_state", **common)
+        elif row.get("formation_archived_at") or row.get("formation_status") != "active":
+            add("ignored", "formation_not_active", "A formação não está ativa; reative-a antes de planejar a disciplina.", row["name"], action_key="resume_formation", **common)
+        elif row.get("study_status") == "paused":
+            add("ignored", "study_paused", "O estudo atual está pausado; retome-o para incluí-lo na prévia.", row["name"], action_key="resume_study", **common)
+        elif row.get("study_subject_id") and row.get("academic_status") not in {"in_progress", "completed"}:
+            add("ignored", "curriculum_not_in_progress", "A disciplina precisa estar em andamento para entrar no planejamento.", row["name"], action_key="review_curriculum_state", **common)
+        elif not row.get("study_subject_id") and row.get("academic_status") in {"in_progress", "completed"}:
+            add("ignored", "current_study_missing", "A disciplina está em andamento, mas ainda não foi adicionada aos Estudos atuais.", row["name"], action_key="add_current_study", **common)
+        elif row.get("academic_status") == "available":
+            add("ignored", "curriculum_not_in_progress", "A disciplina está disponível, mas precisa ser adicionada aos Estudos atuais antes de planejar.", row["name"], action_key="add_current_study", **common)
+        elif row.get("academic_status") == "locked":
+            add("ignored", "curriculum_locked", "A disciplina está bloqueada e não cria demanda no planejamento.", row["name"], action_key="review_curriculum_state", **common)
+
+    personal_rows = repo.many(conn, """
+        SELECT s.id study_subject_id,s.personal_name name,s.status study_status,s.archived_at study_archived_at,
+          f.id formation_id,f.name formation_name,f.status formation_status,f.archived_at formation_archived_at
+        FROM materias_estudo s
+        LEFT JOIN formacoes f ON f.id=s.related_formation_id
+        WHERE s.origin='personal' AND s.archived_at IS NULL AND s.status IN ('active','paused')
+        ORDER BY s.id
+    """)
+    for row in personal_rows:
+        if row["study_subject_id"] in candidates_by_study:
+            continue
+        common = {
+            "formation_id": row.get("formation_id"), "formation_name": row.get("formation_name"),
+            "study_subject_id": row["study_subject_id"],
+        }
+        if row.get("formation_archived_at") or (row.get("formation_id") and row.get("formation_status") != "active"):
+            add("ignored", "formation_not_active", "A formação vinculada não está ativa; reative-a antes de planejar este estudo.", row["name"], action_key="resume_formation", **common)
+        elif row.get("study_status") == "paused":
+            add("ignored", "study_paused", "Este estudo paralelo está pausado; retome-o para incluí-lo na prévia.", row["name"], action_key="resume_study", **common)
+
+    by_study = {item["id"]: item for item in calculated["items"]}
+    for unscheduled in allocation["unscheduled"]:
+        item = by_study.get(unscheduled["id"], {})
+        if int(capacity.get("capacity_minutes") or 0) <= 0:
+            code, message = "no_availability", "Não há faixa de disponibilidade no período escolhido."
+        elif int(capacity.get("free_minutes") or 0) <= 0:
+            code, message = "windows_fully_occupied", "As faixas disponíveis já estão ocupadas por blocos existentes."
+        elif unscheduled.get("code") == "minimum_weekly_unmet":
+            code, message = "minimum_weekly_unmet", "A capacidade não foi suficiente para cumprir o mínimo semanal configurado."
+        else:
+            code, message = "capacity_insufficient", "A capacidade livre não foi suficiente para toda a demanda deste período."
+        add(
+            "attention", code, message, unscheduled["name"], formation_id=item.get("formation_id"),
+            formation_name=item.get("formation_name"), study_subject_id=unscheduled["id"],
+            curriculum_subject_id=item.get("curriculum_subject_id"), action_key="configure_availability",
+        )
+
+    ignored = sum(item["state"] == "ignored" for item in diagnostics)
+    future = sum(item["state"] == "future" for item in diagnostics)
+    eligible = sum(item.get("is_schedulable", True) for item in calculated["items"])
+    found = len(curriculum_rows) + len(personal_rows)
+    unallocated = sum(int(item.get("minutes") or 0) for item in allocation["unscheduled"])
+    summary = {
+        "found": found, "eligible": eligible, "ignored": ignored, "future": future,
+        "capacity_minutes": int(capacity.get("capacity_minutes") or 0),
+        "free_minutes": int(capacity.get("free_minutes") or 0),
+        "demand_minutes": int(capacity.get("demand_minutes") or 0),
+        "unallocated_minutes": unallocated, "proposed_blocks": len(allocation["sessions"]),
+    }
+    return {
+        "summary": summary, "items": diagnostics,
+        # Aliases explícitos para integrações que consomem a resposta sem usar a UI.
+        "studies_found": summary["found"], "eligible_count": summary["eligible"],
+        "ignored_count": summary["ignored"], "future_count": summary["future"],
+        "proposed_blocks": summary["proposed_blocks"], "unallocated_minutes": summary["unallocated_minutes"],
+    }
+
+
 def generate_plan(conn, start, days=7):
     if days < 1 or days > 93: raise DomainError("O planejamento automático aceita de 1 a 93 dias.")
     first = _date(start)
+    if first < _local_now().date():
+        raise DomainError("O início da prévia não pode ser anterior a hoje.", 400, "planning_start_in_past")
     end = first + timedelta(days=days - 1)
     calculated = planning_items(conn, first.isoformat(), end.isoformat())
     preferences = planning_preferences(conn)
@@ -2634,12 +2885,14 @@ def generate_plan(conn, start, days=7):
         pause_minutes=preferences["planning_break_minutes"], default_duration=preferences["default_session_minutes"],
         minimum_duration=preferences["minimum_session_minutes"], maximum_duration=preferences["maximum_session_minutes"],
     )
-    skipped = [item["name"] for item in calculated["items"] if not item["required_study_minutes"] and not item["weekly_goal_minutes"] and not item["minimum_weekly_minutes"]]
+    skipped = [item["name"] for item in calculated["items"] if item.get("planning_state") == "missing_effort_or_goal"]
+    capacity = planning_capacity(conn, first.isoformat(), end.isoformat())
     return {
         "start": first.isoformat(), "end": end.isoformat(), "sessions": allocation["sessions"],
         "items": calculated["items"], "unscheduled": allocation["unscheduled"],
         "preferences": preferences, "skipped_without_goal": skipped,
-        "capacity": planning_capacity(conn, first.isoformat(), end.isoformat()),
+        "capacity": capacity,
+        "diagnostics": _planning_diagnostics(conn, first.isoformat(), end.isoformat(), calculated, capacity, allocation),
     }
 
 
@@ -2663,7 +2916,7 @@ def recommendation(conn):
     today_plan = _planned_rows_for_window(conn, today, today)
     calculated = planning_items(conn, today, today)
     occupied_studies = {row["study_subject_id"] for row in today_plan}
-    candidates = [item for item in calculated["items"] if item["study_subject_id"] not in occupied_studies and (item["unallocated_minutes"] > 0 or item["minimum_weekly_minutes"] > 0)]
+    candidates = [item for item in calculated["items"] if item.get("is_schedulable", True) and item["study_subject_id"] not in occupied_studies and (item["unallocated_minutes"] > 0 or item["minimum_weekly_minutes"] > 0)]
     if not candidates: return None
     selected = max(candidates, key=lambda item: (item["priority_effective"], item["unallocated_minutes"]))
     topic = next((content for content in selected["contents"] if content["status"] != "completed"), None)

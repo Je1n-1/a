@@ -127,14 +127,25 @@ def _allocation_duration(item, available, desired, minimum, maximum, default):
 
 
 def _candidate_score(item, weekly_needs):
-    # Mínimos semanais paralelos são atendidos antes de o excedente ser usado
-    # pelas disciplinas com prazo. Depois, a prioridade efetiva e o risco
-    # controlam a distribuição.
+    """Ordena sem deixar um mínimo paralelo eclipsar uma entrega urgente.
+
+    Um mínimo semanal continua sendo protegido, mas não recebe mais um bônus
+    absoluto. Assim, uma disciplina curricular em risco ou com prazo iminente
+    ocupa a janela crítica primeiro; havendo capacidade, o paralelo ainda
+    recebe o mínimo configurado naquela mesma semana.
+    """
     weekly_need = weekly_needs.get(item["id"], 0)
     risk_points = {"impossible": 90, "at_risk": 60, "attention": 25, "on_track": 0}.get(item.get("risk"), 0)
     deadline_days = item.get("days_remaining")
     deadline_points = 0 if deadline_days is None else max(0, 20 - min(20, deadline_days))
-    return (1000 if weekly_need > 0 else 0) + risk_points + deadline_points + effective_priority(item) * 8 + int(item.get("unallocated_minutes") or 0) / 120
+    urgent_curriculum = bool(
+        item.get("kind") == "curriculum" and item.get("to_allocate", 0) > 0
+        and (item.get("risk") in {"impossible", "at_risk"} or (deadline_days is not None and deadline_days <= 2))
+    )
+    return (
+        int(urgent_curriculum), risk_points, deadline_points,
+        int(weekly_need > 0), effective_priority(item), int(item.get("unallocated_minutes") or 0) / 120,
+    )
 
 
 def distribute(items, day_windows, start: date, end: date, *, pause_minutes=10,
@@ -147,26 +158,33 @@ def distribute(items, day_windows, start: date, end: date, *, pause_minutes=10,
     mutable = [dict(item) for item in items]
     by_id = {item["id"]: item for item in mutable}
     for item in mutable:
-        item["to_allocate"] = max(0, int(item.get("unallocated_minutes") or 0))
+        # Metas recorrentes são controladas por semana, para que uma prévia de
+        # 14 ou 30 dias não consuma toda a meta logo nos primeiros dias.
+        item["to_allocate"] = max(0, int(item.get("unallocated_minutes") or 0)) if item.get("is_schedulable", True) and item.get("required_study_minutes") else 0
         item["allocated"] = 0
 
     proposals = []
+    weekly_unmet = defaultdict(int)
 
     def weekly_needs_for(current):
-        """Reinicia a garantia em cada segunda-feira sem ignorar blocos já salvos."""
+        """Calcula metas e mínimos da semana, já descontando o que existe."""
         monday = (current - timedelta(days=current.weekday())).isoformat()
-        is_current_week = monday == (start - timedelta(days=start.weekday())).isoformat()
         values = defaultdict(int)
         for item in mutable:
-            if item.get("kind") != "personal":
+            if not item.get("is_schedulable", True):
                 continue
-            guaranteed = int(item.get("minimum_weekly_minutes") or 0)
-            if not guaranteed:
-                continue
-            already_real = int(item.get("week_real_minutes") or 0) if is_current_week else 0
-            already_planned = int((item.get("planned_by_week") or {}).get(monday, 0))
-            values[item["id"]] = max(0, guaranteed - already_real - already_planned)
+            goal = int((item.get("weekly_goal_by_week") or {}).get(monday, 0))
+            minimum = int((item.get("minimum_by_week") or {}).get(monday, 0))
+            required_floor = max(goal, minimum)
+            if item.get("required_study_minutes"):
+                required_floor = min(required_floor, item["to_allocate"])
+            values[item["id"]] = max(0, required_floor)
         return values
+
+    def keep_unmet(values):
+        for ident, minutes in values.items():
+            if minutes > 0:
+                weekly_unmet[ident] += int(minutes)
 
     cursor = start
     active_week = None
@@ -174,6 +192,8 @@ def distribute(items, day_windows, start: date, end: date, *, pause_minutes=10,
     while cursor <= end:
         week_key = (cursor - timedelta(days=cursor.weekday())).isoformat()
         if week_key != active_week:
+            if active_week is not None:
+                keep_unmet(weekly_needs)
             active_week = week_key
             weekly_needs = weekly_needs_for(cursor)
         windows = [tuple(value) for value in day_windows.get(cursor, [])]
@@ -182,8 +202,10 @@ def distribute(items, day_windows, start: date, end: date, *, pause_minutes=10,
             while point + minimum_duration <= window_end:
                 eligible = [
                     item for item in mutable
-                    if _fits_day(item, cursor)
+                    if item.get("is_schedulable", True)
+                    and _fits_day(item, cursor)
                     and (item["to_allocate"] > 0 or weekly_needs.get(item["id"], 0) > 0)
+                    and (not item.get("effective_start_date") or cursor.isoformat() >= item["effective_start_date"])
                     and (not item.get("deadline_date") or cursor.isoformat() <= item["deadline_date"])
                 ]
                 if not eligible:
@@ -217,10 +239,18 @@ def distribute(items, day_windows, start: date, end: date, *, pause_minutes=10,
                     f"prioridade efetiva {effective_priority(selected)}/10",
                     selected.get("risk_label") or "No ritmo",
                 ]
-                if weekly_needs.get(selected["id"], 0) > 0:
+                monday = (cursor - timedelta(days=cursor.weekday())).isoformat()
+                if int((selected.get("minimum_by_week") or {}).get(monday, 0)) > 0 and weekly_needs.get(selected["id"], 0) > 0:
                     reason_bits.append("mínimo semanal garantido")
+                elif weekly_needs.get(selected["id"], 0) > 0:
+                    reason_bits.append("meta semanal distribuída")
                 elif selected.get("urgency_reasons"):
                     reason_bits.append(selected["urgency_reasons"][0])
+                remaining_before = max(selected["to_allocate"], weekly_needs.get(selected["id"], 0))
+                remaining_after = max(
+                    max(0, selected["to_allocate"] - duration),
+                    max(0, weekly_needs.get(selected["id"], 0) - duration),
+                )
                 proposals.append({
                     "study_subject_id": selected["study_subject_id"],
                     "topic_id": content.get("id") if content else None,
@@ -232,6 +262,10 @@ def distribute(items, day_windows, start: date, end: date, *, pause_minutes=10,
                     "reason": "; ".join(reason_bits) + ".",
                     "item_id": selected["id"],
                     "priority_effective": effective_priority(selected),
+                    "source": "automatic", "formation_name": selected.get("formation_name"),
+                    "deadline_date": selected.get("deadline_date"), "risk_label": selected.get("risk_label"),
+                    "automatic_urgency": int(selected.get("automatic_urgency") or 0),
+                    "remaining_before_minutes": int(remaining_before), "remaining_after_minutes": int(remaining_after),
                 })
                 selected["allocated"] += duration
                 selected["to_allocate"] = max(0, selected["to_allocate"] - duration)
@@ -239,12 +273,18 @@ def distribute(items, day_windows, start: date, end: date, *, pause_minutes=10,
                 point += duration + pause_minutes
         cursor += timedelta(days=1)
 
+    if active_week is not None:
+        keep_unmet(weekly_needs)
     unscheduled = []
     for item in mutable:
-        left = max(item["to_allocate"], weekly_needs.get(item["id"], 0))
+        weekly_left = int(weekly_unmet.get(item["id"], 0))
+        left = max(item["to_allocate"], weekly_left)
         if left:
+            minimum_unmet = bool(item.get("minimum_weekly_minutes") and weekly_left)
             unscheduled.append({
                 "id": item["id"], "name": item["name"], "minutes": int(left),
-                "reason": "Não houve janela livre suficiente no período.",
+                "code": "minimum_weekly_unmet" if minimum_unmet else "capacity_insufficient",
+                "weekly_unmet_minutes": weekly_left,
+                "reason": "Não houve janela livre suficiente para cumprir o mínimo semanal." if minimum_unmet else "Não houve janela livre suficiente no período.",
             })
     return {"sessions": proposals, "items": list(by_id.values()), "unscheduled": unscheduled}

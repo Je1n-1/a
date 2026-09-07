@@ -1,6 +1,6 @@
 import tempfile
 import unittest
-from datetime import datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -50,6 +50,20 @@ class SmartPlanningApiTest(unittest.TestCase):
     def availability(self, weekday, start, end):
         response = self.client.post("/api/availability", json={"weekday": weekday, "start_time": start, "end_time": end})
         self.assertEqual(response.status_code, 200, response.get_json())
+
+    def preview(self, start="2026-09-01", days=7):
+        response = self.client.post("/api/planning/generate", json={"start": start, "days": days})
+        self.assertEqual(response.status_code, 200, response.get_json())
+        return response.get_json()
+
+    def monday_key(self, value):
+        current = date.fromisoformat(value)
+        return (current - timedelta(days=current.weekday())).isoformat()
+
+    def set_now(self, value):
+        self.clock.stop()
+        self.clock = patch("services.core._local_now", return_value=value)
+        self.clock.start()
 
     def test_curriculum_schedule_settings_keep_institutional_workload_separate_from_effort(self):
         formation = self.formation()
@@ -166,6 +180,150 @@ class SmartPlanningApiTest(unittest.TestCase):
         ideal = self.client.get("/api/planning/ideal?start=2026-09-01&end=2026-09-07")
         self.assertEqual(ideal.status_code, 200, ideal.get_json())
         self.assertIn(future["id"], {item["id"] for item in ideal.get_json()["future_subjects"]})
+
+    def test_preview_diagnostics_explain_missing_current_study_and_future_subject(self):
+        formation = self.formation()
+        missing = self.curriculum(
+            formation, "Sistemas Operacionais", academic_status="in_progress",
+            required_study_minutes=180, deadline_date="2026-09-12",
+        )
+        future = self.curriculum(formation, "Tópicos Avançados", academic_status="not_available", start_date="2026-10-01")
+        self.availability(1, "07:00", "09:00")
+        preview = self.preview(days=7)
+        diagnostics = preview["diagnostics"]
+        by_curriculum = {item["curriculum_subject_id"]: item for item in diagnostics["items"]}
+        self.assertEqual(by_curriculum[missing["id"]]["reason_codes"], ["current_study_missing"])
+        self.assertEqual(by_curriculum[future["id"]]["state"], "future")
+        self.assertEqual(by_curriculum[future["id"]]["reason_codes"], ["not_available_future"])
+        self.assertEqual(diagnostics["summary"]["eligible"], 0)
+        self.assertEqual(diagnostics["summary"]["future"], 1)
+        self.assertFalse(preview["sessions"])
+
+    def test_preview_diagnostics_explain_missing_goal_and_future_start(self):
+        no_goal = self.client.post("/api/studies", json={"personal_name": "Leitura livre"})
+        self.assertEqual(no_goal.status_code, 200, no_goal.get_json())
+        subject = self.curriculum(
+            self.formation(), "Compiladores", required_study_minutes=120,
+            start_date="2026-09-08", deadline_date="2026-09-20", preferred_block_minutes=60,
+        )
+        study = self.activate(subject)
+        self.availability(1, "07:00", "09:00")
+        first_week = self.preview(days=7)
+        by_study = {item["study_subject_id"]: item for item in first_week["diagnostics"]["items"]}
+        self.assertEqual(by_study[no_goal.get_json()["id"]]["reason_codes"], ["missing_effort_or_goal"])
+        self.assertEqual(by_study[study["id"]]["reason_codes"], ["starts_after_period"])
+        self.assertFalse(first_week["sessions"])
+        extended = self.preview(days=14)
+        planned = [item for item in extended["sessions"] if item["study_subject_id"] == study["id"]]
+        self.assertTrue(planned)
+        self.assertTrue(all(item["scheduled_date"] >= "2026-09-08" for item in planned))
+
+    def test_generation_rejects_past_start_and_does_not_create_past_blocks(self):
+        response = self.client.post("/api/planning/generate", json={"start": "2026-08-31", "days": 7})
+        self.assertEqual(response.status_code, 400, response.get_json())
+        self.assertEqual(response.get_json()["code"], "planning_start_in_past")
+
+    def test_paused_formation_is_diagnostic_not_planning_demand(self):
+        formation = self.formation()
+        subject = self.curriculum(formation, required_study_minutes=120, deadline_date="2026-09-12")
+        self.activate(subject)
+        paused = self.client.patch(f"/api/formations/{formation['id']}", json={"status": "paused"})
+        self.assertEqual(paused.status_code, 200, paused.get_json())
+        self.availability(1, "07:00", "09:00")
+        preview = self.preview(days=7)
+        reasons = {reason for item in preview["diagnostics"]["items"] for reason in item["reason_codes"]}
+        self.assertIn("formation_not_active", reasons)
+        self.assertEqual(preview["capacity"]["demand_minutes"], 0)
+        self.assertFalse(preview["sessions"])
+
+    def test_urgent_curriculum_precedes_parallel_minimum_when_capacity_is_insufficient(self):
+        subject = self.curriculum(
+            self.formation(), "Eletrônica", required_study_minutes=60,
+            deadline_date="2026-09-01", preferred_block_minutes=60, priority_base=5,
+        )
+        curriculum_study = self.activate(subject)
+        parallel = self.client.post("/api/studies", json={
+            "personal_name": "Programação", "weekly_goal_minutes": 60,
+            "minimum_weekly_minutes": 60, "preferred_block_minutes": 60, "priority": 1,
+        })
+        self.assertEqual(parallel.status_code, 200, parallel.get_json())
+        self.availability(1, "07:00", "08:00")
+        preview = self.preview(days=1)
+        self.assertEqual(preview["sessions"][0]["study_subject_id"], curriculum_study["id"])
+        self.assertFalse(any(item["study_subject_id"] == parallel.get_json()["id"] for item in preview["sessions"]))
+        parallel_unmet = next(item for item in preview["unscheduled"] if item["id"] == parallel.get_json()["id"])
+        self.assertEqual(parallel_unmet["code"], "minimum_weekly_unmet")
+
+    def test_weekly_goal_is_repeated_over_a_fourteen_day_preview(self):
+        study = self.client.post("/api/studies", json={
+            "personal_name": "Inglês", "weekly_goal_minutes": 60, "preferred_block_minutes": 60,
+        })
+        self.assertEqual(study.status_code, 200, study.get_json())
+        self.availability(1, "07:00", "08:00")
+        preview = self.preview(days=14)
+        minutes_by_week = {}
+        for session in preview["sessions"]:
+            if session["study_subject_id"] == study.get_json()["id"]:
+                week = self.monday_key(session["scheduled_date"])
+                minutes_by_week[week] = minutes_by_week.get(week, 0) + session["planned_duration_minutes"]
+        self.assertEqual(minutes_by_week["2026-08-31"], 60)
+        self.assertEqual(minutes_by_week["2026-09-07"], 60)
+
+    def test_fase_b_flow_from_september_7_to_20_preserves_manual_and_today(self):
+        self.set_now(datetime(2026, 9, 7, 6, 0, 0))
+        preferences = self.client.put("/api/settings", json={
+            "default_session_minutes": 60, "planning_break_minutes": 10,
+            "minimum_session_minutes": 25, "maximum_session_minutes": 90,
+        })
+        self.assertEqual(preferences.status_code, 200, preferences.get_json())
+        formation = self.formation("Engenharia")
+        subject = self.curriculum(
+            formation, "Circuitos", academic_status="in_progress", start_date="2026-09-07",
+            required_study_minutes=300, deadline_date="2026-09-20", priority_base=5,
+            preferred_block_minutes=60,
+        )
+        curriculum_study = self.activate(subject)
+        parallel = self.client.post("/api/studies", json={
+            "personal_name": "Programação paralela", "weekly_goal_minutes": 60,
+            "minimum_weekly_minutes": 60, "preferred_block_minutes": 60, "priority": 1,
+        })
+        self.assertEqual(parallel.status_code, 200, parallel.get_json())
+        self.availability(0, "07:00", "08:30")
+        self.availability(0, "13:00", "14:30")
+        for weekday in range(1, 5):
+            self.availability(weekday, "07:00", "08:30")
+        manual = self.client.post("/api/planned", json={
+            "study_subject_id": curriculum_study["id"], "scheduled_date": "2026-09-07",
+            "start_time": "07:00", "planned_duration_minutes": 30,
+        })
+        self.assertEqual(manual.status_code, 200, manual.get_json())
+
+        preview = self.preview(start="2026-09-07", days=14)
+        curriculum_sessions = [item for item in preview["sessions"] if item["study_subject_id"] == curriculum_study["id"]]
+        self.assertTrue(curriculum_sessions)
+        self.assertTrue(all("2026-09-07" <= item["scheduled_date"] <= "2026-09-20" for item in curriculum_sessions))
+        self.assertGreaterEqual(len({item["scheduled_date"] for item in curriculum_sessions}), 2)
+        self.assertLessEqual(sum(item["planned_duration_minutes"] for item in curriculum_sessions), 300)
+        self.assertEqual(preview["sessions"][0]["study_subject_id"], curriculum_study["id"])
+
+        intervals_by_day = {"2026-09-07": [(7 * 60, 7 * 60 + 30)]}
+        for item in preview["sessions"]:
+            start_minutes = int(item["start_time"][:2]) * 60 + int(item["start_time"][3:])
+            intervals_by_day.setdefault(item["scheduled_date"], []).append((start_minutes, start_minutes + item["planned_duration_minutes"]))
+        for intervals in intervals_by_day.values():
+            intervals.sort()
+            self.assertTrue(all(previous[1] <= current[0] for previous, current in zip(intervals, intervals[1:])))
+
+        applied = self.client.post("/api/planning/apply", json={"sessions": preview["sessions"]})
+        self.assertEqual(applied.status_code, 200, applied.get_json())
+        self.assertTrue(applied.get_json()["created"])
+        saved = self.client.get("/api/planned?start=2026-09-07&end=2026-09-20")
+        self.assertEqual(saved.status_code, 200, saved.get_json())
+        self.assertEqual(next(item for item in saved.get_json() if item["id"] == manual.get_json()["id"])["source"], "manual")
+        today = self.client.get("/api/today")
+        self.assertEqual(today.status_code, 200, today.get_json())
+        self.assertEqual(today.get_json()["studied_minutes"], 0)
+        self.assertTrue(any(item["study_subject_id"] == curriculum_study["id"] for item in today.get_json()["agenda"]))
 
     def test_manual_blocks_are_preserved_and_auto_application_is_idempotent(self):
         study = self.client.post("/api/studies", json={"personal_name": "Banco de Dados", "weekly_goal_minutes": 120}).get_json()

@@ -658,7 +658,37 @@ function planningPreviewSummary(proposal, sessions) {
     ...(proposal.unscheduled || []).map(item => `${item.name || item.subject_name || "Matéria"}: ${item.reason || "não coube no período"}`),
     ...(proposal.skipped_without_goal || []).map(item => typeof item === "string" ? `${item}: sem esforço ou meta semanal` : `${item.name || "Matéria"}: sem esforço ou meta semanal`),
   ];
-  return `<section class="planning-preview-summary"><div><strong>${sessions.length} bloco(s) na prévia</strong><span>${esc(proposal.start || "—")} a ${esc(proposal.end || "—")}</span></div><div><strong>${minutesLabel(capacity.capacity_minutes)}</strong><span>capacidade no período</span></div><div><strong>${minutesLabel(capacity.free_minutes)}</strong><span>livre antes da prévia</span></div><div><strong>${minutesLabel(capacity.demand_minutes)}</strong><span>demanda considerada</span></div></section>${warnings.length ? `<section class="planning-preview-warning" role="status"><strong>Itens que não entraram por completo</strong><ul>${warnings.map(item => `<li>${esc(item)}</li>`).join("")}</ul></section>` : ""}`;
+  return `<section class="planning-preview-summary"><div><strong>${sessions.length} bloco(s) na prévia</strong><span>${esc(proposal.start || "—")} a ${esc(proposal.end || "—")}</span></div><div><strong>${minutesLabel(capacity.capacity_minutes)}</strong><span>capacidade no período</span></div><div><strong>${minutesLabel(capacity.free_minutes)}</strong><span>livre antes da prévia</span></div><div><strong>${minutesLabel(capacity.demand_minutes)}</strong><span>demanda considerada</span></div></section>${planningDiagnosticMarkup(proposal)}${warnings.length ? `<section class="planning-preview-warning" role="status"><strong>Itens que não entraram por completo</strong><ul>${warnings.map(item => `<li>${esc(item)}</li>`).join("")}</ul></section>` : ""}`;
+}
+
+function planningDiagnosticMarkup(proposal) {
+  const diagnostics = proposal.diagnostics;
+  if (!diagnostics) return "";
+  const summary = diagnostics.summary || diagnostics;
+  const items = Array.isArray(diagnostics.items) ? diagnostics.items : [];
+  const actionableItems = items.filter(item => item.state !== "future");
+  const futureItems = items.filter(item => item.state === "future");
+  const value = key => Number(summary[key] || 0);
+  const itemMarkup = actionableItems.map(item => {
+    const reason = item.reasons?.[0] || {};
+    const action = reason.action || {};
+    const href = String(action.href || "");
+    const actionMarkup = href.startsWith("/") ? `<a class="button compact secondary planning-diagnostic-action" href="${esc(href)}">${esc(action.label || "Abrir")}</a>` : "";
+    const stateLabel = item.state === "future" ? "Futura" : item.state === "attention" ? "Atenção" : "Ajuste necessário";
+    return `<li class="planning-diagnostic-item"><div><span class="planning-diagnostic-state is-${esc(item.state || "ignored")}">${esc(stateLabel)}</span><strong>${esc(item.name || "Item sem nome")}</strong>${item.formation_name ? `<span class="muted">${esc(item.formation_name)}</span>` : ""}<p>${esc(reason.message || "Revise este item antes de gerar o plano.")}</p></div>${actionMarkup}</li>`;
+  }).join("");
+  const futureNote = futureItems.length ? `<p class="muted planning-diagnostic-future-note">${futureItems.length} disciplina(s) futura(s) permanecem fora da demanda. Consulte-as em Formações quando ficarem disponíveis.</p>` : "";
+  const details = itemMarkup ? `<details class="planning-diagnostic-details"><summary>Ver motivos e próximos passos (${actionableItems.length})</summary><ul class="planning-diagnostic-list">${itemMarkup}</ul></details>${futureNote}` : `<p class="muted planning-diagnostic-empty">Todos os itens elegíveis já têm uma leitura clara nesta prévia.</p>${futureNote}`;
+  return `<section class="planning-preview-diagnostic" aria-label="Diagnóstico da prévia"><div class="planning-diagnostic-heading"><div><strong>Diagnóstico da prévia</strong><span>O que foi considerado e o que ainda precisa de ação.</span></div></div><div class="planning-diagnostic-summary"><span><b>${value("eligible")}</b> pronto(s)</span><span><b>${value("ignored")}</b> ajuste(s)</span><span><b>${value("future")}</b> futura(s)</span><span><b>${minutesLabel(summary.unallocated_minutes)}</b> não distribuído</span></div>${details}</section>`;
+}
+
+function planningPreviewSessionContext(item) {
+  const values = [];
+  if (item.formation_name) values.push(`Formação: ${item.formation_name}`);
+  if (item.deadline_date) values.push(`Prazo: ${formatLocalDate(item.deadline_date, {dateStyle:"short"})}`);
+  if (item.risk_label) values.push(item.risk_label);
+  if (item.remaining_after_minutes !== undefined && item.remaining_after_minutes !== null) values.push(`restam ${minutesLabel(item.remaining_after_minutes)} para alocar`);
+  return values.join(" · ");
 }
 
 function openPlanPreview(proposal) {
@@ -668,7 +698,7 @@ function openPlanPreview(proposal) {
   save.textContent = "Aplicar plano";
   const renderBody = () => {
     const body = $("[data-plan-preview-body]", form);
-    body.innerHTML = `${planningPreviewSummary(proposal, sessions)}<div class="preview-list">${sessions.map((item, index) => `<div class="list-item row"><div><strong>${esc(item.scheduled_date)} · ${esc(item.start_time)} · ${esc(item.subject_name)}</strong><div class="muted">${esc(item.topic_name || "Sessão sem tópico")} · ${minutesLabel(item.planned_duration_minutes)} · ${esc(item.reason || "distribuição automática")}</div></div><button type="button" class="button danger" data-preview-remove="${index}">Remover</button></div>`).join("") || empty("Nenhum bloco proposto", "Nenhum estudo ativo elegível gerou blocos neste período. Verifique os Estudos atuais, o esforço ou meta semanal e a disponibilidade.")}</div>`;
+    body.innerHTML = `${planningPreviewSummary(proposal, sessions)}<div class="preview-list">${sessions.map((item, index) => `<div class="list-item row"><div><strong>${esc(item.scheduled_date)} · ${esc(item.start_time)} · ${esc(item.subject_name)}</strong><div class="muted">${esc(item.topic_name || "Sessão sem tópico")} · ${minutesLabel(item.planned_duration_minutes)} · origem automática · ${esc(item.reason || "distribuição automática")}</div>${planningPreviewSessionContext(item) ? `<div class="muted preview-session-context">${esc(planningPreviewSessionContext(item))}</div>` : ""}</div><button type="button" class="button danger" data-preview-remove="${index}">Remover</button></div>`).join("") || empty("Nenhum bloco proposto", "Nenhum estudo ativo elegível gerou blocos neste período. Verifique os Estudos atuais, o esforço ou meta semanal e a disponibilidade.")}</div>`;
     body.querySelectorAll("[data-preview-remove]").forEach(button => button.onclick = () => { sessions.splice(Number(button.dataset.previewRemove), 1); renderBody(); });
     save.disabled = sessions.length === 0;
     save.title = sessions.length ? "" : "Não há blocos para aplicar.";
@@ -943,7 +973,7 @@ async function renderPlanning() {
   });
   const goals = document.createElement("section");
   goals.className = "card weekly-goals-panel";
-  goals.innerHTML = `${panelTitle("METAS SEMANAIS", "Metas e mínimos garantidos", "A meta semanal orienta a distribuição. Para estudos paralelos, o mínimo semanal é reservado antes das matérias urgentes.")}<p class="field-help">Para planejar uma disciplina em um mês sem criar uma meta recorrente, informe o esforço e o prazo dela em Formações e escolha “Mês · 30 dias” ao gerar a prévia.</p>${studies.length ? studies.map(study => `<form class="goal-form list-item row" data-study="${study.id}"><div><strong>${esc(study.name)}</strong><div class="muted">Meta ${study.weekly_goal_minutes ? `${minutesLabel(study.weekly_goal_minutes)}/semana` : "não definida"}${study.origin === "personal" && study.minimum_weekly_minutes ? ` · mínimo garantido ${minutesLabel(study.minimum_weekly_minutes)}` : ""}</div></div><label class="goal-input">Meta semanal (min)<input name="weekly_goal_minutes" type="number" min="1" value="${study.weekly_goal_minutes || ""}" placeholder="ex.: 180" required></label><button class="button" type="submit">Salvar</button></form>`).join("") : empty("Sem matérias", "Crie ou adicione uma matéria antes de definir a meta.")}`;
+  goals.innerHTML = `${panelTitle("METAS SEMANAIS", "Metas e mínimos garantidos", "A meta semanal se repete no período. Para estudos paralelos, o mínimo é protegido quando há capacidade, sem adiar disciplinas urgentes.")}<p class="field-help">Para planejar uma disciplina em um mês sem criar uma meta recorrente, informe o esforço e o prazo dela em Formações e escolha “Mês · 30 dias” ao gerar a prévia.</p>${studies.length ? studies.map(study => `<form class="goal-form list-item row" data-study="${study.id}"><div><strong>${esc(study.name)}</strong><div class="muted">Meta ${study.weekly_goal_minutes ? `${minutesLabel(study.weekly_goal_minutes)}/semana` : "não definida"}${study.origin === "personal" && study.minimum_weekly_minutes ? ` · mínimo garantido ${minutesLabel(study.minimum_weekly_minutes)}` : ""}</div></div><label class="goal-input">Meta semanal (min)<input name="weekly_goal_minutes" type="number" min="1" value="${study.weekly_goal_minutes || ""}" placeholder="ex.: 180" required></label><button class="button" type="submit">Salvar</button></form>`).join("") : empty("Sem matérias", "Crie ou adicione uma matéria antes de definir a meta.")}`;
   $(".planning-layout > aside", app).append(goals);
   goals.querySelectorAll(".goal-form").forEach(form => form.onsubmit = async event => {
     event.preventDefault();
@@ -2157,7 +2187,7 @@ function studyPlanningFields(study = {}) {
 }
 
 function newStudy() {
-  modal("Novo estudo paralelo", `<label>Nome<input name="personal_name" required></label><p class="muted">Configure esforço total, meta semanal ou ambos. Um mínimo semanal garante que este estudo não seja esquecido quando houver prazos curriculares urgentes.</p>${studyPlanningFields()}`, async (values, form) => api("/studies", {method:"POST", body:JSON.stringify(studyPlanningPayload(values, form))}));
+  modal("Novo estudo paralelo", `<label>Nome<input name="personal_name" required></label><p class="muted">Configure esforço total, meta semanal ou ambos. O mínimo semanal é protegido quando houver capacidade; se uma entrega curricular urgente ocupar a janela, a prévia mostrará o que ficou pendente.</p>${studyPlanningFields()}`, async (values, form) => api("/studies", {method:"POST", body:JSON.stringify(studyPlanningPayload(values, form))}));
 }
 
 function studyEditor(study) {
