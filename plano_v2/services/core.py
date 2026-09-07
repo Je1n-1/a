@@ -1,4 +1,4 @@
-"""Regras de negócio da V2. Nenhuma rota contém SQL ou decisões do produto."""
+"""Regras de negócio. Nenhuma rota contém SQL ou decisões do produto."""
 from __future__ import annotations
 
 from collections import defaultdict
@@ -9,10 +9,10 @@ import re
 import sqlite3
 import unicodedata
 from zoneinfo import ZoneInfo
-
 from config import TIMEZONE
 from database.repositories import core as repo
 from services import grade_import
+from services import smart_planning
 
 
 class DomainError(ValueError):
@@ -41,7 +41,78 @@ def _get(conn, table, ident):
     value = repo.one(conn, f"SELECT * FROM {table} WHERE id=?", (ident,))
     if not value: raise DomainError("Registro não encontrado.", 404)
     return value
-def _fields(values, allowed): return {key: value for key, value in values.items() if key in allowed and value is not None}
+def _fields(values, allowed):
+    """Seleciona campos explicitamente enviados, inclusive ``null``.
+
+    O cliente usa ``null`` para limpar datas, esforço, prazo e notas. Omitir
+    um campo continua significando “não alterar”; enviar ``null`` agora tem o
+    significado útil e previsível de removê-lo.
+    """
+    return {key: value for key, value in values.items() if key in allowed}
+
+
+def _optional_minutes(value, label):
+    if value in (None, ""):
+        return None
+    try:
+        minutes = int(value)
+    except (TypeError, ValueError) as error:
+        raise DomainError(f"{label} deve ser informado em minutos como um número inteiro.") from error
+    if minutes <= 0:
+        raise DomainError(f"{label} deve ser maior que zero.")
+    return minutes
+
+
+def _optional_number(value, label):
+    if value in (None, ""):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as error:
+        raise DomainError(f"{label} deve ser um número.") from error
+    if number < 0:
+        raise DomainError(f"{label} não pode ser negativo.")
+    return number
+
+
+def _weekdays(value):
+    """Normaliza os dias permitidos em uma lista ordenada de 0 (seg) a 6."""
+    if value in (None, "", []):
+        return []
+    raw = value
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw)
+            raw = parsed if isinstance(parsed, list) else raw.split(",")
+        except json.JSONDecodeError:
+            raw = raw.split(",")
+    if not isinstance(raw, (tuple, list, set)):
+        raise DomainError("Dias permitidos devem ser uma lista de 0 a 6.")
+    try:
+        result = sorted({int(item) for item in raw if str(item).strip() != ""})
+    except (TypeError, ValueError) as error:
+        raise DomainError("Dias permitidos devem usar números de 0 a 6.") from error
+    if any(day < 0 or day > 6 for day in result):
+        raise DomainError("Dias permitidos devem ficar entre 0 (segunda) e 6 (domingo).")
+    return result
+
+
+def _weekdays_json(value):
+    return json.dumps(_weekdays(value), separators=(",", ":"))
+
+
+def _stored_weekdays(value):
+    return _weekdays(value)
+
+
+def _event(conn, curriculum_id, event_type, title, details=None):
+    """Registra eventos objetivos para a linha do tempo da disciplina."""
+    return repo.insert(conn, "curriculum_timeline_events", {
+        "curriculum_subject_id": curriculum_id,
+        "event_type": event_type,
+        "title": title,
+        "details": details,
+    })
 
 
 def _active_formation(conn, ident):
@@ -55,9 +126,14 @@ FORMATION = {"name", "institution", "modality", "start_date", "expected_end_date
 CURRICULUM = {
     "name", "code", "period", "workload_minutes", "academic_status", "sort_order",
     "start_date", "end_date", "notes", "review_status", "review_priority", "review_notes",
-    "item_type",
+    "item_type", "deadline_date", "required_study_minutes", "priority_base",
+    "preferred_block_minutes", "allowed_weekdays", "minimum_grade", "planning_enabled",
 }
-STUDY = {"favorite", "priority", "difficulty", "weekly_goal_minutes", "start_date", "target_date", "status", "academic_period", "result", "final_score"}
+STUDY = {
+    "favorite", "priority", "difficulty", "weekly_goal_minutes", "start_date", "target_date",
+    "status", "academic_period", "result", "final_score", "required_study_minutes",
+    "minimum_weekly_minutes", "preferred_block_minutes", "allowed_weekdays",
+}
 
 ACADEMIC_STATUSES = tuple(grade_import.ACADEMIC_STATUSES)
 REVIEW_STATUSES = ("none", "queued", "in_progress", "reviewed")
@@ -306,6 +382,7 @@ def formation_delete_blockers(conn, ident):
             SELECT t.id
             FROM topicos t
             WHERE t.study_subject_id IN (SELECT id FROM formation_studies)
+               OR t.curriculum_subject_id IN (SELECT id FROM disciplinas_grade WHERE formation_id=?)
         )
         SELECT
             (SELECT COUNT(*) FROM disciplinas_grade WHERE formation_id=?) AS curriculum_subjects,
@@ -315,8 +392,8 @@ def formation_delete_blockers(conn, ident):
             (SELECT COUNT(*) FROM sessoes_estudo WHERE study_subject_id IN (SELECT id FROM formation_studies)) AS study_sessions,
             (SELECT COUNT(*) FROM anotacoes_estudo WHERE study_subject_id IN (SELECT id FROM formation_studies)) AS notes,
             (SELECT COUNT(*) FROM revisoes WHERE topic_id IN (SELECT id FROM formation_topics)) AS reviews,
-            (SELECT COUNT(*) FROM avaliacoes WHERE study_subject_id IN (SELECT id FROM formation_studies)) AS evaluations
-    """, (ident, ident, ident))
+            (SELECT COUNT(*) FROM avaliacoes WHERE study_subject_id IN (SELECT id FROM formation_studies) OR curriculum_subject_id IN (SELECT id FROM disciplinas_grade WHERE formation_id=?)) AS evaluations
+    """, (ident, ident, ident, ident, ident))
     return {key: int(value or 0) for key, value in row.items()}
 
 
@@ -370,17 +447,19 @@ def _dependency_scope(conn, curriculum_ids=(), study_ids=()):
     study_ids = list(dict.fromkeys(study_ids))
     marks, params = _sql_ids(study_ids)
     group_ids = _selected_ids(conn, f"SELECT id FROM grupos_topicos WHERE study_subject_id IN {marks}", params)
-    topic_ids = _selected_ids(conn, f"SELECT id FROM topicos WHERE study_subject_id IN {marks}", params)
+    curriculum_marks, curriculum_params = _sql_ids(curriculum_ids)
+    topic_ids = _selected_ids(conn, f"SELECT id FROM topicos WHERE study_subject_id IN {marks} OR curriculum_subject_id IN {curriculum_marks}", (*params, *curriculum_params))
     planned_rows = repo.many(conn, f"SELECT id,status FROM sessoes_planejadas WHERE study_subject_id IN {marks}", params)
     session_ids = _selected_ids(conn, f"SELECT id FROM sessoes_estudo WHERE study_subject_id IN {marks}", params)
     note_ids = _selected_ids(conn, f"SELECT id FROM anotacoes_estudo WHERE study_subject_id IN {marks}", params)
     review_marks, review_params = _sql_ids(topic_ids)
     review_ids = _selected_ids(conn, f"SELECT id FROM revisoes WHERE topic_id IN {review_marks}", review_params)
-    evaluation_ids = _selected_ids(conn, f"SELECT id FROM avaliacoes WHERE study_subject_id IN {marks}", params)
+    evaluation_ids = _selected_ids(conn, f"SELECT id FROM avaliacoes WHERE study_subject_id IN {marks} OR curriculum_subject_id IN {curriculum_marks}", (*params, *curriculum_params))
     evaluation_marks, evaluation_params = _sql_ids(evaluation_ids)
     link_ids = _selected_ids(conn, f"SELECT rowid id FROM avaliacao_topicos WHERE evaluation_id IN {evaluation_marks}", evaluation_params)
     history_marks, history_params = _sql_ids(curriculum_ids)
     history_ids = _selected_ids(conn, f"SELECT id FROM curriculum_status_history WHERE curriculum_subject_id IN {history_marks}", history_params)
+    timeline_ids = _selected_ids(conn, f"SELECT id FROM curriculum_timeline_events WHERE curriculum_subject_id IN {history_marks}", history_params)
     by_status = {status: 0 for status in ("planned", "completed", "skipped", "rescheduled", "cancelled")}
     for row in planned_rows:
         by_status[row["status"]] = by_status.get(row["status"], 0) + 1
@@ -391,7 +470,7 @@ def _dependency_scope(conn, curriculum_ids=(), study_ids=()):
         "planned_sessions": {**_count_ids([row["id"] for row in planned_rows]), "by_status": by_status},
         "study_sessions": _count_ids(session_ids), "notes": _count_ids(note_ids),
         "reviews": _count_ids(review_ids), "evaluations": _count_ids(evaluation_ids),
-        "evaluation_topic_links": _count_ids(link_ids), "status_history": _count_ids(history_ids),
+        "evaluation_topic_links": _count_ids(link_ids), "status_history": _count_ids(history_ids), "timeline_events": _count_ids(timeline_ids),
     }
 
 
@@ -465,20 +544,44 @@ def _delete_study_graph(conn, study_ids):
     if not study_ids:
         return
     topic_ids = _selected_ids(conn, f"SELECT id FROM topicos WHERE study_subject_id IN {marks}", params)
-    topic_marks, topic_params = _sql_ids(topic_ids)
+    canonical_topic_ids = _selected_ids(conn, f"SELECT id FROM topicos WHERE study_subject_id IN {marks} AND curriculum_subject_id IS NOT NULL", params)
+    delete_topic_ids = [ident for ident in topic_ids if ident not in canonical_topic_ids]
+    topic_marks, topic_params = _sql_ids(delete_topic_ids)
     evaluation_ids = _selected_ids(conn, f"SELECT id FROM avaliacoes WHERE study_subject_id IN {marks}", params)
-    evaluation_marks, evaluation_params = _sql_ids(evaluation_ids)
+    retained_evaluation_ids = _selected_ids(conn, f"SELECT id FROM avaliacoes WHERE study_subject_id IN {marks} AND curriculum_subject_id IS NOT NULL", params)
+    delete_evaluation_ids = [ident for ident in evaluation_ids if ident not in retained_evaluation_ids]
+    evaluation_marks, evaluation_params = _sql_ids(delete_evaluation_ids)
     # A ordem é deliberada: remove referências opcionais antes das entidades
     # referenciadas e nunca depende de uma cascata ampla para ocultar a lógica.
     conn.execute(f"DELETE FROM anotacoes_estudo WHERE study_subject_id IN {marks}", params)
     conn.execute(f"DELETE FROM avaliacao_topicos WHERE evaluation_id IN {evaluation_marks} OR topic_id IN {topic_marks}", (*evaluation_params, *topic_params))
-    conn.execute(f"DELETE FROM revisoes WHERE topic_id IN {topic_marks}", topic_params)
+    all_topic_marks, all_topic_params = _sql_ids(topic_ids)
+    conn.execute(f"DELETE FROM revisoes WHERE topic_id IN {all_topic_marks}", all_topic_params)
     conn.execute(f"DELETE FROM sessoes_estudo WHERE study_subject_id IN {marks}", params)
     conn.execute(f"DELETE FROM sessoes_planejadas WHERE study_subject_id IN {marks}", params)
     conn.execute(f"DELETE FROM avaliacoes WHERE id IN {evaluation_marks}", evaluation_params)
-    conn.execute(f"DELETE FROM topicos WHERE study_subject_id IN {marks}", params)
+    retained_eval_marks, retained_eval_params = _sql_ids(retained_evaluation_ids)
+    conn.execute(f"UPDATE avaliacoes SET study_subject_id=NULL WHERE id IN {retained_eval_marks}", retained_eval_params)
+    conn.execute(f"DELETE FROM topicos WHERE id IN {topic_marks}", topic_params)
+    canonical_marks, canonical_params = _sql_ids(canonical_topic_ids)
+    conn.execute(f"UPDATE topicos SET study_subject_id=NULL,group_id=NULL WHERE id IN {canonical_marks}", canonical_params)
     conn.execute(f"DELETE FROM grupos_topicos WHERE study_subject_id IN {marks}", params)
     conn.execute(f"DELETE FROM materias_estudo WHERE id IN {marks}", params)
+
+
+def _delete_curriculum_graph(conn, curriculum_ids):
+    marks, params = _sql_ids(curriculum_ids)
+    study_ids = _selected_ids(conn, f"SELECT id FROM materias_estudo WHERE curriculum_subject_id IN {marks}", params)
+    _delete_study_graph(conn, study_ids)
+    topic_ids = _selected_ids(conn, f"SELECT id FROM topicos WHERE curriculum_subject_id IN {marks}", params)
+    topic_marks, topic_params = _sql_ids(topic_ids)
+    evaluation_ids = _selected_ids(conn, f"SELECT id FROM avaliacoes WHERE curriculum_subject_id IN {marks}", params)
+    evaluation_marks, evaluation_params = _sql_ids(evaluation_ids)
+    conn.execute(f"DELETE FROM avaliacao_topicos WHERE evaluation_id IN {evaluation_marks} OR topic_id IN {topic_marks}", (*evaluation_params, *topic_params))
+    conn.execute(f"DELETE FROM revisoes WHERE topic_id IN {topic_marks}", topic_params)
+    conn.execute(f"DELETE FROM topicos WHERE id IN {topic_marks}", topic_params)
+    conn.execute(f"DELETE FROM avaliacoes WHERE id IN {evaluation_marks}", evaluation_params)
+    conn.execute(f"DELETE FROM curriculum_timeline_events WHERE curriculum_subject_id IN {marks}", params)
 
 
 def _require_destroy_confirmation(entity, confirmation, has_dependencies, include_dependencies):
@@ -514,12 +617,12 @@ def destroy(conn, kind, ident, confirmation, include_dependencies=False):
     if kind == "study":
         _delete_study_graph(conn, dependencies["study_subjects"]["ids"])
     elif kind == "curriculum":
-        _delete_study_graph(conn, dependencies["study_subjects"]["ids"])
+        _delete_curriculum_graph(conn, dependencies["curriculum_subjects"]["ids"])
         marks, params = _sql_ids(dependencies["curriculum_subjects"]["ids"])
         conn.execute(f"DELETE FROM curriculum_status_history WHERE curriculum_subject_id IN {marks}", params)
         conn.execute(f"DELETE FROM disciplinas_grade WHERE id IN {marks}", params)
     elif kind == "formation":
-        _delete_study_graph(conn, dependencies["study_subjects"]["ids"])
+        _delete_curriculum_graph(conn, dependencies["curriculum_subjects"]["ids"])
         marks, params = _sql_ids(dependencies["curriculum_subjects"]["ids"])
         conn.execute(f"DELETE FROM curriculum_status_history WHERE curriculum_subject_id IN {marks}", params)
         conn.execute(f"DELETE FROM disciplinas_grade WHERE id IN {marks}", params)
@@ -668,7 +771,7 @@ def curriculum_management(conn, formation_id, filters=None):
 
 def _curriculum_data(values, current=None):
     data = _fields(values, CURRICULUM)
-    for key in ("code", "period", "start_date", "end_date", "notes", "review_notes"):
+    for key in ("code", "period", "start_date", "end_date", "deadline_date", "notes", "review_notes", "allowed_weekdays", "minimum_grade"):
         if data.get(key) == "":
             data[key] = None
     candidate = {**(current or {}), **data}
@@ -677,13 +780,27 @@ def _curriculum_data(values, current=None):
     elif "name" in data:
         data["name"] = _need(data["name"], "Nome da disciplina")
     if "workload_minutes" in data and data["workload_minutes"] is not None:
+        data["workload_minutes"] = _optional_minutes(data["workload_minutes"], "Carga horária")
+    for key, label in (
+        ("required_study_minutes", "Esforço pessoal necessário"),
+        ("preferred_block_minutes", "Duração preferida do bloco"),
+    ):
+        if key in data:
+            data[key] = _optional_minutes(data[key], label)
+    if "allowed_weekdays" in data:
+        data["allowed_weekdays"] = _weekdays_json(data["allowed_weekdays"]) if data["allowed_weekdays"] is not None else None
+    if "minimum_grade" in data:
+        data["minimum_grade"] = _optional_number(data["minimum_grade"], "Nota mínima")
+    if "priority_base" in data and data["priority_base"] not in (None, ""):
         try:
-            minutes = int(data["workload_minutes"])
+            base_priority = int(data["priority_base"])
         except (TypeError, ValueError) as error:
-            raise DomainError("Carga horária deve ser informada em minutos como um número inteiro.") from error
-        if minutes <= 0:
-            raise DomainError("Carga horária deve ser maior que zero.")
-        data["workload_minutes"] = minutes
+            raise DomainError("Prioridade-base deve ser um número de 1 a 5.") from error
+        if not 1 <= base_priority <= 5:
+            raise DomainError("Prioridade-base deve estar entre 1 e 5.")
+        data["priority_base"] = base_priority
+    if "planning_enabled" in data:
+        data["planning_enabled"] = 1 if _confirmed(data["planning_enabled"]) else 0
     status = candidate.get("academic_status", "not_available")
     if status not in ACADEMIC_STATUSES:
         raise DomainError("Status acadêmico inválido.")
@@ -708,13 +825,17 @@ def _curriculum_data(values, current=None):
         if order < 0:
             raise DomainError("Ordem deve ser igual ou maior que zero.")
         data["sort_order"] = order
-    start, end = candidate.get("start_date"), candidate.get("end_date")
+    start, end, deadline = candidate.get("start_date"), candidate.get("end_date"), candidate.get("deadline_date")
     if start:
         _date(start, "Data de início")
     if end:
         _date(end, "Data de término")
+    if deadline:
+        _date(deadline, "Prazo principal")
     if start and end and start > end:
         raise DomainError("A data de término não pode ser anterior à data de início.")
+    if start and deadline and start > deadline:
+        raise DomainError("O prazo principal não pode ser anterior à data de início.")
     return data
 
 
@@ -763,13 +884,83 @@ def update_curriculum(conn, ident, values):
     ordinary = {key: value for key, value in data.items() if key not in {"academic_status", "review_status", "review_priority", "review_notes"}}
     if ordinary: repo.update(conn, "disciplinas_grade", ident, ordinary)
     if any(key in data for key in {"academic_status", "review_status", "review_priority", "review_notes"}):
-        return change_curriculum_status(conn, ident, data, "manual", values.get("status_notes"))
-    return _get(conn, "disciplinas_grade", ident)
+        saved = change_curriculum_status(conn, ident, data, "manual", values.get("status_notes"))
+    else:
+        saved = _get(conn, "disciplinas_grade", ident)
+    schedule_keys = {"start_date", "end_date", "deadline_date", "workload_minutes", "required_study_minutes", "priority_base", "preferred_block_minutes", "allowed_weekdays", "planning_enabled"}
+    changed = [key for key in schedule_keys if key in data and current.get(key) != saved.get(key)]
+    if changed:
+        _event(conn, ident, "schedule_settings", "Configurações de prazo/esforço atualizadas", ", ".join(sorted(changed)))
+    return saved
 
 
 def curriculum_status_history(conn, ident):
     _get(conn, "disciplinas_grade", ident)
     return repo.many(conn, "SELECT * FROM curriculum_status_history WHERE curriculum_subject_id=? ORDER BY created_at DESC,id DESC", (ident,))
+
+
+def curriculum_effort(conn, curriculum_id):
+    item = _get(conn, "disciplinas_grade", curriculum_id)
+    studies_rows = repo.many(conn, "SELECT id,status FROM materias_estudo WHERE curriculum_subject_id=?", (curriculum_id,))
+    study_ids = [row["id"] for row in studies_rows]
+    marks, params = _ids_clause(study_ids)
+    real = repo.one(conn, f"SELECT COALESCE(SUM(duration_seconds),0)/60 minutes FROM sessoes_estudo WHERE study_subject_id IN {marks}", params)["minutes"] if study_ids else 0
+    planned_minutes = repo.one(conn, f"SELECT COALESCE(SUM(planned_duration_minutes),0) minutes FROM sessoes_planejadas WHERE study_subject_id IN {marks} AND status='planned' AND scheduled_date>=?", (*params, _today()))["minutes"] if study_ids else 0
+    required = item.get("required_study_minutes")
+    remaining = max(0, int(required) - int(real or 0)) if required else None
+    return {
+        "required_study_minutes": required, "real_minutes": int(real or 0),
+        "remaining_minutes": remaining, "future_planned_minutes": int(planned_minutes or 0),
+        "unallocated_minutes": max(0, remaining - int(planned_minutes or 0)) if remaining is not None else None,
+        "effort_progress_percent": round(int(real or 0) * 100 / int(required), 1) if required else None,
+        "active_study_id": next((row["id"] for row in studies_rows if row["status"] in {"active", "paused"}), None),
+    }
+
+
+def curriculum_schedule_settings(conn, curriculum_id):
+    item = _get(conn, "disciplinas_grade", curriculum_id)
+    return {
+        "curriculum": item,
+        "settings": {key: item.get(key) for key in (
+            "start_date", "end_date", "deadline_date", "workload_minutes", "required_study_minutes",
+            "priority_base", "preferred_block_minutes", "allowed_weekdays", "planning_enabled", "minimum_grade", "notes",
+        )},
+        "effort": curriculum_effort(conn, curriculum_id),
+    }
+
+
+def curriculum_detail(conn, curriculum_id):
+    item = _get(conn, "disciplinas_grade", curriculum_id)
+    content_data = contents(conn, curriculum_id)
+    content_rows = content_data["contents"]
+    archived_content_rows = [row for row in contents(conn, curriculum_id, include_archived=True)["contents"] if row.get("archived_at")]
+    completed = sum(1 for row in content_rows if row["status"] == "completed")
+    return {
+        "curriculum": item, "effort": curriculum_effort(conn, curriculum_id),
+        "contents": content_rows, "archived_contents": archived_content_rows,
+        "content_progress": {
+            "total": len(content_rows), "completed": completed,
+            "percent": round(completed * 100 / len(content_rows), 1) if content_rows else 0,
+        },
+        "evaluations": evaluation_summary(conn, curriculum_id),
+        "history": curriculum_status_history(conn, curriculum_id),
+    }
+
+
+def curriculum_timeline(conn, curriculum_id):
+    _get(conn, "disciplinas_grade", curriculum_id)
+    events = []
+    for row in curriculum_status_history(conn, curriculum_id):
+        events.append({"type": "status", "date": row["created_at"], "title": "Estado acadêmico/revisão atualizado", "details": row.get("notes")})
+    for row in repo.many(conn, "SELECT * FROM curriculum_timeline_events WHERE curriculum_subject_id=?", (curriculum_id,)):
+        events.append({"type": row["event_type"], "date": row["created_at"], "title": row["title"], "details": row.get("details")})
+    for row in repo.many(conn, "SELECT x.date,x.duration_seconds,t.name FROM sessoes_estudo x JOIN materias_estudo s ON s.id=x.study_subject_id LEFT JOIN topicos t ON t.id=x.topic_id WHERE s.curriculum_subject_id=?", (curriculum_id,)):
+        events.append({"type": "session", "date": row["date"], "title": f"Sessão realizada{': ' + row['name'] if row.get('name') else ''}", "details": f"{int(row['duration_seconds']) // 60} min"})
+    for row in repo.many(conn, "SELECT p.scheduled_date,p.status,t.name FROM sessoes_planejadas p JOIN materias_estudo s ON s.id=p.study_subject_id LEFT JOIN topicos t ON t.id=p.topic_id WHERE s.curriculum_subject_id=? AND p.status IN ('cancelled','rescheduled')", (curriculum_id,)):
+        events.append({"type": "planning", "date": row["scheduled_date"], "title": "Bloco cancelado" if row["status"] == "cancelled" else "Bloco reagendado", "details": row.get("name")})
+    for row in evaluations(conn, curriculum_id=curriculum_id):
+        events.append({"type": "evaluation", "date": row["date"], "title": f"Avaliação: {row['title']}", "details": row.get("score")})
+    return sorted(events, key=lambda row: str(row["date"]), reverse=True)
 
 
 def curriculum_import_preview(conn, formation_id, result):
@@ -965,6 +1156,9 @@ def merge_curriculum(conn, formation_id, primary_id, duplicate_ids, preserve=Non
     # Uma cópia datada é criada antes de redirecionar vínculos e eliminar linhas.
     backup = _create_destructive_backup(conn)
     conn.execute(f"UPDATE materias_estudo SET curriculum_subject_id=? WHERE curriculum_subject_id IN {marks}", (primary_id, *params))
+    conn.execute(f"UPDATE topicos SET curriculum_subject_id=? WHERE curriculum_subject_id IN {marks}", (primary_id, *params))
+    conn.execute(f"UPDATE avaliacoes SET curriculum_subject_id=? WHERE curriculum_subject_id IN {marks}", (primary_id, *params))
+    conn.execute(f"UPDATE curriculum_timeline_events SET curriculum_subject_id=? WHERE curriculum_subject_id IN {marks}", (primary_id, *params))
     conn.execute(f"UPDATE curriculum_status_history SET curriculum_subject_id=? WHERE curriculum_subject_id IN {marks}", (primary_id, *params))
     conn.execute(f"DELETE FROM disciplinas_grade WHERE id IN {marks}", params)
     ordinary = {key: value for key, value in data.items() if key not in {"academic_status", "review_status", "review_priority", "review_notes"}}
@@ -1027,7 +1221,7 @@ def curriculum_batch(conn, formation_id, values):
         if preview["has_dependencies"] and not _confirmed(values.get("include_dependencies")):
             raise DomainError("Confirme a exclusão dos dados dependentes exibidos na prévia.", 400, "dependency_confirmation_required")
         backup = _create_destructive_backup(conn)
-        _delete_study_graph(conn, preview["dependencies"]["study_subjects"]["ids"])
+        _delete_curriculum_graph(conn, ids)
         marks, params = _sql_ids(ids)
         conn.execute(f"DELETE FROM curriculum_status_history WHERE curriculum_subject_id IN {marks}", params)
         conn.execute(f"DELETE FROM disciplinas_grade WHERE id IN {marks}", params)
@@ -1089,15 +1283,18 @@ def studies(conn, include_archived=False, week_reference=None, visibility=None, 
     sql = """
         SELECT s.*, COALESCE(d.name,s.personal_name) name, f.name formation_name,
           d.academic_status, d.review_status, d.item_type, d.archived_at curriculum_archived_at,
+          d.start_date curriculum_start_date,d.end_date curriculum_end_date,d.deadline_date,
+          d.required_study_minutes curriculum_required_study_minutes,d.priority_base,
+          d.preferred_block_minutes curriculum_preferred_block_minutes,d.allowed_weekdays curriculum_allowed_weekdays,
           f.archived_at formation_archived_at,
           CASE WHEN s.archived_at IS NOT NULL OR s.status='archived' THEN 'study_archived'
                WHEN d.archived_at IS NOT NULL THEN 'curriculum_archived'
                WHEN f.archived_at IS NOT NULL THEN 'formation_archived'
                ELSE NULL END visibility_reason,
-          COALESCE((SELECT ROUND(AVG(t.mastery),1) FROM topicos t WHERE t.study_subject_id=s.id AND t.archived_at IS NULL),0) mastery_average,
-          (SELECT COUNT(*) FROM topicos t WHERE t.study_subject_id=s.id AND t.archived_at IS NULL AND t.status<>'completed') pending_topics,
-          (SELECT COUNT(*) FROM topicos t WHERE t.study_subject_id=s.id AND t.archived_at IS NULL) topic_count,
-          (SELECT COUNT(*) FROM topicos t WHERE t.study_subject_id=s.id AND t.archived_at IS NULL AND t.status='completed') completed_topics,
+          COALESCE((SELECT ROUND(AVG(t.mastery),1) FROM topicos t WHERE (t.study_subject_id=s.id OR (d.id IS NOT NULL AND t.curriculum_subject_id=d.id)) AND t.archived_at IS NULL),0) mastery_average,
+          (SELECT COUNT(*) FROM topicos t WHERE (t.study_subject_id=s.id OR (d.id IS NOT NULL AND t.curriculum_subject_id=d.id)) AND t.archived_at IS NULL AND t.status<>'completed') pending_topics,
+          (SELECT COUNT(*) FROM topicos t WHERE (t.study_subject_id=s.id OR (d.id IS NOT NULL AND t.curriculum_subject_id=d.id)) AND t.archived_at IS NULL) topic_count,
+          (SELECT COUNT(*) FROM topicos t WHERE (t.study_subject_id=s.id OR (d.id IS NOT NULL AND t.curriculum_subject_id=d.id)) AND t.archived_at IS NULL AND t.status='completed') completed_topics,
           COALESCE((SELECT SUM(x.duration_seconds) FROM sessoes_estudo x WHERE x.study_subject_id=s.id AND x.date BETWEEN ? AND ?),0) week_seconds,
           COALESCE((SELECT SUM(p.planned_duration_minutes) FROM sessoes_planejadas p WHERE p.study_subject_id=s.id AND p.status='planned' AND p.scheduled_date BETWEEN ? AND ?),0) planned_week_minutes
         FROM materias_estudo s
@@ -1122,9 +1319,16 @@ def add_curriculum_study(conn, curriculum_id, values):
     if curriculum_item["item_type"] != "subject":
         raise DomainError("Uma linha estrutural não pode ser adicionada aos estudos atuais.", 409, "curriculum_section")
     if curriculum_item["academic_status"] not in ("available", "in_progress"): raise DomainError("A disciplina precisa estar disponível para entrar nos estudos atuais.")
-    data = _fields(values, STUDY); data.update({"origin":"curriculum", "curriculum_subject_id":curriculum_id, "priority":data.get("priority",3), "difficulty":data.get("difficulty",3), "status":"active"})
+    data = _study_data(values)
+    data.update({
+        "origin": "curriculum", "curriculum_subject_id": curriculum_id,
+        "priority": data.get("priority", curriculum_item.get("priority_base", 3)),
+        "difficulty": data.get("difficulty", 3), "status": "active",
+        "target_date": data.get("target_date") or curriculum_item.get("deadline_date") or curriculum_item.get("end_date"),
+    })
     try: ident = repo.insert(conn, "materias_estudo", data)
     except sqlite3.IntegrityError as error: raise DomainError("Esta disciplina já está nos estudos atuais.", 409) from error
+    repo.update(conn, "disciplinas_grade", curriculum_id, {"planning_enabled": 1})
     change_curriculum_status(conn, curriculum_id, {"academic_status":"in_progress"}, "manual")
     return _get(conn, "materias_estudo", ident)
 
@@ -1176,8 +1380,39 @@ def start_curriculum_review(conn, curriculum_id, values=None):
     return _get(conn, "materias_estudo", ident)
 
 
+def _study_data(values, current=None, include_identity=False):
+    allowed = STUDY | ({"related_formation_id", "personal_name"} if include_identity else set())
+    data = _fields(values, allowed)
+    for key in ("start_date", "target_date", "academic_period", "allowed_weekdays", "personal_name", "related_formation_id"):
+        if data.get(key) == "":
+            data[key] = None
+    candidate = {**(current or {}), **data}
+    for key, label in (("required_study_minutes", "Esforço total"), ("minimum_weekly_minutes", "Mínimo semanal"), ("preferred_block_minutes", "Duração preferida do bloco"), ("weekly_goal_minutes", "Meta semanal")):
+        if key in data:
+            data[key] = _optional_minutes(data[key], label)
+    if "allowed_weekdays" in data:
+        data["allowed_weekdays"] = _weekdays_json(data["allowed_weekdays"]) if data["allowed_weekdays"] is not None else None
+    for key, label in (("priority", "Prioridade"), ("difficulty", "Dificuldade")):
+        if key in data and data[key] not in (None, ""):
+            try:
+                value = int(data[key])
+            except (TypeError, ValueError) as error:
+                raise DomainError(f"{label} deve estar entre 1 e 5.") from error
+            if not 1 <= value <= 5:
+                raise DomainError(f"{label} deve estar entre 1 e 5.")
+            data[key] = value
+    start, target = candidate.get("start_date"), candidate.get("target_date")
+    if start:
+        _date(start, "Data de início")
+    if target:
+        _date(target, "Prazo")
+    if start and target and start > target:
+        raise DomainError("O prazo não pode ser anterior à data de início.")
+    return data
+
+
 def create_personal_study(conn, values):
-    data = _fields(values, STUDY | {"related_formation_id", "personal_name"})
+    data = _study_data(values, include_identity=True)
     if data.get("related_formation_id"):
         _active_formation(conn, int(data["related_formation_id"]))
     data.update({"origin":"personal", "personal_name":_need(data.get("personal_name"), "Nome do estudo"), "priority":data.get("priority",3), "difficulty":data.get("difficulty",3), "status":"active"})
@@ -1185,7 +1420,7 @@ def create_personal_study(conn, values):
 
 
 def update_study(conn, ident, values):
-    study = _get(conn, "materias_estudo", ident); data = _fields(values, STUDY | {"personal_name", "related_formation_id"})
+    study = _get(conn, "materias_estudo", ident); data = _study_data(values, study, include_identity=True)
     if study["archived_at"] or study["status"] == "archived":
         raise DomainError("Restaure o estudo antes de editá-lo.", 409, "study_archived")
     if data.get("status") == "archived":
@@ -1261,11 +1496,12 @@ def new_academic_attempt(conn, ident, values=None):
 def subject_detail(conn, ident):
     study = _get(conn, "materias_estudo", ident)
     groups = repo.many(conn, "SELECT * FROM grupos_topicos WHERE study_subject_id=? AND archived_at IS NULL ORDER BY sort_order,name", (ident,))
-    topics = repo.many(conn, "SELECT * FROM topicos WHERE study_subject_id=? AND archived_at IS NULL ORDER BY sort_order,name", (ident,))
+    topics = _contents_for_study(conn, ident)
     nested = defaultdict(list)
     for topic in topics: nested[topic["group_id"]].append(topic)
     study["groups"] = [{**group, "topics":nested.pop(group["id"], [])} for group in groups]
     study["ungrouped_topics"] = nested.get(None, [])
+    study["contents"] = topics
     return study
 
 
@@ -1277,19 +1513,128 @@ def create_group(conn, study_id, values):
 def create_topic(conn, study_id, values):
     _get(conn, "materias_estudo", study_id); group_id = values.get("group_id")
     if group_id and _get(conn, "grupos_topicos", group_id)["study_subject_id"] != study_id: raise DomainError("A unidade precisa pertencer ao mesmo estudo.")
-    data = _fields(values, {"name","description","group_id","difficulty","sort_order","mastery","status"})
-    data.update({"study_subject_id":study_id,"name":_need(data.get("name"),"Nome do tópico")}); data.setdefault("status","not_started"); data.setdefault("mastery",0); data.setdefault("sort_order",0)
+    study = _get(conn, "materias_estudo", study_id)
+    data = _content_data(values)
+    data.update({"study_subject_id":study_id,"curriculum_subject_id":study.get("curriculum_subject_id"),"name":_need(data.get("name"),"Nome do tópico")}); data.setdefault("status","not_started"); data.setdefault("mastery",0); data.setdefault("sort_order",0)
     data["manual_mastery"] = data["mastery"]
-    return _get(conn, "topicos", repo.insert(conn,"topicos",data))
+    saved = _get(conn, "topicos", repo.insert(conn,"topicos",data))
+    if saved.get("curriculum_subject_id"):
+        _event(conn, saved["curriculum_subject_id"], "content", f"Conteúdo adicionado: {saved['name']}")
+    return saved
 
 
 def update_topic(conn, ident, values):
-    topic = _get(conn,"topicos",ident); data = _fields(values,{"name","description","group_id","difficulty","sort_order","mastery","status"})
-    if data.get("group_id") and _get(conn,"grupos_topicos",data["group_id"])["study_subject_id"] != topic["study_subject_id"]: raise DomainError("A unidade precisa pertencer ao mesmo estudo.")
+    topic = _get(conn,"topicos",ident); data = _content_data(values)
+    if data.get("group_id") and (not topic.get("study_subject_id") or _get(conn,"grupos_topicos",data["group_id"])["study_subject_id"] != topic["study_subject_id"]): raise DomainError("A unidade precisa pertencer ao mesmo estudo.")
     if "mastery" in data: data["manual_mastery"] = data["mastery"]
-    if data.get("status") == "completed": data["completed_at"] = _today()
+    if data.get("status") == "completed":
+        data["completed_at"] = _today(); data.setdefault("started_at", topic.get("started_at") or _now())
+    if data.get("status") == "in_progress" and not topic.get("started_at"):
+        data["started_at"] = _now()
     if "status" in data and data["status"] != "completed": data["completed_at"] = None
-    repo.update(conn,"topicos",ident,data); return _get(conn,"topicos",ident)
+    repo.update(conn,"topicos",ident,data)
+    saved = _get(conn,"topicos",ident)
+    if saved.get("curriculum_subject_id") and any(key in data for key in {"status","name","estimated_minutes","unit"}):
+        _event(conn, saved["curriculum_subject_id"], "content", f"Conteúdo atualizado: {saved['name']}", data.get("status"))
+    return saved
+
+
+def _content_data(values):
+    data = _fields(values, {"name", "description", "group_id", "unit", "difficulty", "estimated_minutes", "sort_order", "mastery", "status"})
+    for key in ("description", "unit", "group_id", "difficulty", "estimated_minutes"):
+        if data.get(key) == "": data[key] = None
+    if "estimated_minutes" in data:
+        data["estimated_minutes"] = _optional_minutes(data["estimated_minutes"], "Tempo estimado")
+    if "difficulty" in data and data["difficulty"] is not None:
+        try: difficulty = int(data["difficulty"])
+        except (TypeError, ValueError) as error: raise DomainError("Dificuldade deve estar entre 1 e 5.") from error
+        if not 1 <= difficulty <= 5: raise DomainError("Dificuldade deve estar entre 1 e 5.")
+        data["difficulty"] = difficulty
+    if "sort_order" in data:
+        try: data["sort_order"] = int(data["sort_order"])
+        except (TypeError, ValueError) as error: raise DomainError("Ordem do conteúdo deve ser um número inteiro.") from error
+    if "mastery" in data:
+        try: mastery = int(data["mastery"])
+        except (TypeError, ValueError) as error: raise DomainError("Domínio deve estar entre 0 e 5.") from error
+        if not 0 <= mastery <= 5: raise DomainError("Domínio deve estar entre 0 e 5.")
+        data["mastery"] = mastery
+    if "status" in data and data["status"] not in {"not_started", "in_progress", "completed"}:
+        raise DomainError("Status do conteúdo inválido.")
+    return data
+
+
+def _topic_matches_study(conn, topic, study_id):
+    if topic.get("study_subject_id") == study_id:
+        return True
+    study = _get(conn, "materias_estudo", study_id)
+    return bool(topic.get("curriculum_subject_id") and study.get("curriculum_subject_id") == topic.get("curriculum_subject_id"))
+
+
+def _contents_for_study(conn, study_id, include_archived=False):
+    study = _get(conn, "materias_estudo", study_id)
+    clause, params = "(t.study_subject_id=?", [study_id]
+    if study.get("curriculum_subject_id"):
+        clause += " OR t.curriculum_subject_id=?)"
+        params.append(study["curriculum_subject_id"])
+    else:
+        clause += ")"
+    if not include_archived: clause += " AND t.archived_at IS NULL"
+    return repo.many(conn, "SELECT t.*,COALESCE((SELECT SUM(x.duration_seconds) FROM sessoes_estudo x WHERE x.topic_id=t.id),0) real_seconds,COALESCE((SELECT COUNT(*) FROM sessoes_estudo x WHERE x.topic_id=t.id),0) session_count FROM topicos t WHERE " + clause + " ORDER BY COALESCE(t.unit,''),t.sort_order,t.name", params)
+
+
+def contents(conn, curriculum_id, include_archived=False):
+    item = _get(conn, "disciplinas_grade", curriculum_id)
+    where = "t.curriculum_subject_id=?" + ("" if include_archived else " AND t.archived_at IS NULL")
+    rows = repo.many(conn, "SELECT t.*,COALESCE((SELECT SUM(x.duration_seconds) FROM sessoes_estudo x WHERE x.topic_id=t.id),0) real_seconds,COALESCE((SELECT COUNT(*) FROM sessoes_estudo x WHERE x.topic_id=t.id),0) session_count FROM topicos t WHERE " + where + " ORDER BY COALESCE(t.unit,''),t.sort_order,t.name", (curriculum_id,))
+    for row in rows: row["real_minutes"] = int(row["real_seconds"] or 0) // 60
+    return {"curriculum": item, "contents": rows}
+
+
+def create_content(conn, curriculum_id, values):
+    item = _get(conn, "disciplinas_grade", curriculum_id)
+    _active_formation(conn, item["formation_id"])
+    if item["archived_at"]: raise DomainError("Restaure a disciplina antes de adicionar conteúdos.", 409, "curriculum_archived")
+    data = _content_data(values)
+    if data.get("group_id"):
+        raise DomainError("Use Unidade para agrupar conteúdos da disciplina.")
+    data.update({"curriculum_subject_id": curriculum_id, "name": _need(data.get("name"), "Título do conteúdo")})
+    data.setdefault("status", "not_started"); data.setdefault("mastery", 0); data.setdefault("manual_mastery", data["mastery"]); data.setdefault("sort_order", 0)
+    saved = _get(conn, "topicos", repo.insert(conn, "topicos", data))
+    _event(conn, curriculum_id, "content", f"Conteúdo adicionado: {saved['name']}")
+    return saved
+
+
+def update_content(conn, ident, values):
+    _get(conn, "topicos", ident)
+    return update_topic(conn, ident, values)
+
+
+def archive_content(conn, ident, restore=False):
+    content = _get(conn, "topicos", ident)
+    if not content.get("curriculum_subject_id"):
+        raise DomainError("Este conteúdo não pertence diretamente a uma disciplina curricular.")
+    repo.update(conn, "topicos", ident, {"archived_at": None if restore else _now()})
+    saved = _get(conn, "topicos", ident)
+    _event(conn, content["curriculum_subject_id"], "content", ("Conteúdo restaurado: " if restore else "Conteúdo arquivado: ") + content["name"])
+    return saved
+
+
+def delete_content(conn, ident):
+    content = _get(conn, "topicos", ident)
+    try: repo.delete(conn, "topicos", ident)
+    except sqlite3.IntegrityError as error:
+        raise DomainError("Não é possível excluir este conteúdo porque há sessões, blocos, avaliações ou histórico relacionados. Arquive-o para preservá-los.", 409, "content_has_dependencies") from error
+    if content.get("curriculum_subject_id"):
+        _event(conn, content["curriculum_subject_id"], "content", f"Conteúdo excluído: {content['name']}")
+
+
+def content_history(conn, ident):
+    content = _get(conn, "topicos", ident)
+    return {
+        "content": content,
+        "sessions": repo.many(conn, "SELECT x.* FROM sessoes_estudo x WHERE x.topic_id=? ORDER BY x.date DESC,x.id DESC", (ident,)),
+        "planned": repo.many(conn, "SELECT p.* FROM sessoes_planejadas p WHERE p.topic_id=? ORDER BY p.scheduled_date DESC,p.id DESC", (ident,)),
+    }
 
 
 def _recalculate_mastery(conn, topic_id):
@@ -1300,7 +1645,7 @@ def _recalculate_mastery(conn, topic_id):
 
 def create_session(conn, values):
     study_id = _need(values.get("study_subject_id"),"Matéria"); _assert_study_accessible(conn, study_id); topic_id=values.get("topic_id")
-    if topic_id and _get(conn,"topicos",topic_id)["study_subject_id"] != study_id: raise DomainError("O tópico precisa pertencer à matéria selecionada.")
+    if topic_id and not _topic_matches_study(conn, _get(conn,"topicos",topic_id), study_id): raise DomainError("O conteúdo precisa pertencer à matéria selecionada.")
     seconds=int(_need(values.get("duration_seconds"),"Duração"))
     if seconds<=0: raise DomainError("A duração deve ser maior que zero.")
     data=_fields(values,{"study_subject_id","topic_id","planned_session_id","date","started_at","ended_at","duration_seconds","entry_method","mastery_before","mastery_after","progress_level","notes"})
@@ -1331,11 +1676,17 @@ def create_session(conn, values):
     completed = values.get("topic_completed") in (True,1,"1","true","True","sim")
     if completed:
         if not topic_id: raise DomainError("Concluir tópico exige selecionar um tópico.")
-        repo.update(conn,"topicos",topic_id,{"status":"completed","completed_at":data["date"]})
+        repo.update(conn,"topicos",topic_id,{"status":"completed","completed_at":data["date"],"last_session_date":data["date"],"started_at":_get(conn,"topicos",topic_id).get("started_at") or _now()})
     if topic_id and data["entry_method"] != "review":
-        if _get(conn,"topicos",topic_id)["status"] == "not_started": repo.update(conn,"topicos",topic_id,{"status":"in_progress"})
+        topic = _get(conn,"topicos",topic_id)
+        if topic["status"] == "not_started": repo.update(conn,"topicos",topic_id,{"status":"in_progress","started_at":topic.get("started_at") or _now()})
+        repo.update(conn,"topicos",topic_id,{"last_session_date":data["date"]})
         _start_review_chain(conn, topic_id, ident, _date(data["date"]))
     session = _get(conn,"sessoes_estudo",ident)
+    if topic_id:
+        topic = _get(conn, "topicos", topic_id)
+        if topic.get("curriculum_subject_id"):
+            _event(conn, topic["curriculum_subject_id"], "content", f"Sessão registrada: {topic['name']}", f"{int(data['duration_seconds']) // 60} min")
     if completed: session["topic_completed"] = True
     return session
 
@@ -1343,7 +1694,7 @@ def create_session(conn, values):
 def update_session(conn, ident, values):
     old=_get(conn,"sessoes_estudo",ident); data=_fields(values,{"study_subject_id","date","started_at","ended_at","duration_seconds","entry_method","mastery_before","mastery_after","progress_level","notes","topic_id"})
     topic_id=data.get("topic_id",old["topic_id"]); study_id=data.get("study_subject_id",old["study_subject_id"])
-    if topic_id and _get(conn,"topicos",topic_id)["study_subject_id"] != study_id: raise DomainError("O tópico precisa pertencer à matéria selecionada.")
+    if topic_id and not _topic_matches_study(conn, _get(conn,"topicos",topic_id), study_id): raise DomainError("O conteúdo precisa pertencer à matéria selecionada.")
     if data.get("started_at") and data.get("ended_at"): data["duration_seconds"] = max(1,int((datetime.fromisoformat(str(data["ended_at"]).replace("Z","+00:00"))-datetime.fromisoformat(str(data["started_at"]).replace("Z","+00:00"))).total_seconds()))
     if "duration_seconds" in data and int(data["duration_seconds"])<=0: raise DomainError("A duração deve ser maior que zero.")
     if "date" in data: _date(data["date"])
@@ -1354,7 +1705,7 @@ def update_session(conn, ident, values):
     if changed_source and topic_id and data.get("entry_method",old["entry_method"]) != "review": _start_review_chain(conn,topic_id,ident,_date(data.get("date",old["date"])))
     if values.get("topic_completed") in (True,1,"1","true","True","sim"):
         if not topic_id: raise DomainError("Concluir tópico exige selecionar um tópico.")
-        repo.update(conn,"topicos",topic_id,{"status":"completed","completed_at":data.get("date",old["date"])})
+        repo.update(conn,"topicos",topic_id,{"status":"completed","completed_at":data.get("date",old["date"]),"last_session_date":data.get("date",old["date"])})
     return _get(conn,"sessoes_estudo",ident)
 
 
@@ -1431,8 +1782,8 @@ def _note_relationships(conn, study_subject_id, topic_id=None, planned_session_i
     study_session_id = _note_id(study_session_id, "Sessão de estudo")
     if topic_id:
         topic = _get(conn, "topicos", topic_id)
-        if topic["study_subject_id"] != study_subject_id:
-            raise DomainError("O tópico precisa pertencer à matéria selecionada.")
+        if not _topic_matches_study(conn, topic, study_subject_id):
+            raise DomainError("O conteúdo precisa pertencer à matéria selecionada.")
     if planned_session_id:
         planned_item = planned_detail(conn, planned_session_id)
         if planned_item["study_subject_id"] != study_subject_id:
@@ -1627,20 +1978,151 @@ def notes_for_obsidian_export(conn, identifiers):
     return selected
 
 
-def evaluations(conn, study_id=None):
-    sql="SELECT e.*,COALESCE(s.personal_name,d.name) subject_name FROM avaliacoes e JOIN materias_estudo s ON s.id=e.study_subject_id LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id"; params=()
-    if study_id: sql += " WHERE e.study_subject_id=?"; params=(study_id,)
-    return repo.many(conn, sql + " ORDER BY e.date", params)
+EVALUATION_TYPES = ("exam", "assignment", "activity", "project", "exercise_list", "recovery", "other")
+EVALUATION_STATUSES = ("scheduled", "delivered", "corrected", "cancelled")
+
+
+def _evaluation_data(values, current=None):
+    data = _fields(values, {"title", "type", "date", "delivery_date", "weight", "max_score", "score", "status", "notes"})
+    for key in ("delivery_date", "weight", "max_score", "score", "notes"):
+        if data.get(key) == "": data[key] = None
+    candidate = {**(current or {}), **data}
+    if "title" in data or current is None: data["title"] = _need(candidate.get("title"), "Nome da avaliação")
+    if "type" in data or current is None:
+        kind = candidate.get("type", "exam")
+        if kind not in EVALUATION_TYPES: raise DomainError("Tipo de avaliação inválido.")
+        data["type"] = kind
+    if "status" in data or current is None:
+        status = candidate.get("status", "scheduled")
+        if status == "completed": status = "corrected"  # compatibilidade com clientes antigos
+        if status not in EVALUATION_STATUSES: raise DomainError("Status de avaliação inválido.")
+        data["status"] = status
+    if "date" in data or current is None:
+        data["date"] = _need(candidate.get("date"), "Data prevista")
+    _date(candidate.get("date"), "Data prevista")
+    if candidate.get("delivery_date"):
+        _date(candidate["delivery_date"], "Data de entrega")
+        if candidate["delivery_date"] < candidate["date"]:
+            raise DomainError("A data de entrega não pode ser anterior à data prevista.")
+    for key, label in (("weight", "Peso"), ("max_score", "Nota máxima"), ("score", "Nota obtida")):
+        if key in data:
+            data[key] = _optional_number(data[key], label)
+    candidate = {**(current or {}), **data}
+    if candidate.get("max_score") is not None and candidate.get("max_score") <= 0:
+        raise DomainError("Nota máxima deve ser maior que zero.")
+    if candidate.get("score") is not None and candidate.get("max_score") is not None and candidate["score"] > candidate["max_score"]:
+        raise DomainError("A nota obtida não pode ser maior que a nota máxima.")
+    return data
+
+
+def _evaluation_select(where="", params=()):
+    sql = """
+        SELECT e.*,COALESCE(d.name,sd.name,s.personal_name) subject_name,
+          COALESCE(e.curriculum_subject_id,s.curriculum_subject_id) effective_curriculum_subject_id
+        FROM avaliacoes e
+        LEFT JOIN materias_estudo s ON s.id=e.study_subject_id
+        LEFT JOIN disciplinas_grade sd ON sd.id=s.curriculum_subject_id
+        LEFT JOIN disciplinas_grade d ON d.id=e.curriculum_subject_id
+    """ + where
+    return sql, params
+
+
+def _evaluation_topics(conn, evaluation_id):
+    return repo.many(conn, "SELECT t.* FROM avaliacao_topicos l JOIN topicos t ON t.id=l.topic_id WHERE l.evaluation_id=? ORDER BY COALESCE(t.unit,''),t.sort_order,t.name", (evaluation_id,))
+
+
+def _evaluation_detail(conn, ident):
+    sql, params = _evaluation_select(" WHERE e.id=?", (ident,))
+    item = repo.one(conn, sql, params)
+    if not item: raise DomainError("Avaliação não encontrada.", 404)
+    item["contents"] = _evaluation_topics(conn, ident)
+    return item
+
+
+def evaluations(conn, study_id=None, curriculum_id=None):
+    clauses, params = [], []
+    if study_id:
+        clauses.append("e.study_subject_id=?"); params.append(study_id)
+    if curriculum_id:
+        clauses.append("COALESCE(e.curriculum_subject_id,s.curriculum_subject_id)=?"); params.append(curriculum_id)
+    sql, query_params = _evaluation_select((" WHERE " + " AND ".join(clauses) if clauses else "") + " ORDER BY e.date,e.id", tuple(params))
+    rows = repo.many(conn, sql, query_params)
+    for row in rows: row["contents"] = _evaluation_topics(conn, row["id"])
+    return rows
 
 
 def create_evaluation(conn, values):
-    study=_need(values.get("study_subject_id"),"Matéria"); _get(conn,"materias_estudo",study)
-    data=_fields(values,{"study_subject_id","title","type","date","weight","max_score","score","status","notes"}); data.update({"study_subject_id":study,"title":_need(data.get("title"),"Título"),"type":data.get("type","exam"),"date":_need(data.get("date"),"Data")})
-    ident = repo.insert(conn,"avaliacoes",data)
-    for topic_id in values.get("topic_ids", []):
-        if _get(conn,"topicos",topic_id)["study_subject_id"] != study: raise DomainError("Todos os tópicos precisam pertencer à matéria da avaliação.")
-        conn.execute("INSERT INTO avaliacao_topicos(evaluation_id,topic_id) VALUES (?,?)",(ident,topic_id))
-    return _get(conn,"avaliacoes",ident)
+    study_id = values.get("study_subject_id")
+    curriculum_id = values.get("curriculum_subject_id")
+    study = None
+    if study_id not in (None, ""):
+        study = _get(conn, "materias_estudo", int(study_id))
+        curriculum_id = curriculum_id or study.get("curriculum_subject_id")
+    if curriculum_id not in (None, ""):
+        curriculum_id = int(curriculum_id)
+        curriculum = _get(conn, "disciplinas_grade", curriculum_id)
+        _active_formation(conn, curriculum["formation_id"])
+    if not study and not curriculum_id:
+        raise DomainError("Selecione a disciplina ou o estudo da avaliação.")
+    data = _evaluation_data(values)
+    data.update({"study_subject_id": int(study_id) if study_id not in (None, "") else None, "curriculum_subject_id": curriculum_id})
+    ident = repo.insert(conn, "avaliacoes", data)
+    for topic_id in values.get("topic_ids", values.get("content_ids", [])):
+        topic = _get(conn, "topicos", topic_id)
+        if study and not _topic_matches_study(conn, topic, study["id"]):
+            raise DomainError("Todos os conteúdos precisam pertencer à matéria da avaliação.")
+        if curriculum_id and topic.get("curriculum_subject_id") != curriculum_id:
+            raise DomainError("Todos os conteúdos precisam pertencer à disciplina da avaliação.")
+        conn.execute("INSERT INTO avaliacao_topicos(evaluation_id,topic_id) VALUES (?,?)", (ident, topic_id))
+    saved = _evaluation_detail(conn, ident)
+    if curriculum_id: _event(conn, curriculum_id, "evaluation", f"Avaliação cadastrada: {saved['title']}")
+    return saved
+
+
+def update_evaluation(conn, ident, values):
+    current = _evaluation_detail(conn, ident)
+    data = _evaluation_data(values, current)
+    repo.update(conn, "avaliacoes", ident, data)
+    if "topic_ids" in values or "content_ids" in values:
+        ids = values.get("topic_ids", values.get("content_ids", []))
+        if not isinstance(ids, list): raise DomainError("Os conteúdos da avaliação devem ser uma lista.")
+        conn.execute("DELETE FROM avaliacao_topicos WHERE evaluation_id=?", (ident,))
+        for topic_id in ids:
+            topic = _get(conn, "topicos", topic_id)
+            curriculum_id = current.get("effective_curriculum_subject_id")
+            if curriculum_id and topic.get("curriculum_subject_id") != curriculum_id:
+                raise DomainError("O conteúdo precisa pertencer à disciplina da avaliação.")
+            conn.execute("INSERT INTO avaliacao_topicos(evaluation_id,topic_id) VALUES (?,?)", (ident, topic_id))
+    saved = _evaluation_detail(conn, ident)
+    if saved.get("effective_curriculum_subject_id"):
+        _event(conn, saved["effective_curriculum_subject_id"], "evaluation", f"Avaliação atualizada: {saved['title']}")
+    return saved
+
+
+def delete_evaluation(conn, ident):
+    current = _evaluation_detail(conn, ident)
+    repo.delete(conn, "avaliacoes", ident)
+    if current.get("effective_curriculum_subject_id"):
+        _event(conn, current["effective_curriculum_subject_id"], "evaluation", f"Avaliação excluída: {current['title']}")
+
+
+def evaluation_summary(conn, curriculum_id):
+    item = _get(conn, "disciplinas_grade", curriculum_id)
+    rows = evaluations(conn, curriculum_id=curriculum_id)
+    today = _today()
+    scored = [row for row in rows if row.get("score") is not None and row.get("max_score")]
+    percentages = [row["score"] * 100 / row["max_score"] for row in scored if row["max_score"]]
+    weighted = [row for row in scored if row.get("weight") is not None and row.get("max_score")]
+    total_weight = sum(float(row["weight"]) for row in weighted)
+    weighted_percent = (sum((row["score"] * 100 / row["max_score"]) * float(row["weight"]) for row in weighted) / total_weight) if weighted and total_weight else None
+    return {
+        "evaluations": rows,
+        "next": [row for row in rows if row["status"] not in {"cancelled", "corrected"} and row["date"] >= today],
+        "overdue": [row for row in rows if row["status"] not in {"cancelled", "corrected"} and (row.get("delivery_date") or row["date"]) < today],
+        "simple_average_percent": round(sum(percentages) / len(percentages), 1) if percentages else None,
+        "weighted_average_percent": round(weighted_percent, 1) if weighted_percent is not None else None,
+        "minimum_grade": item.get("minimum_grade"),
+    }
 
 
 def _clock_minutes(value):
@@ -1781,12 +2263,30 @@ def delete_planned_day(conn, scheduled_date):
     return {"deleted": len(ids), "ids": ids}
 
 
+def _assert_planned_slot(conn, candidate, ignore_id=None):
+    """Garante que nenhum bloco ativo ocupe o mesmo intervalo no mesmo dia."""
+    selected = _date(candidate["scheduled_date"], "Data do planejamento")
+    start_time = candidate.get("start_time")
+    if not start_time:
+        raise DomainError("Informe o horário do bloco para evitar sobreposição.", 400, "planned_time_required")
+    start = _clock_minutes(start_time)
+    end = start + int(candidate["planned_duration_minutes"])
+    if end > 24 * 60:
+        raise DomainError("O bloco não pode terminar depois da meia-noite.")
+    rows = repo.many(conn, "SELECT id,start_time,planned_duration_minutes FROM sessoes_planejadas WHERE scheduled_date=? AND status='planned' AND start_time IS NOT NULL" + (" AND id<>?" if ignore_id else ""), (selected.isoformat(), ignore_id) if ignore_id else (selected.isoformat(),))
+    for item in rows:
+        other_start = _clock_minutes(item["start_time"])
+        other_end = other_start + int(item["planned_duration_minutes"])
+        if start < other_end and end > other_start:
+            raise DomainError("Este horário se sobrepõe a outro bloco planejado.", 409, "planned_overlap", details={"conflict_id": item["id"]})
+
+
 def create_planned(conn,values,source="manual"):
     study=int(_need(values.get("study_subject_id"),"Matéria")); _assert_study_accessible(conn, study)
     data=_fields(values,{"study_subject_id","topic_id","scheduled_date","start_time","planned_duration_minutes"}); data.update({"study_subject_id":study,"scheduled_date":_need(data.get("scheduled_date"),"Data"),"planned_duration_minutes":int(_need(data.get("planned_duration_minutes"),"Duração")),"source":source})
     if data["planned_duration_minutes"] <= 0: raise DomainError("A duração deve ser maior que zero.")
-    if data.get("start_time") is not None: _clock_minutes(data["start_time"])
-    if data.get("topic_id") and _get(conn,"topicos",data["topic_id"])["study_subject_id"] != study: raise DomainError("O tópico precisa pertencer à matéria selecionada.")
+    if data.get("topic_id") and not _topic_matches_study(conn, _get(conn,"topicos",data["topic_id"]), study): raise DomainError("O conteúdo precisa pertencer à matéria selecionada.")
+    _assert_planned_slot(conn, data)
     return _get(conn,"sessoes_planejadas",repo.insert(conn,"sessoes_planejadas",data))
 
 
@@ -1796,9 +2296,9 @@ def update_planned(conn, ident, values):
     candidate = {**current, **data}
     if candidate["status"] not in ("planned","completed","skipped","rescheduled","cancelled"): raise DomainError("Status de planejamento inválido.")
     if int(candidate["planned_duration_minutes"]) <= 0: raise DomainError("A duração deve ser maior que zero.")
-    if candidate.get("start_time") is not None: _clock_minutes(candidate["start_time"])
     _assert_study_accessible(conn, candidate["study_subject_id"])
-    if candidate.get("topic_id") and _get(conn,"topicos",candidate["topic_id"])["study_subject_id"] != candidate["study_subject_id"]: raise DomainError("O tópico precisa pertencer à matéria selecionada.")
+    if candidate.get("topic_id") and not _topic_matches_study(conn, _get(conn,"topicos",candidate["topic_id"]), candidate["study_subject_id"]): raise DomainError("O conteúdo precisa pertencer à matéria selecionada.")
+    if candidate["status"] == "planned": _assert_planned_slot(conn, candidate, ident)
     repo.update(conn,"sessoes_planejadas",ident,data); return planned_detail(conn,ident)
 
 
@@ -1814,45 +2314,399 @@ def planning_preferences(conn):
     values = settings(conn)
     duration = int(values.get("default_session_minutes") or 50)
     pause = int(values.get("planning_break_minutes") or 10)
-    if duration <= 0 or pause < 0: raise DomainError("As preferências do planejamento são inválidas.")
-    return {"default_session_minutes": duration, "planning_break_minutes": pause}
+    minimum = int(values.get("minimum_session_minutes") or 25)
+    maximum = int(values.get("maximum_session_minutes") or 120)
+    if duration <= 0 or pause < 0 or minimum <= 0 or maximum < minimum:
+        raise DomainError("As preferências do planejamento são inválidas.")
+    return {
+        "default_session_minutes": duration, "planning_break_minutes": pause,
+        "minimum_session_minutes": minimum, "maximum_session_minutes": maximum,
+    }
 
 
-def generate_plan(conn,start,days=7):
-    first=_date(start); end=(first+timedelta(days=days-1)).isoformat(); proposal=[]; candidates=studies(conn, week_reference=first.isoformat())
-    preferences = planning_preferences(conn)
-    duration, pause = preferences["default_session_minutes"], preferences["planning_break_minutes"]
-    skipped_without_goal = []
-    for subject in candidates:
-        goal = subject["weekly_goal_minutes"]
-        if not goal:
-            subject["remaining_minutes"] = 0
-            skipped_without_goal.append(subject["name"])
+def _range_dates(start, end):
+    cursor = _date(start)
+    final = _date(end)
+    while cursor <= final:
+        yield cursor
+        cursor += timedelta(days=1)
+
+
+def _planned_rows_for_window(conn, start, end):
+    return repo.many(conn, """
+        SELECT p.* FROM sessoes_planejadas p
+        JOIN materias_estudo s ON s.id=p.study_subject_id
+        LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id
+        LEFT JOIN formacoes f ON f.id=COALESCE(s.related_formation_id,d.formation_id)
+        WHERE p.status='planned' AND p.scheduled_date BETWEEN ? AND ?
+          AND s.status<>'archived' AND s.archived_at IS NULL
+          AND (d.id IS NULL OR d.archived_at IS NULL)
+          AND (f.id IS NULL OR f.archived_at IS NULL)
+        ORDER BY p.scheduled_date,p.start_time,p.id
+    """, (start, end))
+
+
+def _planning_windows(conn, start, end):
+    """Janelas livres locais, já sem blocos existentes e horas passadas hoje."""
+    reserved = defaultdict(list)
+    rows = _planned_rows_for_window(conn, start, end)
+    for row in rows:
+        if row.get("start_time"):
+            begin = _clock_minutes(row["start_time"])
+            reserved[row["scheduled_date"]].append((begin, begin + int(row["planned_duration_minutes"])))
+    now = _local_now()
+    windows, base_minutes, free_minutes = {}, 0, 0
+    for current in _range_dates(start, end):
+        values = availability_windows(conn, current)
+        if current == now.date():
+            now_minute = now.hour * 60 + now.minute
+            values = [(max(left, now_minute), right) for left, right in values if right > now_minute]
+        # No dia atual, períodos já transcorridos não são capacidade futura.
+        # Assim, capacidade, livre e déficit usam o mesmo recorte temporal.
+        base_minutes += smart_planning.interval_minutes(values)
+        free = _subtract(values, reserved[current.isoformat()])
+        windows[current] = free
+        free_minutes += smart_planning.interval_minutes(free)
+    planned_minutes = sum(int(row["planned_duration_minutes"] or 0) for row in rows)
+    return {"windows": windows, "rows": rows, "capacity_minutes": base_minutes, "free_minutes": free_minutes, "planned_minutes": planned_minutes}
+
+
+def _planning_candidate_rows(conn, formation_id=None, item_id=None, kind=None):
+    clauses, params = [], []
+    if formation_id not in (None, ""):
+        try:
+            clauses.append("COALESCE(s.related_formation_id,d.formation_id)=?")
+            params.append(int(formation_id))
+        except (TypeError, ValueError) as error:
+            raise DomainError("Formação do planejamento é inválida.") from error
+    if item_id not in (None, ""):
+        try:
+            clauses.append("s.id=?")
+            params.append(int(item_id))
+        except (TypeError, ValueError) as error:
+            raise DomainError("Item do planejamento é inválido.") from error
+    if kind not in (None, ""):
+        if kind not in {"curriculum", "personal"}:
+            raise DomainError("Tipo de item do planejamento é inválido.")
+        clauses.append("s.origin=?")
+        params.append(kind)
+    return repo.many(conn, """
+        SELECT s.*, d.name curriculum_name,d.formation_id,d.academic_status,d.review_status,
+          d.start_date curriculum_start_date,d.end_date curriculum_end_date,d.deadline_date,
+          d.required_study_minutes curriculum_required_study_minutes,
+          d.priority_base,d.preferred_block_minutes curriculum_preferred_block_minutes,
+          d.allowed_weekdays curriculum_allowed_weekdays,d.planning_enabled,d.minimum_grade,
+          f.archived_at formation_archived_at,d.archived_at curriculum_archived_at
+        FROM materias_estudo s
+        LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id
+        LEFT JOIN formacoes f ON f.id=COALESCE(s.related_formation_id,d.formation_id)
+        WHERE s.status='active' AND s.archived_at IS NULL
+          AND (d.id IS NULL OR (d.archived_at IS NULL AND d.item_type='subject'))
+          AND (f.id IS NULL OR f.archived_at IS NULL)
+          AND (
+            s.origin='personal' OR (
+                d.academic_status='in_progress'
+                OR (d.academic_status='available' AND d.planning_enabled=1)
+                OR (d.academic_status='completed' AND d.review_status IN ('queued','in_progress'))
+            )
+          )
+        """ + (" AND " + " AND ".join(clauses) if clauses else "") + " ORDER BY s.created_at", params)
+
+
+def _ids_clause(values):
+    ids = [int(value) for value in values]
+    return ("(" + ",".join("?" for _ in ids) + ")", ids) if ids else ("(NULL)", [])
+
+
+def _minutes_by_study(conn, study_ids, start=None, end=None):
+    marks, params = _ids_clause(study_ids)
+    clauses = [f"study_subject_id IN {marks}" ]
+    if start: clauses.append("date>=?"); params.append(start)
+    if end: clauses.append("date<=?"); params.append(end)
+    rows = repo.many(conn, "SELECT study_subject_id,COALESCE(SUM(duration_seconds),0)/60 minutes FROM sessoes_estudo WHERE " + " AND ".join(clauses) + " GROUP BY study_subject_id", params)
+    return {row["study_subject_id"]: int(row["minutes"] or 0) for row in rows}
+
+
+def _minutes_by_curriculum(conn, curriculum_ids, start=None, end=None):
+    marks, params = _ids_clause(curriculum_ids)
+    clauses = [f"s.curriculum_subject_id IN {marks}"]
+    if start: clauses.append("x.date>=?"); params.append(start)
+    if end: clauses.append("x.date<=?"); params.append(end)
+    rows = repo.many(conn, "SELECT s.curriculum_subject_id,COALESCE(SUM(x.duration_seconds),0)/60 minutes FROM sessoes_estudo x JOIN materias_estudo s ON s.id=x.study_subject_id WHERE " + " AND ".join(clauses) + " GROUP BY s.curriculum_subject_id", params)
+    return {row["curriculum_subject_id"]: int(row["minutes"] or 0) for row in rows}
+
+
+def _planned_minutes_by_study(conn, study_ids, start, end):
+    marks, params = _ids_clause(study_ids)
+    rows = repo.many(conn, f"SELECT study_subject_id,COALESCE(SUM(planned_duration_minutes),0) minutes FROM sessoes_planejadas WHERE study_subject_id IN {marks} AND status='planned' AND scheduled_date BETWEEN ? AND ? GROUP BY study_subject_id", (*params, start, end))
+    return {row["study_subject_id"]: int(row["minutes"] or 0) for row in rows}
+
+
+def _planned_minutes_index(conn, study_ids, start, end):
+    marks, params = _ids_clause(study_ids)
+    rows = repo.many(conn, f"SELECT study_subject_id,scheduled_date,planned_duration_minutes FROM sessoes_planejadas WHERE study_subject_id IN {marks} AND status='planned' AND scheduled_date BETWEEN ? AND ?", (*params, start, end))
+    values = defaultdict(list)
+    for row in rows: values[row["study_subject_id"]].append(row)
+    return values
+
+
+def _indexed_planned_minutes(index, study_id, start, end):
+    return sum(int(row["planned_duration_minutes"] or 0) for row in index.get(study_id, []) if start <= row["scheduled_date"] <= end)
+
+
+def _contents_by_owner(conn, study_ids, curriculum_ids):
+    clauses, params = [], []
+    study_marks, study_params = _ids_clause(study_ids)
+    curriculum_marks, curriculum_params = _ids_clause(curriculum_ids)
+    if study_ids: clauses.append(f"study_subject_id IN {study_marks}"); params.extend(study_params)
+    if curriculum_ids: clauses.append(f"curriculum_subject_id IN {curriculum_marks}"); params.extend(curriculum_params)
+    if not clauses: return {}, {}
+    rows = repo.many(conn, "SELECT * FROM topicos WHERE archived_at IS NULL AND (" + " OR ".join(clauses) + ") ORDER BY CASE status WHEN 'in_progress' THEN 0 WHEN 'not_started' THEN 1 ELSE 2 END,sort_order,id", params)
+    by_study, by_curriculum = defaultdict(list), defaultdict(list)
+    for row in rows:
+        if row.get("study_subject_id") is not None: by_study[row["study_subject_id"]].append(row)
+        if row.get("curriculum_subject_id") is not None: by_curriculum[row["curriculum_subject_id"]].append(row)
+    return by_study, by_curriculum
+
+
+def _evaluation_due_sets(conn, study_ids, curriculum_ids):
+    today = _today(); threshold = (_local_now().date() + timedelta(days=14)).isoformat()
+    study_marks, study_params = _ids_clause(study_ids)
+    curriculum_marks, curriculum_params = _ids_clause(curriculum_ids)
+    clauses, params = [], []
+    if study_ids: clauses.append(f"e.study_subject_id IN {study_marks}"); params.extend(study_params)
+    if curriculum_ids: clauses.append(f"e.curriculum_subject_id IN {curriculum_marks}"); params.extend(curriculum_params)
+    if not clauses: return set(), set()
+    rows = repo.many(conn, "SELECT e.study_subject_id,e.curriculum_subject_id FROM avaliacoes e WHERE e.status NOT IN ('cancelled','corrected') AND e.date BETWEEN ? AND ? AND (" + " OR ".join(clauses) + ")", (today, threshold, *params))
+    return {row["study_subject_id"] for row in rows if row["study_subject_id"] is not None}, {row["curriculum_subject_id"] for row in rows if row["curriculum_subject_id"] is not None}
+
+
+def _item_capacity(windows, start, end, allowed_weekdays=None):
+    total, available_days = 0, 0
+    for current in _range_dates(start, end):
+        if allowed_weekdays and current.weekday() not in allowed_weekdays: continue
+        amount = smart_planning.interval_minutes(windows.get(current, []))
+        if amount:
+            total += amount; available_days += 1
+    return total, available_days
+
+
+def _first_feasible_from_windows(item, start, remaining, windows, end):
+    """Calcula a primeira conclusão usando uma projeção já carregada.
+
+    Evita recalcular disponibilidade e exceções uma vez por disciplina em
+    risco, que seria uma consulta N+1 para grades grandes.
+    """
+    if remaining <= 0:
+        return start.isoformat()
+    accumulated = 0
+    for current in _range_dates(start.isoformat(), end.isoformat()):
+        if item.get("allowed_weekdays") and current.weekday() not in item["allowed_weekdays"]:
+            continue
+        accumulated += smart_planning.interval_minutes(windows.get(current, []))
+        if accumulated >= remaining:
+            return current.isoformat()
+    return None
+
+
+def planning_items(conn, start=None, end=None, formation_id=None, item_id=None, kind=None):
+    start_day = _date(start or _today())
+    end_day = _date(end or (start_day + timedelta(days=6)).isoformat())
+    if end_day < start_day: raise DomainError("A data final não pode ser anterior à inicial.")
+    rows = _planning_candidate_rows(conn, formation_id, item_id, kind)
+    study_ids = [row["id"] for row in rows]
+    curriculum_ids = [row["curriculum_subject_id"] for row in rows if row.get("curriculum_subject_id")]
+    real_study = _minutes_by_study(conn, study_ids)
+    real_curriculum = _minutes_by_curriculum(conn, curriculum_ids)
+    week_start, week_end = _week_bounds(_today())
+    week_real_study = _minutes_by_study(conn, study_ids, week_start.isoformat(), week_end.isoformat())
+    contents_by_study, contents_by_curriculum = _contents_by_owner(conn, study_ids, curriculum_ids)
+    evaluation_studies, evaluation_curricula = _evaluation_due_sets(conn, study_ids, curriculum_ids)
+    # Cada prazo recebe sua capacidade real até a data; reutiliza janelas em vez
+    # de consultar a disponibilidade uma vez por item.
+    farthest = max([row.get("deadline_date") or row.get("curriculum_end_date") or row.get("target_date") or end_day.isoformat() for row in rows] + [end_day.isoformat()])
+    farthest_day = max(end_day, _date(farthest))
+    horizon = _planning_windows(conn, start_day.isoformat(), farthest_day.isoformat())
+    plan_index = _planned_minutes_index(conn, study_ids, min(start_day, week_start).isoformat(), farthest_day.isoformat())
+    items = []
+    for row in rows:
+        curriculum_id = row.get("curriculum_subject_id")
+        kind = "curriculum" if curriculum_id else "personal"
+        required = row.get("curriculum_required_study_minutes") if curriculum_id else row.get("required_study_minutes")
+        weekly_goal = row.get("weekly_goal_minutes") or 0
+        real = real_curriculum.get(curriculum_id, 0) if curriculum_id else real_study.get(row["id"], 0)
+        week_real = week_real_study.get(row["id"], 0)
+        deadline = (row.get("deadline_date") or row.get("curriculum_end_date") or row.get("target_date")) if curriculum_id else row.get("target_date")
+        deadline_day = _date(deadline) if deadline else None
+        cutoff = min(deadline_day, farthest_day) if deadline_day else end_day
+        planned_future = _indexed_planned_minutes(plan_index, row["id"], start_day.isoformat(), cutoff.isoformat())
+        if required:
+            remaining = max(0, int(required) - real)
         else:
-            subject["remaining_minutes"] = max(0, int(goal) - int(subject["week_seconds"] or 0) // 60 - int(subject["planned_week_minutes"] or 0))
-    existing=planned(conn,start,end)
-    for offset in range(days):
-        current=first+timedelta(days=offset); reserved=[(_clock_minutes(item["start_time"]),_clock_minutes(item["start_time"])+int(item["planned_duration_minutes"])) for item in existing if item["scheduled_date"]==current.isoformat() and item["start_time"]]
-        for window_start,window_end in _subtract(availability_windows(conn,current),reserved):
-            cursor=window_start
-            while cursor + duration <= window_end:
-                eligible=[item for item in candidates if item["remaining_minutes"] > 0]
-                if not eligible: break
-                subject=max(eligible,key=lambda item:item["priority"]*3+item["difficulty"]*2+item["pending_topics"]+(2 if item["week_seconds"]<item["weekly_goal_minutes"]*60 else 0))
-                topic=repo.one(conn,"SELECT * FROM topicos WHERE study_subject_id=? AND archived_at IS NULL AND status<>'completed' ORDER BY CASE status WHEN 'in_progress' THEN 0 ELSE 1 END,mastery,sort_order LIMIT 1",(subject["id"],))
-                proposal.append({"study_subject_id":subject["id"],"topic_id":topic["id"] if topic else None,"scheduled_date":current.isoformat(),"start_time":f"{cursor//60:02d}:{cursor%60:02d}","planned_duration_minutes":duration,"subject_name":subject["name"],"topic_name":topic["name"] if topic else None,"reason":f"Meta restante de {subject['remaining_minutes']} min; prioridade {subject['priority']}/5; dificuldade {subject['difficulty']}/5."})
-                subject["remaining_minutes"] -= duration; cursor += duration + pause
-    return {"start":start,"end":end,"sessions":proposal,"preferences":preferences,"skipped_without_goal":skipped_without_goal}
+            remaining = max(0, int(weekly_goal) - week_real)
+        unallocated = max(0, remaining - planned_future)
+        allowed = _stored_weekdays(row.get("curriculum_allowed_weekdays") if curriculum_id else row.get("allowed_weekdays"))
+        capacity_end = deadline_day if deadline_day else end_day
+        if capacity_end < start_day: capacity, available_days = 0, 0
+        else: capacity, available_days = _item_capacity(horizon["windows"], start_day.isoformat(), capacity_end.isoformat(), allowed)
+        days_remaining = (deadline_day - _local_now().date()).days if deadline_day else None
+        raw = {
+            "id": row["id"], "study_subject_id": row["id"], "curriculum_subject_id": curriculum_id,
+            "kind": kind, "name": row.get("curriculum_name") or row.get("personal_name"),
+            "deadline": deadline, "deadline_date": deadline, "days_remaining": days_remaining,
+            "required_study_minutes": int(required) if required else None,
+            "real_minutes": real, "remaining_minutes": remaining, "future_planned_minutes": planned_future,
+            "unallocated_minutes": unallocated, "capacity_until_deadline_minutes": capacity,
+            "available_days_until_deadline": available_days, "priority_base": int(row.get("priority_base") or row.get("priority") or 3),
+            "preferred_block_minutes": row.get("curriculum_preferred_block_minutes") if curriculum_id else row.get("preferred_block_minutes"),
+            "allowed_weekdays": allowed, "minimum_weekly_minutes": int(row.get("minimum_weekly_minutes") or 0) if kind == "personal" else 0,
+            "weekly_goal_minutes": int(weekly_goal), "week_real_minutes": week_real,
+            "week_planned_minutes": _indexed_planned_minutes(plan_index, row["id"], week_start.isoformat(), week_end.isoformat()),
+            "contents": contents_by_curriculum.get(curriculum_id, []) if curriculum_id else contents_by_study.get(row["id"], []),
+            "review_mode": bool(curriculum_id and row.get("review_status") in {"queued", "in_progress"}),
+            "has_upcoming_evaluation": curriculum_id in evaluation_curricula if curriculum_id else row["id"] in evaluation_studies,
+        }
+        planned_by_week = defaultdict(int)
+        for planned_row in plan_index.get(row["id"], []):
+            planned_day = _date(planned_row["scheduled_date"])
+            monday = (planned_day - timedelta(days=planned_day.weekday())).isoformat()
+            planned_by_week[monday] += int(planned_row["planned_duration_minutes"] or 0)
+        raw["planned_by_week"] = dict(planned_by_week)
+        # A ausência de esforço pessoal não vira silenciosamente carga da grade.
+        # Sem esforço total, a meta semanal ainda mantém o item planejável.
+        ideal_day = (remaining / available_days) if available_days else None
+        raw["ideal_minutes_per_available_day"] = round(ideal_day, 1) if ideal_day is not None else None
+        raw["ideal_minutes_per_week"] = round((remaining * 7 / max((days_remaining or 7) + 1, 1)), 1) if deadline_day else (int(weekly_goal) or None)
+        raw["behind_ideal_pace"] = bool(deadline_day and remaining > 0 and (capacity <= remaining or (unallocated > 0 and available_days <= 2)))
+        urgency, reasons = smart_planning.urgency(raw)
+        raw["automatic_urgency"] = urgency; raw["urgency_reasons"] = reasons
+        raw["priority_effective"] = smart_planning.effective_priority(raw)
+        raw["risk"], raw["risk_label"] = smart_planning.risk(raw)
+        raw["deficit_minutes"] = max(0, remaining - capacity)
+        raw["first_feasible_date"] = None
+        items.append(raw)
+    feasibility = [item for item in items if item.get("deadline") and item["remaining_minutes"] and item["remaining_minutes"] > item["capacity_until_deadline_minutes"]]
+    if feasibility:
+        projection_end = start_day + timedelta(days=548)
+        projection = _planning_windows(conn, start_day.isoformat(), projection_end.isoformat())["windows"]
+        for item in feasibility:
+            item["first_feasible_date"] = _first_feasible_from_windows(item, start_day, item["remaining_minutes"], projection, projection_end)
+    return {"start": start_day.isoformat(), "end": end_day.isoformat(), "items": items, "window_data": horizon}
+
+
+def planning_capacity(conn, start, end, formation_id=None, item_id=None, kind=None):
+    calculated = planning_items(conn, start, end, formation_id, item_id, kind)
+    window_data = _planning_windows(conn, calculated["start"], calculated["end"])
+    total_demand = sum(int(item["unallocated_minutes"] or 0) for item in calculated["items"])
+    return {
+        "start": calculated["start"], "end": calculated["end"],
+        "capacity_minutes": window_data["capacity_minutes"], "planned_minutes": window_data["planned_minutes"],
+        "free_minutes": window_data["free_minutes"], "demand_minutes": total_demand,
+        "surplus_minutes": window_data["free_minutes"] - total_demand,
+        "items": calculated["items"],
+    }
+
+
+def planning_ideal(conn, start, end, formation_id=None, item_id=None, kind=None):
+    values = planning_capacity(conn, start, end, formation_id, item_id, kind)
+    future_clauses, future_params = ["d.archived_at IS NULL", "f.archived_at IS NULL", "d.item_type='subject'", "d.academic_status='not_available'"], []
+    if formation_id not in (None, ""):
+        future_clauses.append("d.formation_id=?")
+        future_params.append(int(formation_id))
+    if kind == "personal" or item_id not in (None, ""):
+        future_clauses.append("1=0")
+    futures = repo.many(conn, """
+        SELECT d.id,d.name,d.period,d.start_date,d.end_date,d.deadline_date,f.name formation_name
+        FROM disciplinas_grade d JOIN formacoes f ON f.id=d.formation_id
+        WHERE """ + " AND ".join(future_clauses) + " ORDER BY COALESCE(d.start_date,d.end_date),d.sort_order,d.name LIMIT 30", future_params)
+    values["future_subjects"] = futures
+    return values
+
+
+def generate_plan(conn, start, days=7):
+    if days < 1 or days > 93: raise DomainError("O planejamento automático aceita de 1 a 93 dias.")
+    first = _date(start)
+    end = first + timedelta(days=days - 1)
+    calculated = planning_items(conn, first.isoformat(), end.isoformat())
+    preferences = planning_preferences(conn)
+    allocation = smart_planning.distribute(
+        calculated["items"], calculated["window_data"]["windows"], first, end,
+        pause_minutes=preferences["planning_break_minutes"], default_duration=preferences["default_session_minutes"],
+        minimum_duration=preferences["minimum_session_minutes"], maximum_duration=preferences["maximum_session_minutes"],
+    )
+    skipped = [item["name"] for item in calculated["items"] if not item["required_study_minutes"] and not item["weekly_goal_minutes"] and not item["minimum_weekly_minutes"]]
+    return {
+        "start": first.isoformat(), "end": end.isoformat(), "sessions": allocation["sessions"],
+        "items": calculated["items"], "unscheduled": allocation["unscheduled"],
+        "preferences": preferences, "skipped_without_goal": skipped,
+        "capacity": planning_capacity(conn, first.isoformat(), end.isoformat()),
+    }
+
+
+def apply_smart_plan(conn, values):
+    sessions = values.get("sessions", [])
+    if not isinstance(sessions, list): raise DomainError("A prévia do planejamento deve ser uma lista de blocos.")
+    # Aplicar duas vezes a mesma prévia é inofensivo: procura o bloco automático
+    # equivalente antes de inserir. Nenhum bloco manual é tocado nesta operação.
+    created, existing = [], []
+    for item in sessions:
+        if not isinstance(item, dict): raise DomainError("Um bloco da prévia é inválido.")
+        found = repo.one(conn, "SELECT * FROM sessoes_planejadas WHERE source='automatic' AND status='planned' AND study_subject_id=? AND scheduled_date=? AND start_time=? AND planned_duration_minutes=?", (item.get("study_subject_id"), item.get("scheduled_date"), item.get("start_time"), item.get("planned_duration_minutes")))
+        if found:
+            existing.append(found); continue
+        created.append(create_planned(conn, item, "automatic"))
+    return {"created": created, "existing": existing, "preserved_manual_blocks": True}
 
 
 def recommendation(conn):
-    candidates=studies(conn)
+    today = _today()
+    today_plan = _planned_rows_for_window(conn, today, today)
+    calculated = planning_items(conn, today, today)
+    occupied_studies = {row["study_subject_id"] for row in today_plan}
+    candidates = [item for item in calculated["items"] if item["study_subject_id"] not in occupied_studies and (item["unallocated_minutes"] > 0 or item["minimum_weekly_minutes"] > 0)]
     if not candidates: return None
-    subject=max(candidates,key=lambda item:item["priority"]*4+item["difficulty"]*2+item["pending_topics"])
-    topic=repo.one(conn,"SELECT * FROM topicos WHERE study_subject_id=? AND archived_at IS NULL AND status<>'completed' ORDER BY mastery,sort_order LIMIT 1",(subject["id"],))
-    reasons=[f"prioridade {subject['priority']}/5",f"{subject['pending_topics']} tópicos pendentes"]
-    if topic: reasons.append(f"domínio {topic['mastery']}/5 em {topic['name']}")
-    return {"study_subject":subject,"topic":topic,"recommended_duration":50,"reasons":reasons,"alternatives":[item["name"] for item in candidates if item["id"]!=subject["id"]][:3]}
+    selected = max(candidates, key=lambda item: (item["priority_effective"], item["unallocated_minutes"]))
+    topic = next((content for content in selected["contents"] if content["status"] != "completed"), None)
+    return {
+        "study_subject": {"id": selected["study_subject_id"], "name": selected["name"]}, "topic": topic,
+        "recommended_duration": selected.get("preferred_block_minutes") or planning_preferences(conn)["default_session_minutes"],
+        "reasons": [f"prioridade efetiva {selected['priority_effective']}/10", *(selected["urgency_reasons"] or [selected["risk_label"]])],
+        "alternatives": [item["name"] for item in sorted(candidates, key=lambda item: item["priority_effective"], reverse=True) if item["id"] != selected["id"]][:3],
+    }
+
+
+def today_overview(conn):
+    today = _today()
+    capacity = planning_capacity(conn, today, today)
+    agenda = planned(conn, today, today)
+    studied = repo.one(conn, "SELECT COALESCE(SUM(duration_seconds),0)/60 minutes FROM sessoes_estudo WHERE date=?", (today,))
+    recommendation_value = recommendation(conn)
+    preferences = planning_preferences(conn)
+    free_windows = _planning_windows(conn, today, today)["windows"].get(_date(today), [])
+    suggestion_slot = None
+    if recommendation_value:
+        preferred = int(recommendation_value["recommended_duration"] or preferences["default_session_minutes"])
+        preferred = max(preferences["minimum_session_minutes"], min(preferred, preferences["maximum_session_minutes"]))
+        for start_minute, end_minute in free_windows:
+            if end_minute - start_minute >= preferences["minimum_session_minutes"]:
+                duration = min(preferred, end_minute - start_minute)
+                suggestion_slot = {
+                    "scheduled_date": today,
+                    "start_time": f"{start_minute // 60:02d}:{start_minute % 60:02d}",
+                    "planned_duration_minutes": duration,
+                }
+                break
+        if suggestion_slot:
+            recommendation_value["slot"] = suggestion_slot
+    required = sum(int(item["planned_duration_minutes"] or 0) for item in agenda)
+    return {
+        "date": today, "capacity_minutes": capacity["capacity_minutes"], "planned_minutes": capacity["planned_minutes"],
+        "studied_minutes": int(studied["minutes"] or 0), "free_minutes": capacity["free_minutes"],
+        "required_minutes": required, "agenda": agenda,
+        "suggestion": recommendation_value if suggestion_slot else None,
+        "suggestion_unavailable": bool(recommendation_value and not suggestion_slot),
+        "day_is_full": capacity["free_minutes"] < preferences["minimum_session_minutes"],
+    }
 
 
 def search(conn, query):
@@ -1863,12 +2717,21 @@ def search(conn, query):
         "formations": repo.many(conn, "SELECT id,name,institution FROM formacoes WHERE archived_at IS NULL AND name LIKE ? COLLATE NOCASE ORDER BY name LIMIT 10", (like,)),
         "curriculum": repo.many(conn, "SELECT d.id,d.name,d.formation_id,f.name formation_name FROM disciplinas_grade d JOIN formacoes f ON f.id=d.formation_id WHERE d.archived_at IS NULL AND d.name LIKE ? COLLATE NOCASE ORDER BY d.name LIMIT 10", (like,)),
         "studies": repo.many(conn, "SELECT s.id,COALESCE(d.name,s.personal_name) name FROM materias_estudo s LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id WHERE s.archived_at IS NULL AND COALESCE(d.name,s.personal_name) LIKE ? COLLATE NOCASE ORDER BY name LIMIT 10", (like,)),
-        "topics": repo.many(conn, "SELECT t.id,t.name,t.study_subject_id,COALESCE(d.name,s.personal_name) subject_name FROM topicos t JOIN materias_estudo s ON s.id=t.study_subject_id LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id WHERE t.archived_at IS NULL AND t.name LIKE ? COLLATE NOCASE ORDER BY t.name LIMIT 10", (like,)),
+        "topics": repo.many(conn, "SELECT t.id,t.name,t.study_subject_id,t.curriculum_subject_id,COALESCE(cd.name,d.name,s.personal_name) subject_name FROM topicos t LEFT JOIN materias_estudo s ON s.id=t.study_subject_id LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id LEFT JOIN disciplinas_grade cd ON cd.id=t.curriculum_subject_id WHERE t.archived_at IS NULL AND t.name LIKE ? COLLATE NOCASE ORDER BY t.name LIMIT 10", (like,)),
     }
 
 
 def reviews(conn):
-    return repo.many(conn,"SELECT r.*,t.name topic_name,COALESCE(s.personal_name,d.name) subject_name FROM revisoes r JOIN topicos t ON t.id=r.topic_id JOIN materias_estudo s ON s.id=t.study_subject_id LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id WHERE r.status='pending' ORDER BY r.due_date")
+    return repo.many(conn,"""
+        SELECT r.*,t.name topic_name,COALESCE(cd.name,d.name,s.personal_name) subject_name
+        FROM revisoes r
+        JOIN topicos t ON t.id=r.topic_id
+        LEFT JOIN sessoes_estudo x ON x.id=COALESCE(r.study_session_id,r.root_session_id)
+        LEFT JOIN materias_estudo s ON s.id=COALESCE(t.study_subject_id,x.study_subject_id)
+        LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id
+        LEFT JOIN disciplinas_grade cd ON cd.id=t.curriculum_subject_id
+        WHERE r.status='pending' ORDER BY r.due_date
+    """)
 def _start_review_chain(conn, topic_id, session_id, studied_on):
     existing = repo.one(conn,"SELECT id FROM revisoes WHERE topic_id=? AND status='pending' LIMIT 1",(topic_id,))
     if existing: return None
@@ -1888,7 +2751,12 @@ def complete_review(conn,ident,rating, duration_seconds=None, notes=None):
         repo.insert(conn,"revisoes",{"topic_id":review["topic_id"],"study_session_id":review["study_session_id"],"root_session_id":review["root_session_id"],"due_date":due_date,"review_stage":next_stage})
     if duration_seconds:
         topic = _get(conn,"topicos",review["topic_id"])
-        create_session(conn,{"study_subject_id":topic["study_subject_id"],"topic_id":topic["id"],"date":_today(),"duration_seconds":int(duration_seconds),"entry_method":"review","notes":notes})
+        study_id = topic.get("study_subject_id") or repo.one(conn, "SELECT study_subject_id FROM sessoes_estudo WHERE id=?", (review.get("root_session_id") or review.get("study_session_id"),))
+        if not study_id and topic.get("curriculum_subject_id"):
+            study_id = repo.one(conn, "SELECT id FROM materias_estudo WHERE curriculum_subject_id=? AND status IN ('active','paused') AND archived_at IS NULL ORDER BY id DESC LIMIT 1", (topic["curriculum_subject_id"],))
+        effective_id = study_id.get("study_subject_id") if isinstance(study_id, dict) and "study_subject_id" in study_id else study_id.get("id") if isinstance(study_id, dict) else study_id
+        if not effective_id: raise DomainError("Ative a disciplina antes de registrar a revisão.", 409, "study_not_current")
+        create_session(conn,{"study_subject_id":effective_id,"topic_id":topic["id"],"date":_today(),"duration_seconds":int(duration_seconds),"entry_method":"review","notes":notes})
     return _get(conn,"revisoes",ident)
 
 
@@ -1901,43 +2769,151 @@ def history(conn,start=None,end=None,limit=100):
     return repo.many(conn,sql,(*params,limit))
 
 
+def _analytics_dates(start=None, end=None):
+    today = _local_now().date()
+    first = _date(start) if start else today - timedelta(days=29)
+    last = _date(end) if end else today
+    if last < first: raise DomainError("A data final não pode ser anterior à inicial.")
+    return first, last
+
+
+def analytics_workload(conn, start=None, end=None, formation_id=None, item_id=None, kind=None):
+    first, last = _analytics_dates(start, end)
+    if kind not in (None, "", "curriculum", "personal"):
+        raise DomainError("Tipo de item do filtro é inválido.")
+    clauses, params = ["x.date BETWEEN ? AND ?"], [first.isoformat(), last.isoformat()]
+    if formation_id not in (None, ""):
+        clauses.append("COALESCE(s.related_formation_id,d.formation_id)=?"); params.append(int(formation_id))
+    if item_id not in (None, ""):
+        clauses.append("s.id=?"); params.append(int(item_id))
+    if kind: clauses.append("s.origin=?"); params.append(kind)
+    where = " AND ".join(clauses)
+    total = repo.one(conn, "SELECT COALESCE(SUM(x.duration_seconds),0) seconds,COUNT(*) sessions,COUNT(DISTINCT x.date) days FROM sessoes_estudo x JOIN materias_estudo s ON s.id=x.study_subject_id LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id WHERE " + where, params)
+    by_item = repo.many(conn, """
+        SELECT s.id,COALESCE(d.name,s.personal_name) name,s.origin,COALESCE(SUM(x.duration_seconds),0) seconds,COUNT(x.id) sessions
+        FROM sessoes_estudo x JOIN materias_estudo s ON s.id=x.study_subject_id
+        LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id
+        WHERE """ + where + " GROUP BY s.id ORDER BY seconds DESC,name", params)
+    planned = repo.one(conn, """
+        SELECT COUNT(*) total,
+          COUNT(*) FILTER(WHERE p.status='completed') completed,
+          COUNT(*) FILTER(WHERE p.status='cancelled') cancelled,
+          COALESCE(SUM(p.planned_duration_minutes) FILTER(WHERE p.status='planned'),0) future_minutes
+        FROM sessoes_planejadas p JOIN materias_estudo s ON s.id=p.study_subject_id
+        LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id
+        WHERE p.scheduled_date BETWEEN ? AND ?
+        """ + (" AND COALESCE(s.related_formation_id,d.formation_id)=" + "?" if formation_id not in (None, "") else "") + (" AND s.id=?" if item_id not in (None, "") else "") + (" AND s.origin=?" if kind else ""), (first.isoformat(), last.isoformat(), *((int(formation_id),) if formation_id not in (None, "") else ()), *((int(item_id),) if item_id not in (None, "") else ()), *((kind,) if kind else ())))
+    orphan_completed = repo.one(conn, """
+        SELECT COUNT(*) count FROM sessoes_planejadas p
+        WHERE p.status='completed' AND p.scheduled_date BETWEEN ? AND ?
+          AND NOT EXISTS (SELECT 1 FROM sessoes_estudo x WHERE x.planned_session_id=p.id)
+    """, (first.isoformat(), last.isoformat()))
+    ideal = planning_ideal(conn, _today(), (_local_now().date() + timedelta(days=30)).isoformat(), formation_id, item_id, kind)
+    evaluation_clauses, evaluation_params = ["e.status NOT IN ('cancelled','corrected')", "e.date>=?"], [_today()]
+    if formation_id not in (None, ""):
+        evaluation_clauses.append("COALESCE(s.related_formation_id,sd.formation_id,d.formation_id)=?")
+        evaluation_params.append(int(formation_id))
+    if item_id not in (None, ""):
+        evaluation_clauses.append("e.study_subject_id=?")
+        evaluation_params.append(int(item_id))
+    if kind == "curriculum":
+        evaluation_clauses.append("COALESCE(e.curriculum_subject_id,s.curriculum_subject_id) IS NOT NULL")
+    elif kind == "personal":
+        evaluation_clauses.append("COALESCE(e.curriculum_subject_id,s.curriculum_subject_id) IS NULL")
+    upcoming_evaluations = repo.many(conn, """
+        SELECT e.*,COALESCE(cd.name,d.name,s.personal_name) subject_name
+        FROM avaliacoes e LEFT JOIN materias_estudo s ON s.id=e.study_subject_id
+        LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id
+        LEFT JOIN disciplinas_grade cd ON cd.id=e.curriculum_subject_id
+        WHERE """ + " AND ".join(evaluation_clauses) + " ORDER BY e.date LIMIT 12", evaluation_params)
+    grade_clauses, grade_params = ["e.status<>'cancelled'", "e.score IS NOT NULL", "e.max_score IS NOT NULL", "e.max_score>0"], []
+    if formation_id not in (None, ""):
+        grade_clauses.append("COALESCE(s.related_formation_id,sd.formation_id,d.formation_id)=?")
+        grade_params.append(int(formation_id))
+    if item_id not in (None, ""):
+        grade_clauses.append("e.study_subject_id=?")
+        grade_params.append(int(item_id))
+    if kind == "curriculum":
+        grade_clauses.append("COALESCE(e.curriculum_subject_id,s.curriculum_subject_id) IS NOT NULL")
+    elif kind == "personal":
+        grade_clauses.append("COALESCE(e.curriculum_subject_id,s.curriculum_subject_id) IS NULL")
+    grade_by_subject = repo.many(conn, """
+        SELECT COALESCE(cd.id,d.id) curriculum_subject_id,COALESCE(cd.name,d.name,s.personal_name) subject_name,
+          COUNT(*) evaluations,ROUND(AVG(e.score*100.0/e.max_score),1) simple_average_percent,
+          ROUND(SUM(CASE WHEN e.weight IS NOT NULL THEN (e.score*100.0/e.max_score)*e.weight END) /
+                NULLIF(SUM(CASE WHEN e.weight IS NOT NULL THEN e.weight END),0),1) weighted_average_percent
+        FROM avaliacoes e LEFT JOIN materias_estudo s ON s.id=e.study_subject_id
+        LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id
+        LEFT JOIN disciplinas_grade cd ON cd.id=e.curriculum_subject_id
+        WHERE """ + " AND ".join(grade_clauses) + " GROUP BY COALESCE(cd.id,d.id,s.id),COALESCE(cd.name,d.name,s.personal_name) ORDER BY simple_average_percent DESC,subject_name", grade_params)
+    most_studied_contents = repo.many(conn, """
+        SELECT t.id,t.name,t.unit,COALESCE(cd.name,d.name,s.personal_name) subject_name,
+          COALESCE(SUM(x.duration_seconds),0) seconds,MAX(x.date) last_activity
+        FROM topicos t LEFT JOIN sessoes_estudo x ON x.topic_id=t.id
+        LEFT JOIN materias_estudo s ON s.id=t.study_subject_id
+        LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id
+        LEFT JOIN disciplinas_grade cd ON cd.id=t.curriculum_subject_id
+        WHERE t.archived_at IS NULL GROUP BY t.id ORDER BY seconds DESC,last_activity DESC LIMIT 12
+    """)
+    inactive_contents = repo.many(conn, """
+        SELECT t.id,t.name,t.unit,COALESCE(cd.name,d.name,s.personal_name) subject_name,t.last_session_date
+        FROM topicos t LEFT JOIN materias_estudo s ON s.id=t.study_subject_id
+        LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id
+        LEFT JOIN disciplinas_grade cd ON cd.id=t.curriculum_subject_id
+        WHERE t.archived_at IS NULL AND t.status<>'completed'
+          AND (t.last_session_date IS NULL OR t.last_session_date<?)
+        ORDER BY t.last_session_date,t.name LIMIT 12
+    """, ((_local_now().date() - timedelta(days=14)).isoformat(),))
+    return {
+        "start": first.isoformat(), "end": last.isoformat(), "total_seconds": int(total["seconds"] or 0),
+        "sessions": int(total["sessions"] or 0), "days_studied": int(total["days"] or 0),
+        "by_item": by_item, "by_subject": by_item, "planned": {key: int(value or 0) for key, value in planned.items()},
+        "completion_rate_percent": round(int(planned["completed"] or 0) * 100 / int(planned["total"] or 1), 1) if planned["total"] else None,
+        "completed_planned_without_real_session": int(orphan_completed["count"] or 0),
+        "capacity": {key: planning_capacity(conn, _today(), (_local_now().date() + timedelta(days=offset)).isoformat(), formation_id, item_id, kind) for key, offset in (("7", 6), ("14", 13), ("30", 29))},
+        "ideal": ideal, "at_risk": [item for item in ideal["items"] if item["risk"] in {"at_risk", "impossible"}],
+        "upcoming_deadlines": sorted(({
+            "name": item["name"], "kind": item["kind"], "deadline": item["deadline"],
+            "remaining_minutes": item["remaining_minutes"], "risk_label": item["risk_label"],
+        } for item in ideal["items"] if item.get("deadline")), key=lambda item: item["deadline"])[:12],
+        "upcoming_evaluations": upcoming_evaluations, "grade_by_subject": grade_by_subject,
+        "most_studied_contents": most_studied_contents,
+        "inactive_contents": inactive_contents,
+    }
+
+
 def analytics(conn):
-    total=repo.one(conn,"SELECT COALESCE(SUM(duration_seconds),0) seconds,COUNT(*) sessions,COUNT(DISTINCT date) days FROM sessoes_estudo")
     today = _local_now().date()
     week_start, week_end = _week_bounds(today.isoformat())
     month_start = today.replace(day=1)
     month_end = (month_start.replace(day=28) + timedelta(days=4)).replace(day=1) - timedelta(days=1)
-    today_total = repo.one(conn,"SELECT COALESCE(SUM(duration_seconds),0) seconds FROM sessoes_estudo WHERE date=?",(today.isoformat(),))
-    week=repo.one(conn,"SELECT COALESCE(SUM(duration_seconds),0) seconds FROM sessoes_estudo WHERE date BETWEEN ? AND ?",(week_start.isoformat(),week_end.isoformat()))
-    month=repo.one(conn,"SELECT COALESCE(SUM(duration_seconds),0) seconds FROM sessoes_estudo WHERE date BETWEEN ? AND ?",(month_start.isoformat(),month_end.isoformat()))
-    subjects=repo.many(conn,"SELECT COALESCE(s.personal_name,d.name) name,SUM(x.duration_seconds) seconds FROM sessoes_estudo x JOIN materias_estudo s ON s.id=x.study_subject_id LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id GROUP BY s.id ORDER BY seconds DESC")
+    total = repo.one(conn, "SELECT COALESCE(SUM(duration_seconds),0) seconds,COUNT(*) sessions,COUNT(DISTINCT date) days FROM sessoes_estudo")
+    today_total = repo.one(conn, "SELECT COALESCE(SUM(duration_seconds),0) seconds FROM sessoes_estudo WHERE date=?", (today.isoformat(),))
+    week = repo.one(conn, "SELECT COALESCE(SUM(duration_seconds),0) seconds FROM sessoes_estudo WHERE date BETWEEN ? AND ?", (week_start.isoformat(), week_end.isoformat()))
+    month = repo.one(conn, "SELECT COALESCE(SUM(duration_seconds),0) seconds FROM sessoes_estudo WHERE date BETWEEN ? AND ?", (month_start.isoformat(), month_end.isoformat()))
     completed_blocks = repo.one(conn, "SELECT COUNT(*) count FROM sessoes_planejadas WHERE status='completed'")
-    orphan_completed_blocks = repo.one(conn, """
-        SELECT COUNT(*) count FROM sessoes_planejadas p
-        WHERE p.status='completed' AND NOT EXISTS (
-          SELECT 1 FROM sessoes_estudo s WHERE s.planned_session_id=p.id
-        )
-    """)
-    academic_distribution = repo.many(conn, """
-        SELECT academic_status status, COUNT(*) count FROM disciplinas_grade
-        WHERE archived_at IS NULL AND item_type='subject' GROUP BY academic_status
-    """)
+    workload = analytics_workload(conn, month_start.isoformat(), month_end.isoformat())
     next_pending = repo.many(conn, """
-        SELECT d.id,d.name,d.formation_id,f.name formation_name,d.period,d.academic_status,d.review_status
+        SELECT d.id,d.name,d.formation_id,f.name formation_name,d.period,d.academic_status,d.review_status,d.deadline_date
         FROM disciplinas_grade d JOIN formacoes f ON f.id=d.formation_id
         WHERE d.archived_at IS NULL AND d.item_type='subject' AND f.archived_at IS NULL
-          AND d.academic_status NOT IN ('completed','exempted')
-        ORDER BY CASE d.academic_status WHEN 'in_progress' THEN 0 WHEN 'available' THEN 1 ELSE 2 END,d.sort_order,d.name
+          AND d.academic_status IN ('in_progress','available')
+        ORDER BY CASE d.academic_status WHEN 'in_progress' THEN 0 ELSE 1 END,COALESCE(d.deadline_date,d.end_date),d.sort_order,d.name
         LIMIT 12
     """)
+    future_subjects = repo.many(conn, """
+        SELECT d.id,d.name,d.period,d.start_date,d.end_date,f.name formation_name
+        FROM disciplinas_grade d JOIN formacoes f ON f.id=d.formation_id
+        WHERE d.archived_at IS NULL AND f.archived_at IS NULL AND d.item_type='subject' AND d.academic_status='not_available'
+        ORDER BY COALESCE(d.start_date,d.end_date),d.sort_order,d.name LIMIT 12
+    """)
     return {
-        "total_seconds":total["seconds"], "sessions":total["sessions"], "real_sessions":total["sessions"],
-        "days_studied":total["days"], "today_seconds":today_total["seconds"], "week_seconds":week["seconds"],
-        "month_seconds":month["seconds"], "by_subject":subjects,
+        "total_seconds": int(total["seconds"] or 0), "sessions": int(total["sessions"] or 0), "real_sessions": int(total["sessions"] or 0),
+        "days_studied": int(total["days"] or 0), "today_seconds": int(today_total["seconds"] or 0), "week_seconds": int(week["seconds"] or 0),
+        "month_seconds": int(month["seconds"] or 0), "by_subject": workload["by_subject"],
         "completed_planned_blocks": int(completed_blocks["count"] or 0),
-        "completed_planned_without_real_session": int(orphan_completed_blocks["count"] or 0),
-        "academic_progress": formations(conn, "all"), "academic_distribution": academic_distribution,
-        "next_pending_subjects": next_pending,
+        "completed_planned_without_real_session": workload["completed_planned_without_real_session"],
+        "next_pending_subjects": next_pending, "future_subjects": future_subjects, "workload": workload,
     }
 
 
@@ -1986,7 +2962,7 @@ def settings(conn):
 
 
 def save_settings(conn, values):
-    allowed = {"daily_goal_minutes", "weekly_goal_minutes", "default_session_minutes", "planning_break_minutes", "review_strategy", "theme"}
+    allowed = {"daily_goal_minutes", "weekly_goal_minutes", "default_session_minutes", "planning_break_minutes", "minimum_session_minutes", "maximum_session_minutes", "review_strategy", "theme"}
     for key, value in values.items():
         if key in allowed: conn.execute("INSERT INTO configuracoes(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')",(key,str(value) if value is not None else None))
     return settings(conn)

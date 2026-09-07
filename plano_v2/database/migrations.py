@@ -13,6 +13,12 @@ ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS = ROOT / "migrations"
 PATTERN = re.compile(r"^(\d{4})_([a-z0-9_]+)\.sql$")
 
+# A migration 0007 reconstrói duas tabelas SQLite para relaxar uma restrição
+# NOT NULL antiga sem perder chaves, sessões ou anotações. O SQLite não permite
+# desligar foreign_keys dentro de uma transação, portanto a troca é feita antes
+# do BEGIN e sempre seguida da mesma verificação que protege exclusões.
+REBUILD_WITH_FOREIGN_KEYS_DISABLED = {7}
+
 
 def available(directory: Path = MIGRATIONS):
     items = []
@@ -39,9 +45,25 @@ def migrate(path=None):
                 if applied[version] != (name, checksum):
                     raise RuntimeError(f"Migration {version:04d} foi alterada após aplicação.")
                 continue
-            conn.executescript("BEGIN IMMEDIATE;\n" + sql)
-            conn.execute("INSERT INTO schema_migrations (version, name, checksum) VALUES (?, ?, ?)", (version, name, checksum))
-            conn.execute("COMMIT")
+            foreign_keys_disabled = version in REBUILD_WITH_FOREIGN_KEYS_DISABLED
+            if foreign_keys_disabled:
+                # Sem uma transação aberta, esta é a única forma segura de
+                # recriar uma tabela pai preservando as FKs das tabelas filhas.
+                conn.commit()
+                conn.execute("PRAGMA foreign_keys = OFF")
+            try:
+                conn.executescript("BEGIN IMMEDIATE;\n" + sql)
+                conn.execute("INSERT INTO schema_migrations (version, name, checksum) VALUES (?, ?, ?)", (version, name, checksum))
+                conn.execute("COMMIT")
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                if foreign_keys_disabled:
+                    conn.execute("PRAGMA foreign_keys = ON")
+                    violations = conn.execute("PRAGMA foreign_key_check").fetchall()
+                    if violations:
+                        raise RuntimeError(f"Migration {version:04d} criou violações de chave estrangeira.")
             applied_now.append(version)
     return applied_now
 
@@ -57,4 +79,3 @@ if __name__ == "__main__":
             done = {r[0] for r in conn.execute("SELECT version FROM schema_migrations")} if conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='schema_migrations'").fetchone() else set()
         for version, name, _, _ in available():
             print(f"{version:04d}_{name}: {'aplicada' if version in done else 'pendente'}")
-

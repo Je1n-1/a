@@ -5,29 +5,45 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{{ title }} · plano.</title>
   <link rel="stylesheet" href="{{ static_asset('css/app.css') }}">
+  <link rel="stylesheet" href="{{ static_asset('css/ui_refinement.css') }}">
 </head>
 <body data-page="{{ page }}">
-  <aside class="sidebar" aria-label="Navegação principal">
-    <a class="brand" href="/">plano<span>.</span></a>
-    <nav>
-      <a href="/" data-nav="today">Hoje</a>
-      <a href="/planning" data-nav="planning">Planejamento</a>
-      <a href="/formations" data-nav="formations">Formações</a>
-      <a href="/studies" data-nav="studies">Estudos atuais</a>
-      <a href="/reviews" data-nav="reviews">Revisões</a>
-      <a href="/history" data-nav="history">Histórico</a>
-      <a href="/analytics" data-nav="analytics">Análises</a>
-      <small>Mais</small>
-      <a href="/projects" data-nav="projects">Projetos</a>
-    </nav>
-  </aside>
-  <main>
-    <header class="page-header">
-      <div><p class="eyebrow" id="date-label"></p><h1>{{ title }}</h1><p class="subtitle">{{ subtitle }}</p></div>
-      <div class="quick-actions"><button class="button ghost" data-action="search">Buscar</button><button class="button ghost" data-action="manual-session">Registrar sessão</button><button class="button primary" data-action="focus">Iniciar foco</button></div>
-    </header>
-    <section id="app" aria-live="polite"></section>
-  </main>
+  <a class="skip-link" href="#main-content">Pular para o conteúdo</a>
+  <div class="app-shell">
+    <aside class="sidebar" id="primary-navigation" aria-label="Navegação principal">
+      <div class="sidebar-heading">
+        <a class="brand" href="/" aria-label="Plano — ir para Hoje">plano<span>.</span></a>
+        <button class="sidebar-dismiss" type="button" data-sidebar-close aria-label="Fechar menu">×</button>
+      </div>
+      <nav>
+        <a href="/" data-nav="today">Hoje</a>
+        <a href="/planning" data-nav="planning">Planejamento</a>
+        <a href="/formations" data-nav="formations">Formações</a>
+        <a href="/studies" data-nav="studies">Estudos atuais</a>
+        <a href="/reviews" data-nav="reviews">Revisões</a>
+        <a href="/history" data-nav="history">Histórico</a>
+        <a href="/analytics" data-nav="analytics">Análises</a>
+        <small>Mais</small>
+        <a href="/projects" data-nav="projects">Projetos</a>
+      </nav>
+    </aside>
+    <button class="sidebar-scrim" type="button" data-sidebar-close tabindex="-1" aria-label="Fechar menu"></button>
+    <main id="main-content" tabindex="-1">
+      <header class="topbar">
+        <div class="topbar-context">
+          <button class="sidebar-toggle" type="button" data-sidebar-toggle aria-controls="primary-navigation" aria-expanded="false"><span aria-hidden="true">☰</span><span>Menu</span></button>
+          <p class="eyebrow" id="date-label"></p>
+        </div>
+        <div class="quick-actions" aria-label="Ações rápidas"><button class="button ghost" data-action="search"><span aria-hidden="true">⌕</span> Buscar</button><button class="button ghost" data-action="manual-session">Registrar sessão</button><button class="button primary" data-action="focus"><span aria-hidden="true">▶</span> Iniciar foco</button></div>
+      </header>
+      <div class="page-content">
+        <header class="page-header">
+          <div><h1>{{ title }}</h1><p class="subtitle">{{ subtitle }}</p></div>
+        </header>
+        <section id="app" aria-live="polite" aria-busy="true"></section>
+      </div>
+    </main>
+  </div>
   <div id="modal-root"></div><div id="toast-root" aria-live="polite"></div>
   <script type="module" src="{{ static_asset('js/app.js') }}"></script>
 </body>

@@ -4,7 +4,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const app = $("#app");
 const page = document.body.dataset.page;
 const weekdays = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"];
-const status = {not_available:"Não disponível",available:"Disponível",in_progress:"Em andamento",completed:"Concluída",failed:"Reprovada",locked:"Bloqueada",exempted:"Dispensada",not_started:"Não iniciado",planned:"Planejada",skipped:"Não realizada",rescheduled:"Reagendada",cancelled:"Cancelada",active:"Ativo",paused:"Pausado",archived:"Arquivado",queued:"Na fila de revisão",reviewed:"Revisada",withdrawn:"Retirada"};
+const status = {not_available:"Não disponível",available:"Disponível",in_progress:"Em andamento",completed:"Concluída",failed:"Reprovada",locked:"Bloqueada",exempted:"Dispensada",not_started:"Não iniciado",planned:"Planejada",skipped:"Não realizada",rescheduled:"Reagendada",cancelled:"Cancelada",active:"Ativo",paused:"Pausado",archived:"Arquivado",queued:"Na fila de revisão",reviewed:"Revisada",withdrawn:"Retirada",scheduled:"Prevista",delivered:"Entregue",corrected:"Corrigida"};
 const esc = value => String(value ?? "").replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"}[char]));
 const hours = value => `${(Number(value || 0) / 3600).toFixed(1).replace(".", ",")} h`;
 const empty = (title, message, action = "") => `<div class="empty"><strong>${title}</strong><span>${message}</span>${action}</div>`;
@@ -13,6 +13,54 @@ const toast = message => { $("#toast-root").innerHTML = `<div class="toast">${es
 const fields = form => Object.fromEntries(new FormData(form));
 const weekRange = () => { const dates = weekDates(); return {start: dates[0], end: dates[6], dates}; };
 let formationRenderRevision = 0;
+
+function formatLocalDate(value, options = {}) {
+  if (!value) return "—";
+  const source = /^\d{4}-\d{2}-\d{2}$/.test(String(value)) ? `${value}T12:00:00` : value;
+  const date = new Date(source);
+  if (Number.isNaN(date.getTime())) return String(value);
+  return new Intl.DateTimeFormat("pt-BR", {timeZone:"America/Sao_Paulo", ...options}).format(date);
+}
+
+function installResponsiveNavigation() {
+  const sidebar = $("#primary-navigation");
+  const trigger = $("[data-sidebar-toggle]");
+  const main = $("#main-content");
+  const skipLink = $(".skip-link");
+  if (!sidebar || !trigger) return;
+  const media = window.matchMedia("(max-width: 880px)");
+  let opener = null;
+  const sync = () => {
+    const mobile = media.matches;
+    const open = document.body.classList.contains("sidebar-open");
+    sidebar.toggleAttribute("inert", mobile && !open);
+    sidebar.setAttribute("aria-hidden", mobile && !open ? "true" : "false");
+    [main, skipLink].filter(Boolean).forEach(element => {
+      const backgroundIsInert = mobile && open;
+      element.toggleAttribute("inert", backgroundIsInert);
+      if (backgroundIsInert) element.setAttribute("aria-hidden", "true"); else element.removeAttribute("aria-hidden");
+    });
+    trigger.setAttribute("aria-expanded", String(open));
+  };
+  const close = ({restoreFocus = true} = {}) => {
+    if (!document.body.classList.contains("sidebar-open")) return;
+    document.body.classList.remove("sidebar-open");
+    sync();
+    if (restoreFocus) (opener || trigger).focus();
+  };
+  trigger.addEventListener("click", () => {
+    if (document.body.classList.contains("sidebar-open")) return close();
+    opener = document.activeElement;
+    document.body.classList.add("sidebar-open");
+    sync();
+    window.setTimeout(() => $("[data-sidebar-close]", sidebar)?.focus(), 0);
+  });
+  document.querySelectorAll("[data-sidebar-close]").forEach(control => control.addEventListener("click", () => close()));
+  sidebar.querySelectorAll("a").forEach(link => link.addEventListener("click", () => close({restoreFocus:false})));
+  document.addEventListener("keydown", event => { if (event.key === "Escape") close(); });
+  media.addEventListener?.("change", () => { document.body.classList.remove("sidebar-open"); sync(); });
+  sync();
+}
 
 function saoPauloTodayISO() {
   const parts = new Intl.DateTimeFormat("en-US", {timeZone:"America/Sao_Paulo", year:"numeric", month:"2-digit", day:"2-digit"}).formatToParts(new Date()).reduce((all, part) => ({...all, [part.type]:part.value}), {});
@@ -31,9 +79,28 @@ function validCalendarDate(value) { if (!/^\d{4}-\d{2}-\d{2}$/.test(value || "")
 const planningView = (() => {
   const params = new URLSearchParams(window.location.search);
   const mode = params.get("view") === "week" ? "week" : "month";
+  const tab = params.get("tab") === "ideal" ? "ideal" : "calendar";
   const initial = validCalendarDate(params.get("date")) || calendarDateFromISO(saoPauloTodayISO());
-  return {mode, cursor: mode === "month" ? calendarMonthStart(initial) : initial};
+  const proposalStart = validCalendarDate(params.get("plan_start")) || calendarDateFromISO(saoPauloTodayISO());
+  const proposalDays = Math.max(1, Math.min(93, Number(params.get("plan_days")) || 7));
+  return {mode, tab, cursor: mode === "month" ? calendarMonthStart(initial) : initial, proposalStart, proposalDays};
 })();
+
+const analyticsView = (() => {
+  const params = new URLSearchParams(window.location.search);
+  return {
+    range: ["7", "14", "30", "custom"].includes(params.get("range")) ? params.get("range") : "30",
+    formationId: params.get("formation_id") || "",
+    itemId: params.get("item_id") || "",
+    kind: ["", "curriculum", "personal"].includes(params.get("kind")) ? params.get("kind") : "",
+    start: params.get("start") || "",
+    end: params.get("end") || "",
+  };
+})();
+
+const reviewsView = {filter:"today"};
+const historyView = {range:"30", query:""};
+const projectsView = {filter:"active"};
 
 function planningRange() {
   if (planningView.mode === "week") {
@@ -54,7 +121,10 @@ function syncPlanningLocation() {
   if (page !== "planning") return;
   const url = new URL(window.location.href);
   url.searchParams.set("view", planningView.mode);
+  if (planningView.tab === "ideal") url.searchParams.set("tab", "ideal"); else url.searchParams.delete("tab");
   url.searchParams.set("date", calendarISO(planningView.cursor));
+  url.searchParams.set("plan_start", calendarISO(planningView.proposalStart));
+  url.searchParams.set("plan_days", String(planningView.proposalDays));
   window.history.replaceState({}, "", url);
 }
 
@@ -69,7 +139,8 @@ const formationView = (() => {
   const params = new URLSearchParams(window.location.search);
   const filter = ["active", "archived", "all"].includes(params.get("filter")) ? params.get("filter") : "active";
   const selectedId = Number(params.get("selected")) || null;
-  return {filter, selectedId};
+  const tab = ["overview", "curriculum", "dependencies", "settings"].includes(params.get("tab")) ? params.get("tab") : "overview";
+  return {filter, selectedId, tab};
 })();
 
 // Estado exclusivamente visual da central de disciplinas. As consultas e as
@@ -85,14 +156,22 @@ const curriculumView = {
   quick: "all",
   sort: "period",
   selectedIds: new Set(),
+  openGroups: new Map(),
 };
 
 const studiesView = (() => {
   const params = new URLSearchParams(window.location.search);
+  const selectedId = Number(params.get("selected")) || null;
   return {
     visibility: ["active", "paused", "review", "completed", "archived", "all"].includes(params.get("study_filter")) ? params.get("study_filter") : "active",
     formationId: params.get("formation_id") || "",
     q: params.get("study_q") || "",
+    selectedId,
+    panel: params.get("panel") === "topics" ? "topics" : "",
+    expandedStudyId: params.get("panel") === "topics" ? selectedId : null,
+    rows: [],
+    curriculumRows: [],
+    searchRevision: 0,
   };
 })();
 
@@ -119,6 +198,26 @@ function formatMinutesAsHours(minutes) {
   const hoursValue = numeric / 60;
   return `${Number.isInteger(hoursValue) ? hoursValue : hoursValue.toFixed(1).replace(".", ",")} h`;
 }
+function normalizedText(value) {
+  return String(value ?? "").normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("pt-BR");
+}
+function minutesLabel(minutes) {
+  const value = Math.max(0, Number(minutes) || 0);
+  const hoursValue = Math.floor(value / 60);
+  const remainder = value % 60;
+  if (!hoursValue) return `${remainder} min`;
+  return remainder ? `${hoursValue} h ${remainder} min` : `${hoursValue} h`;
+}
+function parseWeekdays(value) {
+  if (Array.isArray(value)) return value.map(Number).filter(day => day >= 0 && day <= 6);
+  try { const parsed = JSON.parse(value || "[]"); return Array.isArray(parsed) ? parsed.map(Number).filter(day => day >= 0 && day <= 6) : []; }
+  catch { return String(value || "").split(",").map(Number).filter(day => day >= 0 && day <= 6); }
+}
+function weekdaysInputs(selected = []) {
+  const active = new Set(parseWeekdays(selected));
+  return `<fieldset class="weekday-picker"><legend>Dias permitidos <span class="field-help">Opcional: sem marcação usa qualquer dia disponível.</span></legend>${weekdays.map((name, index) => `<label><input type="checkbox" name="allowed_weekday" value="${index}" ${active.has(index) ? "checked" : ""}>${name.slice(0, 3)}</label>`).join("")}</fieldset>`;
+}
+function checkedWeekdays(form) { return [...form.querySelectorAll('[name="allowed_weekday"]:checked')].map(input => Number(input.value)); }
 function clampPercent(value) { return Math.max(0, Math.min(100, Math.round(Number(value) || 0))); }
 function objectCount(object, keys) { return keys.reduce((total, key) => total + count(object?.[key]), 0); }
 function studyParentReason(study) {
@@ -135,6 +234,8 @@ function syncFormationLocation() {
   url.searchParams.set("filter", formationView.filter);
   if (formationView.selectedId) url.searchParams.set("selected", String(formationView.selectedId));
   else url.searchParams.delete("selected");
+  if (formationView.tab !== "overview") url.searchParams.set("tab", formationView.tab);
+  else url.searchParams.delete("tab");
   window.history.replaceState({}, "", url);
 }
 
@@ -144,24 +245,66 @@ function syncStudiesLocation() {
   url.searchParams.set("study_filter", studiesView.visibility);
   if (studiesView.formationId) url.searchParams.set("formation_id", studiesView.formationId); else url.searchParams.delete("formation_id");
   if (studiesView.q) url.searchParams.set("study_q", studiesView.q); else url.searchParams.delete("study_q");
+  if (studiesView.selectedId) url.searchParams.set("selected", String(studiesView.selectedId)); else url.searchParams.delete("selected");
+  if (studiesView.panel === "topics" && studiesView.selectedId) url.searchParams.set("panel", "topics"); else url.searchParams.delete("panel");
+  window.history.replaceState({}, "", url);
+}
+
+function syncAnalyticsLocation() {
+  if (page !== "analytics") return;
+  const url = new URL(window.location.href);
+  url.searchParams.set("range", analyticsView.range);
+  for (const [key, value] of Object.entries({formation_id:analyticsView.formationId, item_id:analyticsView.itemId, kind:analyticsView.kind, start:analyticsView.start, end:analyticsView.end})) {
+    if (value) url.searchParams.set(key, value); else url.searchParams.delete(key);
+  }
   window.history.replaceState({}, "", url);
 }
 
 function modal(title, content, onsubmit) {
-  $("#modal-root").innerHTML = `<div class="modal-backdrop"><form class="modal form"><div class="row"><h2>${title}</h2><button class="button ghost" type="button" data-close>×</button></div>${content}<p class="form-error" data-form-error role="alert"></p><div class="form-actions"><button class="button" type="button" data-close>Cancelar</button><button class="button primary">Salvar</button></div></form></div>`;
-  const form = $("#modal-root form");
+  const root = $("#modal-root");
+  const returnFocus = document.activeElement;
+  const titleId = `modal-title-${Date.now()}`;
+  root.innerHTML = `<div class="modal-backdrop" data-modal-backdrop><form class="modal form" role="dialog" aria-modal="true" aria-labelledby="${titleId}" tabindex="-1"><div class="row"><h2 id="${titleId}">${title}</h2><button class="button ghost" type="button" data-close aria-label="Fechar">×</button></div>${content}<p class="form-error" data-form-error role="alert"></p><div class="form-actions"><button class="button" type="button" data-close>Cancelar</button><button class="button primary">Salvar</button></div></form></div>`;
+  const backdrop = $("[data-modal-backdrop]", root);
+  const form = $(".modal", root);
   const save = $(".button.primary", form);
   const closeControls = [...form.querySelectorAll("[data-close]")];
   let busy = false;
-  form.onclick = event => { if (!busy && event.target.closest("[data-close]")) $("#modal-root").replaceChildren(); };
+  let closed = false;
+  const focusable = () => [...form.querySelectorAll("button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])")].filter(element => element.offsetParent !== null);
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    backdrop.removeEventListener("click", onBackdrop);
+    document.removeEventListener("keydown", onKey);
+    form.dispatchEvent(new Event("modalclose"));
+    root.replaceChildren();
+    returnFocus?.focus?.();
+  };
+  const onBackdrop = event => { if (!busy && event.target === backdrop) close(); };
+  const onKey = event => {
+    if (!root.contains(form)) return document.removeEventListener("keydown", onKey);
+    if (event.key === "Escape" && !busy) { event.preventDefault(); return close(); }
+    if (event.key !== "Tab") return;
+    const items = focusable();
+    if (!items.length) return event.preventDefault();
+    const first = items[0], last = items.at(-1);
+    if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+    else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+  };
+  closeControls.forEach(button => button.addEventListener("click", () => { if (!busy) close(); }));
+  form.addEventListener("click", event => { if (!busy && event.target.closest("[data-close]")) close(); });
+  backdrop.addEventListener("click", onBackdrop);
+  document.addEventListener("keydown", onKey);
   if (onsubmit) form.onsubmit = async event => {
     event.preventDefault();
     if (busy) return;
     const errorMessage = $("[data-form-error]", form);
     busy = true; save.disabled = true; closeControls.forEach(button => { button.disabled = true; }); errorMessage.textContent = "";
-    try { await onsubmit(fields(form), form, event); $("#modal-root").replaceChildren(); toast(form.dataset.successMessage || "Alteração salva."); render(); }
+    try { await onsubmit(fields(form), form, event); close(); toast(form.dataset.successMessage || "Alteração salva."); render(); }
     catch (error) { busy = false; save.disabled = false; closeControls.forEach(button => { button.disabled = false; }); errorMessage.textContent = error.message || "Não foi possível salvar."; }
   };
+  window.setTimeout(() => (focusable()[0] || form).focus(), 0);
   return form;
 }
 
@@ -238,13 +381,30 @@ function dependencySummaryMarkup(dependencies, emptyMessage = "Não há vínculo
 }
 
 async function openDependencies(kind, ident, name, opener = null) {
-  const dependencies = await api(`/${kind}/${ident}/dependencies`);
-  const form = modal(`Dependências de ${esc(name)}`, `<p class="muted">Esta prévia mostra o que permanece como histórico ao arquivar e o que exigirá confirmação forte antes de uma exclusão definitiva.</p>${dependencySummaryMarkup(dependencies)}<details class="dependency-raw"><summary>Ver informações detalhadas</summary><pre>${esc(JSON.stringify(dependencies, null, 2))}</pre></details>`, null);
+  const form = modal(`Dependências de ${esc(name)}`, '<section class="dependency-dialog-state" data-dependency-dialog-state role="status" aria-live="polite"><strong>Carregando dependências…</strong><p class="muted">Consultando os vínculos deste item.</p></section>', null);
   const save = $(".button.primary", form);
   save?.remove();
   $(".form-actions", form)?.insertAdjacentHTML("beforeend", '<button class="button primary" type="button" data-close>Entendi</button>');
   $("[data-close]", form)?.focus?.();
   if (opener instanceof HTMLElement) form.dataset.returnFocus = "true";
+  const state = $("[data-dependency-dialog-state]", form);
+  const load = async () => {
+    if (!state) return;
+    state.innerHTML = '<strong>Carregando dependências…</strong><p class="muted">Consultando os vínculos deste item.</p>';
+    try {
+      const dependencies = await api(`/${kind}/${ident}/dependencies`);
+      if (!form.isConnected) return;
+      state.removeAttribute("role");
+      state.innerHTML = `<p class="muted">Esta prévia explica os vínculos que permanecem no histórico ao arquivar e os dados que exigirão confirmação antes de uma exclusão definitiva.</p>${dependencySummaryMarkup(dependencies)}<details class="dependency-raw"><summary>Ver informações detalhadas</summary><pre>${esc(JSON.stringify(dependencies, null, 2))}</pre></details>`;
+    } catch (error) {
+      if (!form.isConnected) return;
+      state.setAttribute("role", "alert");
+      state.innerHTML = `<strong>Não foi possível consultar as dependências.</strong><p class="muted">${esc(error.message || "Verifique a conexão e tente novamente.")}</p><button class="button" type="button" data-retry-dependencies>Tentar novamente</button>`;
+      $("[data-retry-dependencies]", state)?.addEventListener("click", load);
+    }
+  };
+  load();
+  return form;
 }
 
 async function openTypedDestroy({kind, ident, name, endpoint, opener = null, description = ""}) {
@@ -290,8 +450,19 @@ async function openFormationRestore(current, opener) {
 }
 
 function openCurriculumStatus(row) {
-  const form = modal(`Estado acadêmico: ${esc(row.name)}`, `<p class="muted">O estado acadêmico e a intenção de revisão são conceitos separados. Concluir a disciplina não elimina uma revisão marcada.</p><label>Estado acadêmico<select name="academic_status">${curriculumAcademicStatuses.map(value => `<option value="${value}" ${value === row.academic_status ? "selected" : ""}>${label(value)}</option>`).join("")}</select></label>`, values => api(`/curriculum/${row.id}/status`, {method:"POST", body:JSON.stringify({academic_status:values.academic_status})}));
+  const needsLink = !row.active_study_id && !curriculumIsArchived(row) && !isStructuralCurriculum(row);
+  const form = modal(`Estado acadêmico: ${esc(row.name)}`, `<p class="muted">O estado acadêmico e a intenção de revisão são separados. Concluir a disciplina não elimina uma revisão marcada.</p><label>Estado acadêmico<select name="academic_status">${curriculumAcademicStatuses.map(value => `<option value="${value}" ${value === row.academic_status ? "selected" : ""}>${label(value)}</option>`).join("")}</select></label>${needsLink ? '<section class="curriculum-link-guidance" data-curriculum-link-guidance hidden><strong>Para planejar esta disciplina, ela também precisa entrar em Estudos.</strong><p class="muted">O vínculo cria um estudo atual; depois você poderá incluir tópicos, esforço e meta antes de gerar blocos.</p><label class="toggle-row"><input type="checkbox" name="link_study" value="true" checked> Criar vínculo agora</label></section>' : ""}`, async values => {
+    const enteringProgress = values.academic_status === "in_progress" && row.academic_status !== "in_progress";
+    if (enteringProgress && needsLink && values.link_study !== "true") throw new Error("Para marcar como em andamento, crie o vínculo em Estudos ou mantenha a disciplina como disponível.");
+    await api(`/curriculum/${row.id}/status`, {method:"POST", body:JSON.stringify({academic_status:values.academic_status})});
+    if (enteringProgress && needsLink) await api(`/curriculum/${row.id}/add-study`, {method:"POST", body:JSON.stringify({})});
+  });
   $(".button.primary", form).textContent = "Atualizar estado";
+  const select = $("[name=academic_status]", form);
+  const guidance = $("[data-curriculum-link-guidance]", form);
+  const syncGuidance = () => { if (guidance) guidance.hidden = select?.value !== "in_progress"; };
+  select?.addEventListener("change", syncGuidance);
+  syncGuidance();
 }
 
 function openCurriculumReview(row, desiredStatus = null) {
@@ -317,6 +488,12 @@ async function topicsFor(studyId) {
 function topicOptions(topics, selected) { return `<option value="">Sem tópico</option>${topics.map(topic => `<option value="${topic.id}" ${String(topic.id) === String(selected || "") ? "selected" : ""}>${esc(topic.name)} · ${topic.mastery}/5</option>`).join("")}`; }
 function studyOptions(studies, selected) { return studies.map(study => `<option value="${study.id}" ${String(study.id) === String(selected || "") ? "selected" : ""}>${esc(study.name)}</option>`).join(""); }
 function card(title, value, note = "") { return `<div class="card"><span class="muted">${title}</span><div class="metric">${value}</div><div class="muted">${note}</div></div>`; }
+function statCard(title, value, note = "", icon = "•", tone = "violet") {
+  return `<article class="card stat-card" data-tone="${esc(tone)}"><span class="stat-card-icon" aria-hidden="true">${icon}</span><div><span class="muted">${esc(title)}</span><div class="metric">${value}</div><div class="muted">${note}</div></div></article>`;
+}
+function panelTitle(eyebrow, title, description = "", action = "") {
+  return `<div class="panel-heading"><div>${eyebrow ? `<span class="tag">${esc(eyebrow)}</span>` : ""}<h2>${esc(title)}</h2>${description ? `<p class="muted">${esc(description)}</p>` : ""}</div>${action}</div>`;
+}
 
 async function openSession({planned = null, review = null} = {}) {
   const studies = await api("/studies");
@@ -337,7 +514,7 @@ async function openSession({planned = null, review = null} = {}) {
   study.onchange = load; await load();
 }
 
-async function startTimer(planned = null, preferredStudyId = null) {
+async function startTimer(planned = null, preferredStudyId = null, preferredTopicId = null) {
   const studies = await api("/studies");
   if (!studies.length) return toast("Crie um estudo antes de iniciar o foco.");
   const started = new Date();
@@ -347,38 +524,72 @@ async function startTimer(planned = null, preferredStudyId = null) {
     await api("/sessions", {method:"POST", body:JSON.stringify({study_subject_id:Number(values.study_subject_id), topic_id:values.topic_id ? Number(values.topic_id) : null, planned_session_id:planned?.id || null, date:localDateISO(started), started_at:started.toISOString(), ended_at:ended.toISOString(), duration_seconds:Math.max(1, Math.round((ended - started) / 1000)), entry_method:"timer", notes:values.notes})});
   });
   const study = $("#timer-study", form), topic = $("#timer-topic", form);
-  const load = async () => { topic.innerHTML = topicOptions(await topicsFor(study.value), planned?.topic_id); };
+  let interval = null;
+  const stopClock = () => {
+    if (interval !== null) window.clearInterval(interval);
+    interval = null;
+  };
+  form.addEventListener("submit", stopClock, {once:true});
+  form.addEventListener("modalclose", stopClock, {once:true});
+  form.addEventListener("click", event => { if (event.target.closest("[data-close]")) stopClock(); });
+  const load = async () => { topic.innerHTML = topicOptions(await topicsFor(study.value), planned?.topic_id || preferredTopicId); };
   study.onchange = load; await load();
-  const interval = window.setInterval(() => { const seconds = Math.floor((Date.now() - started.getTime()) / 1000); $("#timer-clock", form).textContent = new Date(seconds * 1000).toISOString().slice(11, 19); }, 500);
-  form.addEventListener("submit", () => window.clearInterval(interval), {once:true});
-  form.addEventListener("click", event => { if (event.target.closest("[data-close]")) window.clearInterval(interval); });
+  if (!form.isConnected) return;
+  interval = window.setInterval(() => {
+    const clock = $("#timer-clock", form);
+    if (!clock) return stopClock();
+    const seconds = Math.floor((Date.now() - started.getTime()) / 1000);
+    clock.textContent = new Date(seconds * 1000).toISOString().slice(11, 19);
+  }, 500);
 }
 
 async function renderToday() {
-  const data = await api("/bootstrap"); const today = localDateISO();
-  const todayPlan = data.planned.filter(item => item.scheduled_date === today);
-  const studiedToday = (await api(`/sessions?start=${today}&end=${today}`)).reduce((sum, item) => sum + item.duration_seconds, 0);
-  const rec = data.recommendation;
-  app.innerHTML = `<div class="grid kpis">${card("Disponível hoje", `${todayPlan.length} bloco(s)`, "na agenda")}${card("Planejado", hours(todayPlan.reduce((sum, item) => sum + item.planned_duration_minutes * 60, 0)), "sessões ativas")}${card("Estudado hoje", hours(studiedToday), "sessões reais")}${card("Meta diária", "—", "defina metas por matéria")}</div><div class="grid split"><section class="stack"><section class="card">${rec ? `<div class="bar"><div><span class="tag">ESTUDAR AGORA</span><h2>${esc(rec.study_subject.name)}</h2><p class="muted">${esc(rec.topic?.name || "Escolha um tópico")}</p></div><button class="button primary" data-focus>Começar agora · ${rec.recommended_duration} min</button></div><p class="muted">${rec.reasons.map(esc).join(" · ")}</p>` : empty("Nenhuma recomendação", "Crie um estudo com tópico e meta semanal.", `<a class="button" href="/studies">Abrir estudos</a>`)}</section><section class="card"><div class="bar"><h2>Agenda de hoje</h2><a href="/planning" class="button ghost">Planejamento</a></div>${todayPlan.length ? todayPlan.map(item => `<div class="list-item row"><div><strong>${esc(item.subject_name)}</strong><div class="muted">${esc(item.topic_name || "Sessão")} · ${item.start_time || "sem horário"}</div></div><button class="button" data-start-plan="${item.id}">Começar</button></div>`).join("") : empty("Dia livre", "Você pode gerar uma proposta ou adicionar um bloco manual.")}</section></section><aside class="stack"><section class="card"><h2>Revisões pendentes</h2>${data.reviews.length ? data.reviews.slice(0,4).map(item => `<div class="list-item"><strong>${esc(item.topic_name)}</strong><div class="muted">${esc(item.subject_name)} · ${item.due_date}</div></div>`).join("") : empty("Sem revisões pendentes", "Revisões surgem a partir de uma sessão com tópico.")}</section><section class="card"><h2>Progresso por matéria</h2>${data.studies.map(study => `<div class="list-item"><div class="row"><strong>${esc(study.name)}</strong><span>${study.completed_topics}/${study.topic_count} tópicos</span></div><div class="progress"><i style="width:${study.progress_percent}%"></i></div><div class="muted">Progresso ${study.progress_percent}% · domínio ${study.mastery_average}/5</div></div>`).join("") || empty("Sem estudos", "")}</section></aside></div>`;
+  const [data, reviews] = await Promise.all([api("/today"), api("/reviews")]);
+  const rec = data.suggestion;
+  const agenda = data.agenda || [];
+  const dateLabel = formatLocalDate(data.date, {day:"2-digit", month:"2-digit", year:"numeric"});
+  const nextAgenda = agenda.find(item => !["completed", "cancelled"].includes(item.status));
+  const suggestion = rec ? `<section class="card today-suggestion">${panelTitle("SUGESTÃO DE ESTUDO", rec.study_subject.name, rec.topic?.name || "Sem conteúdo específico cadastrado", `<div class="action-group"><button type="button" class="button" data-focus-study="${rec.study_subject.id}" data-focus-topic="${rec.topic?.id || ""}">Começar</button><button type="button" class="button primary" data-add-today-suggestion data-suggest-study="${rec.study_subject.id}" data-suggest-topic="${rec.topic?.id || ""}" data-suggest-date="${rec.slot.scheduled_date}" data-suggest-start="${rec.slot.start_time}" data-suggest-duration="${rec.slot.planned_duration_minutes}">Adicionar às ${esc(rec.slot.start_time)}</button></div>`)}<div class="suggestion-reason"><span aria-hidden="true">✦</span><p class="muted">${rec.reasons.map(esc).join(" · ")} · bloco sugerido de ${minutesLabel(rec.slot.planned_duration_minutes)}.</p></div>${rec.alternatives?.length ? `<p class="field-help">Alternativas de menor prioridade: ${esc(rec.alternatives.join(", "))}.</p>` : ""}</section>` : `<section class="card today-suggestion">${data.day_is_full ? empty("Dia já está cheio", "A agenda ocupa a capacidade disponível hoje. Reagende ou altere a disponibilidade se precisar abrir espaço.", '<a href="/planning" class="button ghost">Abrir planejamento</a>') : empty("Sem sugestão adicional", data.suggestion_unavailable ? "Há uma prioridade pendente, mas não cabe um bloco mínimo no horário restante de hoje." : "Cadastre uma meta, esforço necessário ou conteúdo para receber sugestões.", '<a href="/planning" class="button ghost">Abrir planejamento</a>')}</section>`;
+  const agendaMarkup = agenda.length ? `<div class="agenda-timeline">${agenda.map(item => {
+    const isNext = item.id === nextAgenda?.id;
+    const state = label(item.status || "planned");
+    return `<article class="agenda-item ${isNext ? "is-next" : ""}"><div class="agenda-time">${esc(item.start_time || "Livre")}</div><div class="agenda-marker" aria-hidden="true"></div><div class="agenda-item-main"><strong>${esc(item.subject_name)}</strong><span>${esc(item.topic_name || "Sessão sem conteúdo")}</span></div><div class="agenda-item-meta"><span class="status">${esc(state)}</span><span>${minutesLabel(item.planned_duration_minutes)}</span></div><button type="button" class="button ${isNext ? "primary" : "ghost"}" data-start-plan="${item.id}">${isNext ? "Começar" : "Abrir"}</button></article>`;
+  }).join("")}</div>` : empty("Nenhum bloco agendado", "Use Planejamento para criar blocos ou aproveite a sugestão abaixo.", '<a href="/planning" class="button ghost">Abrir planejamento</a>');
+  app.innerHTML = `<section class="today-dashboard"><div class="grid kpis today-kpis">${statCard("Capacidade hoje", minutesLabel(data.capacity_minutes), "janelas disponíveis", "ϟ", "blue")}${statCard("Planejado", minutesLabel(data.planned_minutes), `${agenda.length} bloco(s) na agenda`, "▣", "violet")}${statCard("Estudado", minutesLabel(data.studied_minutes), "sessões reais", "▥", "amber")}${statCard("Livre restante", minutesLabel(data.free_minutes), data.day_is_full ? "dia cheio" : "após os blocos atuais", "◷", "green")}${statCard("Demanda obrigatória hoje", minutesLabel(data.required_minutes), "agenda salva", "◎", "violet")}</div><div class="grid split today-layout"><section class="stack"><section class="card agenda-card">${panelTitle("AGENDA ÚNICA DO DIA", `Agenda de hoje · ${dateLabel}`, "A agenda salva é a prioridade do dia.", '<a href="/planning" class="button ghost">Abrir planejamento</a>')}${agendaMarkup}</section>${suggestion}</section><aside class="stack"><section class="card reviews-today-card">${panelTitle("REVISÕES", "Revisões pendentes", reviews.length ? `${reviews.length} item(ns) aguardando revisão.` : "Nenhuma revisão exige atenção agora.", '<a href="/reviews" class="button ghost">Ver revisões</a>')}${reviews.length ? `<div class="compact-list">${reviews.slice(0, 4).map(item => `<div class="list-item"><strong>${esc(item.topic_name)}</strong><div class="muted">${esc(item.subject_name)} · ${formatLocalDate(item.due_date, {day:"2-digit", month:"2-digit"})}</div></div>`).join("")}</div>` : empty("Sem revisões pendentes", "Uma sessão com conteúdo inicia a sequência D+1, D+7 e D+30.")}</section><section class="card how-to-use-card">${panelTitle("COMO USAR O TEMPO", "Planejar e estudar são coisas diferentes")}<div class="guidance-row"><span aria-hidden="true">☼</span><p>A agenda salva vem primeiro. A sugestão ocupa somente uma faixa livre e não repete uma matéria já agendada hoje.</p></div><div class="guidance-row"><span aria-hidden="true">↗</span><p>O indicador Estudado aumenta somente ao registrar uma sessão real.</p></div></section></aside></div></section>`;
 }
 
 async function openAvailability() {
-  const checked = weekdays.map((day, index) => `<label><input type="checkbox" name="weekdays" value="${index}" ${index < 5 ? "checked" : ""}> ${day}</label>`).join("");
-  modal("Disponibilidade semanal", `<p class="muted">Escolha dias e uma faixa. Por exemplo: segunda a sexta, 06:00–11:45.</p><div class="check-grid">${checked}</div><label>Início<input name="start_time" type="time" value="06:00" required></label><label>Fim<input name="end_time" type="time" value="11:45" required></label><label>Aplicação<select name="mode"><option value="replace">Substituir as faixas desses dias</option><option value="append">Adicionar faixa</option></select></label>`, async (_, form) => {
+  const checked = weekdays.map((day, index) => `<label><input type="checkbox" name="weekdays" value="${index}" ${index < 5 ? "checked" : ""}><span>${day.slice(0, 3)}</span></label>`).join("");
+  const form = modal("Disponibilidade semanal", `<p class="muted">Cadastre uma ou mais faixas. Os intervalos entre elas continuam livres para você.</p><fieldset class="availability-days"><legend>Dias da semana</legend><div>${checked}</div></fieldset><div class="time-range-fields"><label>Início<input name="start_time" type="time" value="06:00" required></label><label>Fim<input name="end_time" type="time" value="11:45" required></label></div><fieldset class="availability-mode"><legend>Como aplicar esta faixa</legend><label><input type="radio" name="mode" value="append"> <span><strong>Adicionar nova faixa</strong><small>Mantém os horários que já existem nesses dias.</small></span></label><label><input type="radio" name="mode" value="replace" checked> <span><strong>Substituir horários dos dias selecionados</strong><small>Remove as faixas atuais somente dos dias marcados.</small></span></label></fieldset><div class="availability-summary" aria-live="polite"><strong data-availability-summary>Seg–Sex · 06:00–11:45</strong><span data-availability-warning>As faixas atuais de Seg–Sex serão substituídas.</span></div>`, async (_, form) => {
     const values = new FormData(form); const days = values.getAll("weekdays").map(Number);
     await api("/availability/batch", {method:"POST", body:JSON.stringify({weekdays:days,start_time:values.get("start_time"),end_time:values.get("end_time"),mode:values.get("mode")})});
   });
+  $(".button.primary", form).textContent = "Salvar disponibilidade";
+  const summary = $("[data-availability-summary]", form);
+  const warning = $("[data-availability-warning]", form);
+  const updateSummary = () => {
+    const selected = [...form.querySelectorAll('[name="weekdays"]:checked')].map(input => Number(input.value));
+    const start = form.elements.start_time.value || "—";
+    const end = form.elements.end_time.value || "—";
+    const selectedLabels = selected.length === 5 && [0,1,2,3,4].every(day => selected.includes(day)) ? "Seg–Sex" : selected.length ? selected.map(day => weekdays[day].slice(0, 3)).join(", ") : "Nenhum dia";
+    summary.textContent = `${selectedLabels} · ${start}–${end}`;
+    const replaces = new FormData(form).get("mode") === "replace";
+    warning.textContent = replaces ? `As faixas atuais de ${selectedLabels} serão substituídas.` : `A faixa será adicionada sem remover horários existentes.`;
+  };
+  form.querySelectorAll('input[name="weekdays"], input[name="mode"], input[type="time"]').forEach(input => input.addEventListener("input", updateSummary));
+  form.querySelectorAll('input[name="weekdays"], input[name="mode"]').forEach(input => input.addEventListener("change", updateSummary));
 }
 
-async function openPlanEditor(id) {
+async function openPlanEditor(id, defaults = {}) {
   const [studies, current] = await Promise.all([api("/studies"), id ? api(`/planned/${id}`) : Promise.resolve(null)]);
   if (!studies.length) return toast("Crie um estudo antes de planejar.");
-  const form = modal(current ? "Editar bloco planejado" : "Nova sessão planejada", `<label>Matéria<select name="study_subject_id" id="plan-study">${studyOptions(studies, current?.study_subject_id || studies[0].id)}</select></label><label>Tópico<select name="topic_id" id="plan-topic"></select></label><label>Data<input name="scheduled_date" type="date" value="${current?.scheduled_date || planningDefaultDate()}" required></label><label>Horário<input name="start_time" type="time" value="${current?.start_time || ""}"></label><label>Duração (minutos)<input name="planned_duration_minutes" type="number" min="1" value="${current?.planned_duration_minutes || 50}" required></label>`, async values => {
+  const preferredStudyId = current?.study_subject_id || defaults.studyId || studies[0].id;
+  const form = modal(current ? "Editar bloco planejado" : "Nova sessão planejada", `<label>Matéria<select name="study_subject_id" id="plan-study">${studyOptions(studies, preferredStudyId)}</select></label><label>Tópico<select name="topic_id" id="plan-topic"></select></label><label>Data<input name="scheduled_date" type="date" value="${current?.scheduled_date || defaults.date || planningDefaultDate()}" required></label><label>Horário<input name="start_time" type="time" value="${current?.start_time || defaults.startTime || ""}"></label><label>Duração (minutos)<input name="planned_duration_minutes" type="number" min="1" value="${current?.planned_duration_minutes || defaults.duration || 50}" required></label>`, async values => {
     const payload = {...values,study_subject_id:Number(values.study_subject_id),topic_id:values.topic_id ? Number(values.topic_id) : null,planned_duration_minutes:Number(values.planned_duration_minutes)};
     if (current) await api(`/planned/${id}`, {method:"PATCH",body:JSON.stringify(payload)}); else await api("/planned", {method:"POST",body:JSON.stringify(payload)});
   });
   const study = $("#plan-study", form), topic = $("#plan-topic", form);
-  const load = async () => { topic.innerHTML = topicOptions(await topicsFor(study.value), current?.topic_id); }; study.onchange = load; await load();
+  const load = async () => { topic.innerHTML = topicOptions(await topicsFor(study.value), current?.topic_id || (Number(study.value) === Number(defaults.studyId) ? defaults.topicId : null)); }; study.onchange = load; await load();
 }
 
 let focusOpening = false;
@@ -426,21 +637,135 @@ async function openPlanActions(id, opener) {
   };
 }
 
+function planningInclusiveDays(start, end) {
+  const first = validCalendarDate(start);
+  const last = validCalendarDate(end);
+  if (!first || !last || last < first) return null;
+  return Math.round((last - first) / 86400000) + 1;
+}
+
+function planningProposalPeriod(start, days) {
+  const today = calendarDateFromISO(saoPauloTodayISO());
+  const requested = validCalendarDate(start);
+  const first = requested && requested >= today ? requested : today;
+  const count = Math.max(1, Math.min(93, Number(days) || 7));
+  return {start:calendarISO(first), end:calendarISO(calendarAddDays(first, count - 1)), days:count};
+}
+
+function planningPreviewSummary(proposal, sessions) {
+  const capacity = proposal.capacity || {};
+  const warnings = [
+    ...(proposal.unscheduled || []).map(item => `${item.name || item.subject_name || "Matéria"}: ${item.reason || "não coube no período"}`),
+    ...(proposal.skipped_without_goal || []).map(item => typeof item === "string" ? `${item}: sem esforço ou meta semanal` : `${item.name || "Matéria"}: sem esforço ou meta semanal`),
+  ];
+  return `<section class="planning-preview-summary"><div><strong>${sessions.length} bloco(s) na prévia</strong><span>${esc(proposal.start || "—")} a ${esc(proposal.end || "—")}</span></div><div><strong>${minutesLabel(capacity.capacity_minutes)}</strong><span>capacidade no período</span></div><div><strong>${minutesLabel(capacity.free_minutes)}</strong><span>livre antes da prévia</span></div><div><strong>${minutesLabel(capacity.demand_minutes)}</strong><span>demanda considerada</span></div></section>${warnings.length ? `<section class="planning-preview-warning" role="status"><strong>Itens que não entraram por completo</strong><ul>${warnings.map(item => `<li>${esc(item)}</li>`).join("")}</ul></section>` : ""}`;
+}
+
 function openPlanPreview(proposal) {
-  let sessions = [...proposal.sessions];
-  const draw = () => { const form = modal("Prévia do planejamento", `<p class="muted">Nada foi salvo. Revise, remova blocos e depois aplique.</p>${proposal.skipped_without_goal.length ? `<p class="muted">Sem meta, não entram no plano: ${esc(proposal.skipped_without_goal.join(", "))}.</p>` : ""}<div class="preview-list">${sessions.map((item, index) => `<div class="list-item row"><div><strong>${item.scheduled_date} · ${item.start_time} · ${esc(item.subject_name)}</strong><div class="muted">${esc(item.topic_name || "Sessão")} · ${item.planned_duration_minutes} min · ${esc(item.reason)}</div></div><button type="button" class="button danger" data-remove="${index}">Remover</button></div>`).join("") || empty("Nenhum bloco proposto", "Defina meta semanal e disponibilidade.")}</div>`, async () => { if (sessions.length) await api("/planning/apply", {method:"POST",body:JSON.stringify({sessions})}); });
-    $(".button.primary", form).textContent = "Aplicar plano";
-    form.querySelectorAll("[data-remove]").forEach(button => button.onclick = () => { sessions.splice(Number(button.dataset.remove), 1); $("#modal-root").replaceChildren(); draw(); });
-  }; draw();
+  let sessions = [...(proposal.sessions || [])];
+  const form = modal("Prévia do planejamento", `<p class="muted">Nada foi salvo ainda. Revise a distribuição, remova o que não quiser e só então aplique.</p><div data-plan-preview-body></div>`, null);
+  const save = $(".button.primary", form);
+  save.textContent = "Aplicar plano";
+  const renderBody = () => {
+    const body = $("[data-plan-preview-body]", form);
+    body.innerHTML = `${planningPreviewSummary(proposal, sessions)}<div class="preview-list">${sessions.map((item, index) => `<div class="list-item row"><div><strong>${esc(item.scheduled_date)} · ${esc(item.start_time)} · ${esc(item.subject_name)}</strong><div class="muted">${esc(item.topic_name || "Sessão sem tópico")} · ${minutesLabel(item.planned_duration_minutes)} · ${esc(item.reason || "distribuição automática")}</div></div><button type="button" class="button danger" data-preview-remove="${index}">Remover</button></div>`).join("") || empty("Nenhum bloco proposto", "Nenhum estudo ativo elegível gerou blocos neste período. Verifique os Estudos atuais, o esforço ou meta semanal e a disponibilidade.")}</div>`;
+    body.querySelectorAll("[data-preview-remove]").forEach(button => button.onclick = () => { sessions.splice(Number(button.dataset.previewRemove), 1); renderBody(); });
+    save.disabled = sessions.length === 0;
+    save.title = sessions.length ? "" : "Não há blocos para aplicar.";
+  };
+  renderBody();
+  form.onsubmit = async event => {
+    event.preventDefault();
+    if (!sessions.length) return;
+    save.disabled = true;
+    const error = $("[data-form-error]", form);
+    error.textContent = "";
+    try {
+      await api("/planning/apply", {method:"POST", body:JSON.stringify({sessions})});
+      $("[data-close]", form)?.click();
+      toast("Plano aplicado. Blocos manuais foram preservados.");
+      await render();
+    } catch (exception) {
+      save.disabled = false;
+      error.textContent = exception.message || "Não foi possível aplicar o plano.";
+    }
+  };
+}
+
+function openPlanGenerationDialog() {
+  const initial = planningProposalPeriod(calendarISO(planningView.proposalStart), planningView.proposalDays);
+  const today = saoPauloTodayISO();
+  const upcomingDeadline = validCalendarDate(planningView.nextDeadline) && planningView.nextDeadline >= today ? planningView.nextDeadline : "";
+  const form = modal("Gerar prévia do planejamento", `<p class="muted">Escolha o período antes de gerar. A prévia não altera a agenda e a aplicação preserva seus blocos manuais.</p><div class="planning-period-form"><div class="quick-filter-list" role="group" aria-label="Atalhos de período"><button type="button" class="filter-pill" data-plan-period-days="7">Semana · 7 dias</button><button type="button" class="filter-pill" data-plan-period-days="14">2 semanas</button><button type="button" class="filter-pill" data-plan-period-days="30">Mês · 30 dias</button>${upcomingDeadline ? `<button type="button" class="filter-pill" data-plan-period-deadline="${upcomingDeadline}">Até o próximo prazo</button>` : ""}</div><div class="time-range-fields"><label>Início<input name="start" type="date" min="${today}" value="${initial.start}" required></label><label>Fim<input name="end" type="date" min="${today}" value="${initial.end}" required></label></div><p class="field-help" data-planning-period-feedback role="status"></p></div>`, null);
+  const save = $(".button.primary", form);
+  save.textContent = "Gerar prévia";
+  const start = form.elements.start;
+  const end = form.elements.end;
+  const feedback = $("[data-planning-period-feedback]", form);
+  const update = () => {
+    const days = planningInclusiveDays(start.value, end.value);
+    if (start.value && start.value < today) {
+      feedback.textContent = "O início não pode ser anterior a hoje.";
+      save.disabled = true;
+      return;
+    }
+    feedback.textContent = days ? `${days} dia(s) no período.` : "Informe um início e fim válidos.";
+    save.disabled = !days || days > 93;
+    if (days > 93) feedback.textContent = "A prévia aceita no máximo 93 dias.";
+  };
+  form.querySelectorAll("[data-plan-period-days]").forEach(button => button.onclick = () => {
+    const period = planningProposalPeriod(start.value || initial.start, Number(button.dataset.planPeriodDays));
+    start.value = period.start;
+    end.value = period.end;
+    update();
+  });
+  form.querySelectorAll("[data-plan-period-deadline]").forEach(button => button.onclick = () => {
+    const deadline = button.dataset.planPeriodDeadline;
+    if (deadline < start.value) start.value = today;
+    end.value = deadline;
+    update();
+  });
+  start.oninput = update;
+  end.oninput = update;
+  update();
+  form.onsubmit = async event => {
+    event.preventDefault();
+    const days = planningInclusiveDays(start.value, end.value);
+    if (!days || days > 93 || start.value < today) return update();
+    save.disabled = true;
+    const error = $("[data-form-error]", form);
+    error.textContent = "";
+    try {
+      planningView.proposalStart = calendarDateFromISO(start.value);
+      planningView.proposalDays = days;
+      syncPlanningLocation();
+      const proposal = await api("/planning/generate", {method:"POST", body:JSON.stringify({start:start.value, days})});
+      $("[data-close]", form)?.click();
+      openPlanPreview(proposal);
+    } catch (exception) {
+      save.disabled = false;
+      error.textContent = exception.message || "Não foi possível gerar a prévia.";
+    }
+  };
 }
 
 async function editAvailability(id) {
   const current = (await api("/availability")).find(item => item.id === id);
   if (!current) return toast("Esta faixa não foi encontrada.");
-  modal(`Editar disponibilidade de ${weekdays[current.weekday]}`, `<label>Início<input name="start_time" type="time" value="${current.start_time}" required></label><label>Fim<input name="end_time" type="time" value="${current.end_time}" required></label><label><input name="enabled" type="checkbox" value="true" ${current.enabled ? "checked" : ""}> Faixa ativa</label>`, async (values, form) => {
+  const form = modal(`Editar faixa de ${weekdays[current.weekday]}`, `<p class="muted">${esc(weekdays[current.weekday])} · altere esta faixa sem tocar nas demais.</p><div class="time-range-fields"><label>Início<input name="start_time" type="time" value="${current.start_time}" required></label><label>Fim<input name="end_time" type="time" value="${current.end_time}" required></label></div><label class="toggle-row"><input name="enabled" type="checkbox" value="true" ${current.enabled ? "checked" : ""}> Faixa ativa</label>`, async (values, form) => {
     const data = new FormData(form);
     await api(`/availability/${id}`, {method:"PATCH",body:JSON.stringify({start_time:data.get("start_time"),end_time:data.get("end_time"),enabled:data.get("enabled") === "true"})});
   });
+  $(".button.primary", form).textContent = "Salvar faixa";
+}
+
+function openPlanningSettings(preferences = {}) {
+  const form = modal("Duração e pausa", `<p class="muted">Essas preferências orientam apenas os blocos criados automaticamente.</p><div class="settings-grid"><label>Duração padrão (min)<input name="default_session_minutes" type="number" min="1" value="${preferences.default_session_minutes || 50}" required></label><label>Intervalo padrão (min)<input name="planning_break_minutes" type="number" min="0" value="${preferences.planning_break_minutes || 10}" required></label><label>Duração mínima (min)<input name="minimum_session_minutes" type="number" min="1" value="${preferences.minimum_session_minutes || 25}" required></label><label>Duração máxima (min)<input name="maximum_session_minutes" type="number" min="1" value="${preferences.maximum_session_minutes || 120}" required></label></div>`, async values => {
+    for (const key of ["default_session_minutes", "minimum_session_minutes", "maximum_session_minutes", "planning_break_minutes"]) values[key] = Number(values[key]);
+    if (values.maximum_session_minutes < values.minimum_session_minutes) throw new Error("A duração máxima deve ser maior ou igual à mínima.");
+    await api("/settings", {method:"PUT", body:JSON.stringify(values)});
+  });
+  $(".button.primary", form).textContent = "Salvar preferências";
 }
 
 function clockMinutes(value) {
@@ -487,7 +812,7 @@ function openPlanningDayDelete(day, count, opener) {
   });
 }
 
-async function renderPlanning() {
+async function renderPlanningLegacy() {
   const range = planningRange();
   const today = saoPauloTodayISO();
   const [availability, planned, studies, preferences] = await Promise.all([
@@ -510,6 +835,7 @@ async function renderPlanning() {
   const periodLabel = planningTitle(range);
   const previousLabel = planningView.mode === "month" ? "Mês anterior" : "Semana anterior";
   const nextLabel = planningView.mode === "month" ? "Próximo mês" : "Próxima semana";
+  planningView.nextDeadline = (ideal.items || []).map(item => item.deadline || item.deadline_date).filter(value => validCalendarDate(value) && value >= today).sort()[0] || "";
   const monthIndex = planningView.cursor.getUTCMonth();
 
   app.innerHTML = `<section class="planning-heading"><div><span class="tag">${planningView.mode === "month" ? "VISÃO MENSAL" : "VISÃO SEMANAL"}</span><h2>${esc(periodLabel)}</h2><p class="muted">${range.start} até ${range.end} · clique em um bloco para editar, começar, reagendar, cancelar ou excluir.</p></div><div class="planning-heading-actions"><div class="planning-view-toggle" role="group" aria-label="Visualização do calendário"><button type="button" class="button ${planningView.mode === "month" ? "primary" : "ghost"}" data-planning-mode="month" aria-pressed="${planningView.mode === "month"}">Mês</button><button type="button" class="button ${planningView.mode === "week" ? "primary" : "ghost"}" data-planning-mode="week" aria-pressed="${planningView.mode === "week"}">Semana</button></div><div class="planning-actions"><button class="button ghost" data-availability>Disponibilidade</button><button class="button" data-new-plan>+ Nova sessão</button><button class="button primary" data-generate>Gerar plano</button></div></div></section><div class="planning-navigation" aria-label="Navegação do calendário"><button type="button" class="button ghost" data-planning-nav="previous">← ${previousLabel}</button><button type="button" class="button" data-planning-nav="today">Hoje</button><button type="button" class="button ghost" data-planning-nav="next">${nextLabel} →</button></div><div class="grid kpis">${card("Disponível", hours(availableMinutes * 60), `no intervalo exibido`)}${card("Planejado", hours(plannedMinutes * 60), `${planned.length} bloco(s) no intervalo`)}${card("Com meta", studies.filter(item => item.weekly_goal_minutes).length, "matérias com meta semanal")}${card("Pausa", `${preferences.planning_break_minutes || 10} min`, "minutos entre blocos automáticos")}</div><div class="grid split planning-layout"><section class="card planning-calendar-card"><div class="calendar-weekdays" aria-hidden="true">${["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"].map(day => `<span>${day}</span>`).join("")}</div><div class="planning-calendar" role="grid" aria-label="Calendário de ${esc(periodLabel)}">${range.dates.map(date => {
@@ -552,6 +878,81 @@ async function renderPlanning() {
   goals.querySelectorAll(".goal-form").forEach(form => form.onsubmit = async event => { event.preventDefault(); const value = Number(new FormData(form).get("weekly_goal_minutes")); try { await api(`/studies/${form.dataset.study}`, {method:"PATCH", body:JSON.stringify({weekly_goal_minutes:value})}); toast("Meta semanal atualizada."); render(); } catch (error) { toast(error.message); } });
 }
 
+function planningRiskMarkup(item) {
+  const deadline = item.deadline || "Sem prazo definido";
+  const firstDate = item.first_feasible_date ? `<div class="field-help">Primeira conclusão viável: ${esc(item.first_feasible_date)}</div>` : "";
+  const reasons = item.urgency_reasons?.length ? ` · ${esc(item.urgency_reasons.join(" · "))}` : "";
+  return `<article class="ideal-item risk-${esc(item.risk || "on_track")}"><div class="bar"><div><div class="tag-row"><span class="tag">${item.kind === "personal" ? "PARALELO" : "CURRICULAR"}</span><span class="status">${esc(item.risk_label || "No ritmo")}</span></div><h3>${esc(item.name)}</h3><p class="muted">Prazo: ${esc(deadline)} · ${item.days_remaining === null || item.days_remaining === undefined ? "sem contagem de prazo" : `${item.days_remaining} dia(s) restantes`}</p></div><strong>${minutesLabel(item.remaining_minutes)}</strong></div><div class="ideal-metrics"><span>Real <strong>${minutesLabel(item.real_minutes)}</strong></span><span>Futuro planejado <strong>${minutesLabel(item.future_planned_minutes)}</strong></span><span>Ainda não alocado <strong>${minutesLabel(item.unallocated_minutes)}</strong></span><span>Capacidade até o prazo <strong>${minutesLabel(item.capacity_until_deadline_minutes)}</strong></span><span>Dias disponíveis <strong>${item.available_days_until_deadline}</strong></span><span>Ideal/dia disponível <strong>${item.ideal_minutes_per_available_day == null ? "—" : minutesLabel(item.ideal_minutes_per_available_day)}</strong></span><span>Ideal/semana <strong>${item.ideal_minutes_per_week == null ? "—" : minutesLabel(item.ideal_minutes_per_week)}</strong></span><span>Prioridade efetiva <strong>${item.priority_effective}/10</strong></span></div>${item.deficit_minutes ? `<p class="planning-deficit">Faltam ${minutesLabel(item.remaining_minutes)}, mas há somente ${minutesLabel(item.capacity_until_deadline_minutes)} livres até o prazo. Déficit: ${minutesLabel(item.deficit_minutes)}${item.days_remaining > 0 ? ` · acrescente cerca de ${minutesLabel(Math.ceil(item.deficit_minutes * 7 / Math.max(item.days_remaining, 1)))} por semana ou altere o prazo.` : ""}</p>` : `<p class="field-help">Base ${item.priority_base}/5 + urgência automática ${item.automatic_urgency}/5 = ${item.priority_effective}/10${reasons}</p>`}${firstDate}</article>`;
+}
+
+async function renderPlanning() {
+  const range = planningRange();
+  const today = saoPauloTodayISO();
+  const [availability, plannedRows, studies, preferences, ideal] = await Promise.all([
+    api("/availability"),
+    api(`/planned?start=${encodeURIComponent(range.start)}&end=${encodeURIComponent(range.end)}`),
+    api("/studies"),
+    api("/settings"),
+    api(`/planning/ideal?start=${encodeURIComponent(range.start)}&end=${encodeURIComponent(range.end)}`),
+  ]);
+  const plannedByDate = plannedRows.reduce((all, item) => {
+    const current = all.get(item.scheduled_date) || [];
+    current.push(item);
+    all.set(item.scheduled_date, current);
+    return all;
+  }, new Map());
+  const periodLabel = planningTitle(range);
+  const previousLabel = planningView.mode === "month" ? "Mês anterior" : "Semana anterior";
+  const nextLabel = planningView.mode === "month" ? "Próximo mês" : "Próxima semana";
+  const monthIndex = planningView.cursor.getUTCMonth();
+  const balance = Number(ideal.surplus_minutes || 0);
+  const calendarMarkup = `<section class="card planning-calendar-card"><div class="calendar-weekdays" aria-hidden="true">${["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"].map(day => `<span>${day}</span>`).join("")}</div><div class="planning-calendar" role="grid" aria-label="Calendário de ${esc(periodLabel)}">${range.dates.map(date => {
+    const day = calendarISO(date);
+    const sessions = plannedByDate.get(day) || [];
+    const outsideMonth = date.getUTCMonth() !== monthIndex;
+    const dayLabel = calendarDayLabel(date);
+    const plannedBlockLabel = `${sessions.length} ${sessions.length === 1 ? "bloco planejado" : "blocos planejados"}`;
+    const deleteDay = sessions.length ? `<button type="button" class="button ghost danger calendar-day-delete" data-delete-planning-day="${day}" data-planning-day-count="${sessions.length}" aria-label="Excluir os ${plannedBlockLabel} de ${esc(planningDaySummary(day))}" title="Excluir todos os blocos deste dia">Excluir dia</button>` : "";
+    return `<article class="calendar-day ${outsideMonth ? "outside-month" : ""} ${day === today ? "today" : ""}" role="gridcell" aria-label="${esc(dayLabel)}${day === today ? ", hoje" : ""}"><header><div class="calendar-day-date"><time datetime="${day}">${date.getUTCDate()}</time><span>${esc(dayLabel.replace(/^\S+\s*/, ""))}</span></div>${deleteDay}</header><div class="calendar-sessions">${sessions.map(item => `<button type="button" class="session session-block" data-plan="${item.id}" aria-label="Abrir ações para ${esc(planningBlockSummary(item))}"><span class="session-time">${esc(item.start_time || "Livre")}</span><strong>${esc(item.subject_name)}</strong><span class="session-topic">${esc(item.topic_name || "Sessão sem conteúdo")}</span><span class="session-duration">${minutesLabel(item.planned_duration_minutes)}</span></button>`).join("") || `<span class="calendar-free">Dia livre</span>`}</div></article>`;
+  }).join("")}</div></section>`;
+  const idealMarkup = `<section class="stack ideal-list"><section class="card"><div class="bar"><div><span class="tag">MUNDO IDEAL</span><h2>Esforço e risco por item</h2><p class="muted">O esforço realizado vem somente de sessões reais. Blocos futuros reduzem apenas o que ainda falta alocar.</p></div><button class="button primary" data-generate>Gerar prévia</button></div>${ideal.items?.length ? ideal.items.map(planningRiskMarkup).join("") : empty("Nenhum item planejável", "Ative uma disciplina disponível ou configure um estudo paralelo com esforço ou meta semanal.")}</section><section class="card"><span class="tag">PRÓXIMAS DISCIPLINAS</span><h2>Futuras, fora da demanda atual</h2>${ideal.future_subjects?.length ? ideal.future_subjects.map(item => `<div class="list-item"><strong>${esc(item.name)}</strong><div class="muted">${esc(item.formation_name)} · ${esc(item.start_date || item.end_date || item.deadline_date || "sem data prevista")}</div></div>`).join("") : empty("Nenhuma disciplina futura", "Disciplinas não disponíveis aparecerão aqui, sem ocupar nenhum horário.")}</section></section>`;
+  const groupedAvailability = weekdays.map((day, weekday) => ({day, weekday, ranges:availability.filter(item => Number(item.weekday) === weekday)})).filter(group => group.ranges.length);
+  const availabilityMarkup = groupedAvailability.length ? `<div class="availability-groups">${groupedAvailability.map(group => `<section class="availability-day-group"><strong>${esc(group.day)}</strong><div class="availability-ranges">${group.ranges.map(item => `<div class="availability-range ${item.enabled === 0 || item.enabled === false ? "is-disabled" : ""}"><span>${esc(item.start_time)}–${esc(item.end_time)}</span><div class="range-actions"><button type="button" class="icon-button" data-edit-availability="${item.id}" aria-label="Editar faixa de ${esc(group.day)} ${esc(item.start_time)} até ${esc(item.end_time)}" title="Editar faixa">✎</button><button type="button" class="icon-button danger" data-delete-availability="${item.id}" aria-label="Excluir faixa de ${esc(group.day)} ${esc(item.start_time)} até ${esc(item.end_time)}" title="Excluir faixa">×</button></div></div>`).join("")}</div></section>`).join("")}</div>` : empty("Nenhuma faixa", "Adicione os horários em que você pode estudar.");
+  const sideMarkup = `<aside class="stack planning-side"><section class="card availability-panel">${panelTitle("DISPONIBILIDADE", "Disponibilidade semanal", "Você pode cadastrar mais de uma faixa por dia; os intervalos ficam livres.", '<button type="button" class="button ghost" data-availability>+ Adicionar faixa</button>')}${availabilityMarkup}</section><section class="card planning-preferences">${panelTitle("DURAÇÃO E PAUSA", "Preferências do plano", "Ajuste somente como os blocos automáticos são apresentados.", '<button type="button" class="button ghost" data-edit-planning-settings>Editar preferências</button>')}<dl><div><dt>Bloco padrão</dt><dd>${minutesLabel(preferences.default_session_minutes || 50)}</dd></div><div><dt>Pausa</dt><dd>${minutesLabel(preferences.planning_break_minutes || 10)}</dd></div><div><dt>Limites</dt><dd>${preferences.minimum_session_minutes || 25}–${preferences.maximum_session_minutes || 120} min</dd></div></dl></section></aside>`;
+  app.innerHTML = `<section class="planning-workspace"><div class="planning-toolbar"><div class="planning-toolbar-group" role="group" aria-label="Área do planejamento"><button type="button" class="button ${planningView.tab === "calendar" ? "primary" : "ghost"}" data-planning-tab="calendar" aria-pressed="${planningView.tab === "calendar"}">Calendário</button><button type="button" class="button ${planningView.tab === "ideal" ? "primary" : "ghost"}" data-planning-tab="ideal" aria-pressed="${planningView.tab === "ideal"}">Mundo ideal</button></div><div class="planning-toolbar-group" role="group" aria-label="Visualização do calendário"><button type="button" class="button ${planningView.mode === "month" ? "primary" : "ghost"}" data-planning-mode="month" aria-pressed="${planningView.mode === "month"}">Mês</button><button type="button" class="button ${planningView.mode === "week" ? "primary" : "ghost"}" data-planning-mode="week" aria-pressed="${planningView.mode === "week"}">Semana</button></div><div class="planning-actions"><button type="button" class="button ghost" data-availability>Disponibilidade</button><button type="button" class="button" data-new-plan>+ Nova sessão</button><button type="button" class="button primary" data-generate>✦ Gerar plano</button></div></div><p class="planning-range-note"><strong>${esc(periodLabel)}</strong><span>Capacidade no intervalo visível: ${formatLocalDate(range.start, {day:"2-digit", month:"2-digit"})} a ${formatLocalDate(range.end, {day:"2-digit", month:"2-digit", year:"numeric"})}. O replanejamento preserva blocos manuais.</span></p><div class="planning-navigation" aria-label="Navegação do calendário"><button type="button" class="button ghost" data-planning-nav="previous">← ${previousLabel}</button><button type="button" class="button" data-planning-nav="today">Hoje</button><button type="button" class="button ghost" data-planning-nav="next">${nextLabel} →</button></div><div class="grid kpis planning-kpis">${statCard("Capacidade", minutesLabel(ideal.capacity_minutes), `livre: ${minutesLabel(ideal.free_minutes)}`, "ϟ", "blue")}${statCard("Planejado", minutesLabel(ideal.planned_minutes), `${plannedRows.length} bloco(s) ativos`, "▣", "violet")}${statCard("Demanda", minutesLabel(ideal.demand_minutes), "ainda não alocada", "▥", "amber")}${statCard(balance >= 0 ? "Folga" : "Déficit", minutesLabel(Math.abs(balance)), balance >= 0 ? "capacidade após a demanda" : "faltam horas na capacidade", balance >= 0 ? "◷" : "!", balance >= 0 ? "green" : "red")}</div><div class="grid split planning-layout">${planningView.tab === "calendar" ? calendarMarkup : idealMarkup}${sideMarkup}</div></section>`;
+  syncPlanningLocation();
+  app.querySelectorAll("[data-planning-nav]").forEach(button => {
+    button.onclick = () => {
+      const direction = button.dataset.planningNav;
+      if (direction === "today") planningView.cursor = planningView.mode === "month" ? calendarMonthStart(planningToday()) : planningToday();
+      else if (planningView.mode === "month") planningView.cursor = calendarAddMonths(planningView.cursor, direction === "previous" ? -1 : 1);
+      else planningView.cursor = calendarAddDays(planningView.cursor, direction === "previous" ? -7 : 7);
+      syncPlanningLocation(); render();
+    };
+  });
+  app.querySelectorAll("[data-planning-mode]").forEach(button => button.onclick = () => {
+    const nextMode = button.dataset.planningMode;
+    if (nextMode === planningView.mode) return;
+    planningView.mode = nextMode;
+    if (nextMode === "month") planningView.cursor = calendarMonthStart(planningView.cursor);
+    syncPlanningLocation(); render();
+  });
+  app.querySelectorAll("[data-planning-tab]").forEach(button => button.onclick = () => {
+    planningView.tab = button.dataset.planningTab;
+    syncPlanningLocation(); render();
+  });
+  const goals = document.createElement("section");
+  goals.className = "card weekly-goals-panel";
+  goals.innerHTML = `${panelTitle("METAS SEMANAIS", "Metas e mínimos garantidos", "A meta semanal orienta a distribuição. Para estudos paralelos, o mínimo semanal é reservado antes das matérias urgentes.")}<p class="field-help">Para planejar uma disciplina em um mês sem criar uma meta recorrente, informe o esforço e o prazo dela em Formações e escolha “Mês · 30 dias” ao gerar a prévia.</p>${studies.length ? studies.map(study => `<form class="goal-form list-item row" data-study="${study.id}"><div><strong>${esc(study.name)}</strong><div class="muted">Meta ${study.weekly_goal_minutes ? `${minutesLabel(study.weekly_goal_minutes)}/semana` : "não definida"}${study.origin === "personal" && study.minimum_weekly_minutes ? ` · mínimo garantido ${minutesLabel(study.minimum_weekly_minutes)}` : ""}</div></div><label class="goal-input">Meta semanal (min)<input name="weekly_goal_minutes" type="number" min="1" value="${study.weekly_goal_minutes || ""}" placeholder="ex.: 180" required></label><button class="button" type="submit">Salvar</button></form>`).join("") : empty("Sem matérias", "Crie ou adicione uma matéria antes de definir a meta.")}`;
+  $(".planning-layout > aside", app).append(goals);
+  goals.querySelectorAll(".goal-form").forEach(form => form.onsubmit = async event => {
+    event.preventDefault();
+    const value = Number(new FormData(form).get("weekly_goal_minutes"));
+    try { await api(`/studies/${form.dataset.study}`, {method:"PATCH", body:JSON.stringify({weekly_goal_minutes:value})}); toast("Meta semanal atualizada."); render(); }
+    catch (error) { toast(error.message); }
+  });
+}
+
 const formationBlockerLabels = [
   ["curriculum_subjects", "disciplina da grade", "disciplinas da grade"],
   ["study_subjects", "estudo", "estudos"],
@@ -578,11 +979,11 @@ function formationDeleteError(error) {
 }
 
 function curriculumLocalFilter(rows) {
-  const query = curriculumView.q.trim().toLocaleLowerCase("pt-BR");
+  const query = normalizedText(curriculumView.q.trim());
   const selected = rows.filter(row => {
     if (curriculumView.quick !== "archived" && curriculumView.visibility === "active" && curriculumIsArchived(row)) return false;
     if (curriculumView.quick !== "archived" && curriculumView.visibility === "archived" && !curriculumIsArchived(row)) return false;
-    if (query && !`${row.name || ""} ${row.code || ""}`.toLocaleLowerCase("pt-BR").includes(query)) return false;
+    if (query && !normalizedText(`${row.name || ""} ${row.code || ""}`).includes(query)) return false;
     if (curriculumView.period && String(row.period || "") !== curriculumView.period) return false;
     if (curriculumView.academicStatus && row.academic_status !== curriculumView.academicStatus) return false;
     if (curriculumView.reviewStatus && (row.review_status || "none") !== curriculumView.reviewStatus) return false;
@@ -631,27 +1032,166 @@ function curriculumQuickFilters() {
   return `<div class="quick-filter-list" role="group" aria-label="Filtros rápidos">${filters.map(([value, text]) => `<button class="filter-pill ${curriculumView.quick === value ? "active" : ""}" type="button" data-curriculum-quick="${value}" aria-pressed="${curriculumView.quick === value}">${text}</button>`).join("")}</div>`;
 }
 
-function curriculumActionsMarkup(row, formation) {
-  const formationArchived = Boolean(formation.archived_at);
+function contentEditor(curriculumId, current = null) {
+  modal(current ? "Editar conteúdo" : "Adicionar conteúdo", `<label>Título<input name="name" value="${esc(current?.name || "")}" required></label><label>Unidade / grupo<input name="unit" value="${esc(current?.unit || "")}" placeholder="Ex.: Unidade 1"></label><label>Descrição<textarea name="description">${esc(current?.description || "")}</textarea></label><label>Ordem<input name="sort_order" type="number" min="0" value="${current?.sort_order || 0}"></label><label>Dificuldade<input name="difficulty" type="number" min="1" max="5" value="${current?.difficulty || ""}"></label><label>Tempo estimado (min)<input name="estimated_minutes" type="number" min="1" value="${current?.estimated_minutes || ""}"></label><label>Status<select name="status">${["not_started","in_progress","completed"].map(value => `<option value="${value}" ${value === current?.status ? "selected" : ""}>${label(value)}</option>`).join("")}</select></label><label>Domínio (0 a 5)<input name="mastery" type="number" min="0" max="5" value="${current?.mastery ?? 0}"></label>`, async values => {
+    values.sort_order = Number(values.sort_order || 0); values.difficulty = values.difficulty ? Number(values.difficulty) : null;
+    values.estimated_minutes = values.estimated_minutes ? Number(values.estimated_minutes) : null; values.mastery = Number(values.mastery || 0);
+    if (current) await api(`/contents/${current.id}`, {method:"PATCH", body:JSON.stringify(values)});
+    else await api(`/curriculum/${curriculumId}/contents`, {method:"POST", body:JSON.stringify(values)});
+  });
+}
+
+function evaluationEditor(curriculumId, contents, current = null) {
+  const selected = new Set((current?.contents || []).map(item => item.id));
+  modal(current ? "Editar avaliação" : "Nova avaliação", `<label>Nome<input name="title" value="${esc(current?.title || "")}" required></label><label>Tipo<select name="type">${[["exam","Prova"],["assignment","Trabalho"],["activity","Atividade"],["project","Projeto"],["exercise_list","Lista"],["recovery","Recuperação"],["other","Outro"]].map(([value,text]) => `<option value="${value}" ${value === current?.type ? "selected" : ""}>${text}</option>`).join("")}</select></label><label>Data prevista<input name="date" type="date" value="${esc(current?.date || "")}" required></label><label>Data de entrega<input name="delivery_date" type="date" value="${esc(current?.delivery_date || "")}"></label><label>Peso<input name="weight" type="number" min="0" step="0.01" value="${current?.weight ?? ""}"></label><label>Nota máxima<input name="max_score" type="number" min="0.01" step="0.01" value="${current?.max_score ?? ""}"></label><label>Nota obtida<input name="score" type="number" min="0" step="0.01" value="${current?.score ?? ""}"></label><label>Status<select name="status">${["scheduled","delivered","corrected","cancelled"].map(value => `<option value="${value}" ${value === current?.status ? "selected" : ""}>${label(value)}</option>`).join("")}</select></label><fieldset class="choice-list"><legend>Conteúdos cobrados</legend>${contents.length ? contents.map(content => `<label><input type="checkbox" name="content_id" value="${content.id}" ${selected.has(content.id) ? "checked" : ""}> ${esc(content.name)}${content.unit ? ` · ${esc(content.unit)}` : ""}</label>`).join("") : '<p class="muted">Cadastre conteúdos para relacioná-los à avaliação.</p>'}</fieldset><label>Observações<textarea name="notes">${esc(current?.notes || "")}</textarea></label>`, async (values, form) => {
+    ["weight", "max_score", "score"].forEach(key => { values[key] = values[key] === "" ? null : Number(values[key]); });
+    values.content_ids = [...form.querySelectorAll('[name="content_id"]:checked')].map(input => Number(input.value));
+    delete values.content_id;
+    if (current) await api(`/evaluations/${current.id}`, {method:"PATCH", body:JSON.stringify(values)});
+    else await api(`/curriculum/${curriculumId}/evaluations`, {method:"POST", body:JSON.stringify(values)});
+  });
+}
+
+async function openContentHistory(id, opener = null) {
+  const data = await api(`/contents/${id}/history`);
+  const form = modal(`Histórico · ${esc(data.content.name)}`, `<p class="muted">Tempo real: ${minutesLabel((data.sessions || []).reduce((sum, item) => sum + Math.floor((item.duration_seconds || 0) / 60), 0))} · ${data.sessions.length} sessão(ões)</p><section class="stack">${data.sessions.map(item => `<div class="list-item"><strong>${esc(item.date)}</strong><span>${minutesLabel(Math.floor(item.duration_seconds / 60))}</span></div>`).join("") || empty("Sem sessões", "Este conteúdo ainda não foi estudado.")}</section>`, null);
+  $(".button.primary", form)?.remove(); $(".form-actions", form)?.insertAdjacentHTML("beforeend", '<button class="button primary" type="button" data-close>Fechar</button>');
+  if (opener) window.setTimeout(() => $("[data-close]", form)?.focus(), 0);
+}
+
+async function openCurriculumDetailLegacy(id, opener = null) {
+  const data = await api(`/curriculum/${id}`);
+  const subject = data.curriculum, effort = data.effort, evaluation = data.evaluations;
+  const contentRows = data.contents || [];
+  const form = modal(esc(subject.name), `<div class="grid kpis compact-kpis">${card("Acadêmico", label(subject.academic_status), "situação na grade")}${card("Conteúdo", `${data.content_progress.completed}/${data.content_progress.total}`, "conteúdos concluídos")}${card("Esforço real", effort.required_study_minutes ? `${effort.effort_progress_percent || 0}%` : "—", effort.required_study_minutes ? `${minutesLabel(effort.real_minutes)} de ${minutesLabel(effort.required_study_minutes)}` : "defina o esforço pessoal")}</div><section class="card nested-card"><div class="bar"><div><span class="tag">PRAZO E ESFORÇO</span><p class="muted">Início ${esc(subject.start_date || "—")} · término ${esc(subject.end_date || "—")} · prazo ${esc(subject.deadline_date || subject.end_date || "—")}</p><p class="muted">Carga institucional ${formatMinutesAsHours(subject.workload_minutes)} · esforço restante ${effort.remaining_minutes == null ? "—" : minutesLabel(effort.remaining_minutes)} · futuro já planejado ${minutesLabel(effort.future_planned_minutes)}</p></div><button class="button" type="button" data-detail-edit-curriculum="${subject.id}">Editar</button></div></section><section class="card nested-card"><div class="bar"><div><span class="tag">CONTEÚDOS</span><h3>${contentRows.length} conteúdo(s)</h3></div><button class="button" type="button" data-detail-add-content="${subject.id}">+ Conteúdo</button></div>${contentRows.map(item => `<div class="list-item row"><div><strong>${esc(item.name)}</strong><div class="muted">${esc(item.unit || "Sem unidade")} · ${label(item.status)} · estimado ${item.estimated_minutes ? minutesLabel(item.estimated_minutes) : "—"} · real ${minutesLabel(item.real_minutes)}</div></div><span><button class="button ghost" type="button" data-detail-content-history="${item.id}">Histórico</button><button class="button ghost" type="button" data-detail-edit-content="${item.id}">Editar</button></span></div>`).join("") || empty("Sem conteúdos", "Adicione os assuntos que você quer estudar antes mesmo de ativar a disciplina.")}</section><section class="card nested-card"><div class="bar"><div><span class="tag">AVALIAÇÕES E NOTAS</span><h3>${evaluation.evaluations.length} avaliação(ões)</h3><p class="muted">Média simples ${evaluation.simple_average_percent == null ? "—" : `${evaluation.simple_average_percent}%`} · ponderada ${evaluation.weighted_average_percent == null ? "—" : `${evaluation.weighted_average_percent}%`}</p></div><button class="button" type="button" data-detail-add-evaluation="${subject.id}">+ Avaliação</button></div>${evaluation.evaluations.map(item => `<div class="list-item row"><div><strong>${esc(item.title)}</strong><div class="muted">${esc(item.date)} · ${label(item.status)} · ${item.score == null ? "sem nota" : `${item.score}/${item.max_score || "—"}`} ${item.contents?.length ? `· ${item.contents.map(content => esc(content.name)).join(", ")}` : ""}</div></div><button class="button ghost" type="button" data-detail-edit-evaluation="${item.id}">Editar</button></div>`).join("") || empty("Sem avaliações", "Cadastre provas, trabalhos e notas desta disciplina.")}</section><div class="form-actions"><button class="button ghost" type="button" data-detail-timeline="${subject.id}">Linha do tempo</button></div>`, null);
+  $(".button.primary", form)?.remove(); $(".form-actions", form)?.insertAdjacentHTML("beforeend", '<button class="button primary" type="button" data-close>Fechar</button>');
+  form.dataset.curriculumContents = JSON.stringify(contentRows);
+  form.dataset.curriculumId = String(subject.id);
+  if (opener) window.setTimeout(() => $("[data-close]", form)?.focus(), 0);
+}
+
+async function openCurriculumTimeline(id) {
+  const rows = await api(`/curriculum/${id}/timeline`);
+  const form = modal("Linha do tempo da disciplina", `<section class="stack">${rows.map(row => `<div class="list-item"><strong>${esc(row.title)}</strong><div class="muted">${esc(row.date)}${row.details ? ` · ${esc(row.details)}` : ""}</div></div>`).join("") || empty("Sem eventos", "Os próximos estudos, conteúdos e avaliações aparecerão aqui.")}</section>`, null);
+  $(".button.primary", form)?.remove(); $(".form-actions", form)?.insertAdjacentHTML("beforeend", '<button class="button primary" type="button" data-close>Fechar</button>');
+}
+
+async function openCurriculumDetail(id, opener = null) {
+  const data = await api(`/curriculum/${id}`);
+  const subject = data.curriculum;
+  const effort = data.effort;
+  const evaluation = data.evaluations;
+  const contentRows = data.contents || [];
+  const byUnit = contentRows.reduce((all, item) => {
+    const key = item.unit || "Sem unidade";
+    (all.get(key) || all.set(key, []).get(key)).push(item);
+    return all;
+  }, new Map());
+  const contentsMarkup = [...byUnit.entries()].map(([unit, items]) => `<section class="content-unit"><h4>${esc(unit)} <span>${items.length}</span></h4>${items.map(item => `<div class="list-item row"><div><strong>${esc(item.name)}</strong><div class="muted">${label(item.status)} · estimado ${item.estimated_minutes ? minutesLabel(item.estimated_minutes) : "—"} · real ${minutesLabel(item.real_minutes)} · ${item.session_count || 0} sessão(ões) · última atividade ${esc(item.last_session_date || "—")}</div>${item.description ? `<div class="field-help">${esc(item.description)}</div>` : ""}</div><span class="action-group"><button class="button ghost" type="button" data-detail-content-history="${item.id}">Histórico</button><button class="button ghost" type="button" data-detail-edit-content="${item.id}">Editar</button><button class="button ghost" type="button" data-detail-archive-content="${item.id}">Arquivar</button><button class="button danger" type="button" data-detail-delete-content="${item.id}" data-detail-content-name="${esc(item.name)}">Excluir</button></span></div>`).join("")}</section>`).join("") || empty("Sem conteúdos", "Adicione os assuntos que você quer estudar antes mesmo de ativar a disciplina.");
+  const form = modal(esc(subject.name), `<div class="grid kpis compact-kpis">${card("Acadêmico", label(subject.academic_status), "situação na grade")}${card("Conteúdo", `${data.content_progress.completed}/${data.content_progress.total}`, "conteúdos concluídos")}${card("Esforço real", effort.required_study_minutes ? `${effort.effort_progress_percent || 0}%` : "—", effort.required_study_minutes ? `${minutesLabel(effort.real_minutes)} de ${minutesLabel(effort.required_study_minutes)}` : "defina o esforço pessoal")}</div><section class="card nested-card"><div class="bar"><div><span class="tag">PRAZO E ESFORÇO</span><p class="muted">Início ${esc(subject.start_date || "—")} · término ${esc(subject.end_date || "—")} · prazo ${esc(subject.deadline_date || subject.end_date || "—")}</p><p class="muted">Carga institucional ${formatMinutesAsHours(subject.workload_minutes)} · faltam ${effort.remaining_minutes == null ? "—" : minutesLabel(effort.remaining_minutes)} · futuro já planejado ${minutesLabel(effort.future_planned_minutes)} · não alocado ${effort.unallocated_minutes == null ? "—" : minutesLabel(effort.unallocated_minutes)}</p></div><button class="button" type="button" data-detail-edit-curriculum="${subject.id}">Editar</button></div></section><section class="card nested-card"><div class="bar"><div><span class="tag">CONTEÚDOS</span><h3>${contentRows.length} conteúdo(s)</h3><p class="muted">A mesma fonte aparece no planejamento, foco e histórico — não é criada uma cópia ao ativar a disciplina.</p></div><button class="button" type="button" data-detail-add-content="${subject.id}">+ Conteúdo</button></div>${contentsMarkup}</section><section class="card nested-card"><div class="bar"><div><span class="tag">AVALIAÇÕES E NOTAS</span><h3>${evaluation.evaluations.length} avaliação(ões)</h3><p class="muted">Média simples ${evaluation.simple_average_percent == null ? "—" : `${evaluation.simple_average_percent}%`} · ponderada ${evaluation.weighted_average_percent == null ? "—" : `${evaluation.weighted_average_percent}%`}${evaluation.minimum_grade == null ? "" : ` · mínimo ${evaluation.minimum_grade}`}</p></div><button class="button" type="button" data-detail-add-evaluation="${subject.id}">+ Avaliação</button></div>${evaluation.overdue?.length ? `<p class="planning-deficit">${evaluation.overdue.length} avaliação(ões) com prazo vencido.</p>` : ""}${evaluation.evaluations.map(item => `<div class="list-item row"><div><strong>${esc(item.title)}</strong><div class="muted">${esc(item.date)}${item.delivery_date ? ` · entrega ${esc(item.delivery_date)}` : ""} · ${label(item.status)} · ${item.score == null ? "sem nota" : `${item.score}/${item.max_score || "—"}`} ${item.contents?.length ? `· ${item.contents.map(content => esc(content.name)).join(", ")}` : ""}</div></div><span class="action-group"><button class="button ghost" type="button" data-detail-edit-evaluation="${item.id}">Editar</button><button class="button danger" type="button" data-detail-delete-evaluation="${item.id}" data-detail-evaluation-name="${esc(item.title)}">Excluir</button></span></div>`).join("") || empty("Sem avaliações", "Cadastre provas, trabalhos e notas desta disciplina.")}</section><div class="form-actions"><button class="button ghost" type="button" data-detail-timeline="${subject.id}">Linha do tempo</button></div>`, null);
+  $(".button.primary", form)?.remove();
+  $(".form-actions", form)?.insertAdjacentHTML("beforeend", '<button class="button primary" type="button" data-close>Fechar</button>');
+  form.dataset.curriculumContents = JSON.stringify(contentRows);
+  form.dataset.curriculumId = String(subject.id);
+  if (data.archived_contents?.length) {
+    const contentPanel = form.querySelectorAll(".nested-card")[1];
+    contentPanel?.insertAdjacentHTML("beforeend", `<details class="archived-content-list"><summary>${data.archived_contents.length} conteúdo(s) arquivado(s)</summary>${data.archived_contents.map(item => `<div class="list-item row"><span>${esc(item.name)}</span><button type="button" class="button ghost" data-detail-restore-content="${item.id}">Restaurar</button></div>`).join("")}</details>`);
+  }
+  if (opener) window.setTimeout(() => $("[data-close]", form)?.focus(), 0);
+}
+
+function curriculumActionsMarkup(row, formation = {}) {
+  const formationArchived = Boolean(formation?.archived_at);
   if (formationArchived) return `<div class="action-unavailable"><span>Restaure a formação para alterar esta disciplina.</span><button class="button ghost" data-restore-formation="${formation.id}">Restaurar formação</button></div>`;
   const review = row.review_status || "none";
   const reviewAction = review === "none" ? "Marcar para revisar" : review === "reviewed" ? "Reabrir revisão" : "Editar revisão";
   const canAddStudy = !row.active_study_id && ["available", "in_progress"].includes(row.academic_status) && !curriculumIsArchived(row) && !isStructuralCurriculum(row);
+  const missingStudyLink = row.academic_status === "in_progress" && !row.active_study_id && !curriculumIsArchived(row) && !isStructuralCurriculum(row);
   const addStudyReason = isStructuralCurriculum(row) ? "Linha estrutural não pode entrar nos estudos atuais." : curriculumIsArchived(row) ? "Restaure a disciplina antes de adicionar aos estudos." : "A disciplina precisa estar disponível ou em andamento para entrar nos estudos atuais.";
-  return `<details class="action-menu"><summary>Ações</summary><div class="action-menu-content"><button class="button" data-curriculum-action="edit" data-curriculum-id="${row.id}">Editar</button><button class="button" data-curriculum-action="status" data-curriculum-id="${row.id}">Alterar estado acadêmico</button><button class="button" data-curriculum-action="review" data-curriculum-id="${row.id}">${reviewAction}</button>${review !== "none" ? `<button class="button ghost" data-curriculum-action="clear-review" data-curriculum-id="${row.id}">Retirar da revisão</button>` : ""}${row.active_study_id ? `<a class="button" href="/studies?study_filter=all&selected=${row.active_study_id}">Abrir estudo vinculado</a><button class="button" data-study-remove-current="${row.active_study_id}">Encerrar estudo vinculado</button>` : canAddStudy ? `<button class="button" data-add-study="${row.id}">Adicionar aos estudos atuais</button>` : `<p class="action-explanation">${esc(addStudyReason)}</p>`}${curriculumIsArchived(row) ? `<button class="button primary" data-curriculum-action="restore" data-curriculum-id="${row.id}">Restaurar disciplina</button>` : `<button class="button" data-curriculum-action="archive" data-curriculum-id="${row.id}">Arquivar disciplina</button>`}<button class="button ghost" data-curriculum-action="dependencies" data-curriculum-id="${row.id}">Consultar dependências</button><button class="button danger" data-curriculum-action="destroy" data-curriculum-id="${row.id}">Excluir definitivamente</button></div></details>`;
+  return `<details class="action-menu"><summary>Ações</summary><div class="action-menu-content">${missingStudyLink ? '<p class="action-explanation"><strong>Em andamento, mas sem estudo atual.</strong> Vincule-a para incluir tópicos, meta e planejamento.</p>' : ""}<button class="button" data-curriculum-action="details" data-curriculum-id="${row.id}">Conteúdos e avaliações</button><button class="button" data-curriculum-action="edit" data-curriculum-id="${row.id}">Editar</button><button class="button" data-curriculum-action="status" data-curriculum-id="${row.id}">Alterar estado acadêmico</button><button class="button" data-curriculum-action="review" data-curriculum-id="${row.id}">${reviewAction}</button>${review !== "none" ? `<button class="button ghost" data-curriculum-action="clear-review" data-curriculum-id="${row.id}">Retirar da revisão</button>` : ""}${row.active_study_id ? `<a class="button" href="/studies?study_filter=all&selected=${row.active_study_id}&panel=topics">Abrir tópicos do estudo</a><button class="button" data-study-remove-current="${row.active_study_id}">Encerrar estudo vinculado</button>` : canAddStudy ? `<button class="button" data-add-study="${row.id}" data-add-study-formation="${formation.id}">${missingStudyLink ? "Vincular aos estudos atuais" : "Iniciar estudo"}</button>` : `<p class="action-explanation">${esc(addStudyReason)}</p>`}${curriculumIsArchived(row) ? `<button class="button primary" data-curriculum-action="restore" data-curriculum-id="${row.id}">Restaurar disciplina</button>` : `<button class="button" data-curriculum-action="archive" data-curriculum-id="${row.id}">Arquivar disciplina</button>`}<button class="button ghost" data-curriculum-action="dependencies" data-curriculum-id="${row.id}">Consultar dependências</button><button class="button danger" data-curriculum-action="destroy" data-curriculum-id="${row.id}">Excluir definitivamente</button></div></details>`;
 }
 
-function curriculumSectionsMarkup(rows) {
+function curriculumTableMarkup(key, title, rows, formation) {
+  const groupId = `curriculum-group-${key}`;
+  const panelId = `${groupId}-panel`;
+  const queryActive = Boolean(curriculumView.q.trim() || curriculumView.academicStatus);
+  const open = queryActive ? rows.length > 0 : curriculumView.openGroups.has(key) ? curriculumView.openGroups.get(key) : ["in_progress", "available"].includes(key);
+  const rowMarkup = rows.map(row => {
+    const dates = `${row.start_date || "—"} → ${row.end_date || "—"}${row.deadline_date ? `<br><span class="muted">prazo ${esc(row.deadline_date)}</span>` : ""}`;
+    const effort = row.required_study_minutes ? `${formatMinutesAsHours(row.required_study_minutes)}<br><span class="muted">base ${row.priority_base || 3}/5</span>` : '<span class="muted">não definido</span>';
+    const linkedStudy = row.active_study_id ? '<span class="field-help">Estudo atual vinculado</span>' : row.academic_status === "in_progress" ? '<span class="curriculum-link-missing">Sem estudo atual vinculado</span>' : "";
+    return `<tr class="${curriculumIsArchived(row) ? "is-archived" : ""} ${isStructuralCurriculum(row) ? "is-structural" : ""}"><td><input type="checkbox" data-curriculum-select="${row.id}" ${curriculumView.selectedIds.has(row.id) ? "checked" : ""} aria-label="Selecionar ${esc(row.name)}"></td><td><strong>${esc(row.name)}</strong><div class="muted">${isStructuralCurriculum(row) ? "Linha estrutural · " : ""}${esc(row.code || "Sem código")} · ${formatMinutesAsHours(row.workload_minutes)} · ordem ${row.sort_order ?? 0}</div></td><td>${esc(row.period || "—")}</td><td class="muted">${dates}</td><td>${effort}</td><td><span class="status status-${esc(row.academic_status)}">${label(row.academic_status)}</span>${linkedStudy}</td><td><span class="review-status ${row.review_status || "none"}">${curriculumReviewLabel(row.review_status)}</span>${row.review_priority ? `<div class="muted">prioridade ${row.review_priority}/5</div>` : ""}</td><td class="muted">${esc(row.updated_at || row.created_at || "—")}</td><td>${curriculumActionsMarkup(row, formation)}</td></tr>`;
+  }).join("");
+  return `<details class="curriculum-section curriculum-status-group" data-curriculum-group="${key}" ${open ? "open" : ""}><summary id="${groupId}" aria-controls="${panelId}" aria-expanded="${open}"><span>${esc(title)}</span><span class="status-count" aria-label="${rows.length} disciplinas">${rows.length}</span></summary><div id="${panelId}" class="curriculum-table-region" data-curriculum-table-region><div class="curriculum-table-scroll-top" aria-hidden="true"><div></div></div><div class="table-wrap curriculum-table-wrap" data-curriculum-table-wrap tabindex="0" role="region" aria-labelledby="${groupId}"><table class="table curriculum-table"><caption class="sr-only">${esc(title)} da grade curricular</caption><thead><tr><th><label class="select-all-label"><input class="curriculum-select-all" type="checkbox" ${rows.length && rows.every(row => curriculumView.selectedIds.has(row.id)) ? "checked" : ""} aria-label="Selecionar todas as disciplinas visíveis em ${esc(title)}"> Selecionar</label></th><th>Disciplina</th><th>Período</th><th>Datas / prazo</th><th>Esforço</th><th>Estado acadêmico</th><th>Revisão</th><th>Atualização</th><th>Ações</th></tr></thead><tbody>${rowMarkup}</tbody></table></div></div></details>`;
+}
+
+function curriculumSectionsMarkup(rows, formation = {}) {
   const groups = [
-    ["in_progress", "Em andamento", row => row.academic_status === "in_progress"],
-    ["review", "Para revisar", row => (row.review_status || "none") !== "none"],
-    ["completed", "Concluídas", row => row.academic_status === "completed"],
-    ["pending", "Pendentes", row => !isStructuralCurriculum(row) && !["completed", "exempted"].includes(row.academic_status)],
+    ["in_progress", "Em andamento", row => !curriculumIsArchived(row) && !isStructuralCurriculum(row) && row.academic_status === "in_progress"],
+    ["available", "Disponíveis", row => !curriculumIsArchived(row) && !isStructuralCurriculum(row) && row.academic_status === "available"],
+    ["not_available", "Futuras / não disponíveis", row => !curriculumIsArchived(row) && !isStructuralCurriculum(row) && row.academic_status === "not_available"],
+    ["locked", "Bloqueadas", row => !curriculumIsArchived(row) && !isStructuralCurriculum(row) && row.academic_status === "locked"],
+    ["completed", "Concluídas", row => !curriculumIsArchived(row) && !isStructuralCurriculum(row) && row.academic_status === "completed"],
+    ["failed", "Reprovadas", row => !curriculumIsArchived(row) && !isStructuralCurriculum(row) && row.academic_status === "failed"],
+    ["exempted", "Dispensadas", row => !curriculumIsArchived(row) && !isStructuralCurriculum(row) && row.academic_status === "exempted"],
+    ["structural", "Linhas estruturais", row => !curriculumIsArchived(row) && isStructuralCurriculum(row)],
+    ["archived", "Arquivadas", row => curriculumIsArchived(row)],
   ];
-  return `<section class="curriculum-sections" aria-label="Resumo da grade por situação">${groups.map(([key, title, predicate]) => {
-    const items = rows.filter(predicate);
-    return `<details class="curriculum-section" ${key === "in_progress" ? "open" : ""}><summary><span>${title}</span><span class="status-count">${items.length}</span></summary>${items.length ? `<ul>${items.slice(0, 6).map(item => `<li><strong>${esc(item.name)}</strong><span>${esc(item.period || "Sem período")} · ${label(item.academic_status)}${(item.review_status || "none") !== "none" ? ` · ${curriculumReviewLabel(item.review_status)}` : ""}</span></li>`).join("")}${items.length > 6 ? `<li class="muted">e mais ${items.length - 6} disciplina(s) na tabela.</li>` : ""}</ul>` : '<p class="muted">Nenhuma disciplina nesta situação com os filtros atuais.</p>'}</details>`;
-  }).join("")}</section>`;
+  const visibleGroups = groups.map(([key, title, predicate]) => [key, title, rows.filter(predicate)]).filter(([key, , items]) => items.length && (key !== "archived" || curriculumView.visibility !== "active"));
+  if (!visibleGroups.length) return empty("Nenhuma disciplina encontrada", curriculumView.q.trim() ? `Não há resultados para “${curriculumView.q.trim()}”.` : "Ajuste os filtros ou cadastre uma nova disciplina.", '<button class="button ghost" type="button" data-clear-curriculum-filters>Limpar filtros</button>');
+  return `<section class="curriculum-sections" aria-label="Grade curricular por estado acadêmico">${visibleGroups.map(([key, title, items]) => curriculumTableMarkup(key, title, items, formation)).join("")}</section>`;
+}
+
+function syncCurriculumTableScrollers(root = app) {
+  root.querySelectorAll("[data-curriculum-table-region]").forEach(region => {
+    const top = $(".curriculum-table-scroll-top", region);
+    const bottom = $("[data-curriculum-table-wrap]", region);
+    const spacer = top?.firstElementChild;
+    if (!top || !bottom || !spacer) return;
+    const syncSize = () => { spacer.style.width = `${bottom.scrollWidth}px`; top.hidden = bottom.scrollWidth <= bottom.clientWidth + 1; };
+    let syncing = false;
+    top.addEventListener("scroll", () => { if (syncing) return; syncing = true; bottom.scrollLeft = top.scrollLeft; syncing = false; });
+    bottom.addEventListener("scroll", () => { if (syncing) return; syncing = true; top.scrollLeft = bottom.scrollLeft; syncing = false; });
+    syncSize();
+    window.addEventListener("resize", syncSize, {once:true});
+  });
+}
+
+function renderCurriculumResults(formation, allRows) {
+  const root = $("#curriculum-results", app);
+  const rows = curriculumLocalFilter(allRows);
+  if (!root) return rows;
+  root.innerHTML = `<p class="curriculum-result-count" aria-live="polite">${rows.length} resultado(s) de ${allRows.length}. A revisão continua visível dentro de cada disciplina; ela não altera o estado acadêmico.</p>${curriculumQuickFilters()}<div class="curriculum-result-actions"><button type="button" class="button ghost" data-clear-curriculum-filters>Limpar filtros</button></div>${curriculumBulkToolbar(formation.id, rows)}${curriculumSectionsMarkup(rows, formation)}`;
+  root.querySelectorAll("[data-curriculum-quick]").forEach(button => button.addEventListener("click", () => {
+    const nextQuick = button.dataset.curriculumQuick;
+    if (nextQuick === "archived" && curriculumView.visibility !== "archived") { curriculumView.quick = nextQuick; curriculumView.visibility = "archived"; return render(); }
+    if (curriculumView.quick === "archived" && curriculumView.visibility === "archived") curriculumView.visibility = "active";
+    curriculumView.quick = nextQuick;
+    renderCurriculumResults(formation, allRows);
+  }));
+  root.querySelectorAll("[data-clear-curriculum-filters]").forEach(button => button.addEventListener("click", () => {
+    curriculumView.q = ""; curriculumView.period = ""; curriculumView.academicStatus = ""; curriculumView.reviewStatus = ""; curriculumView.quick = "all"; curriculumView.sort = "period";
+    [["#curriculum-q", ""], ["#curriculum-period", ""], ["#curriculum-status", ""], ["#curriculum-review", ""], ["#curriculum-sort", "period"]].forEach(([selector, value]) => { const control = $(selector, app); if (control) control.value = value; });
+    renderCurriculumResults(formation, allRows);
+    $("#curriculum-q", app)?.focus();
+  }));
+  root.querySelectorAll(".curriculum-select-all").forEach(input => input.addEventListener("change", event => {
+    const section = event.target.closest(".curriculum-status-group");
+    const ids = [...section.querySelectorAll("[data-curriculum-select]")].map(control => Number(control.dataset.curriculumSelect));
+    ids.forEach(id => event.target.checked ? curriculumView.selectedIds.add(id) : curriculumView.selectedIds.delete(id));
+    renderCurriculumResults(formation, allRows);
+  }));
+  root.querySelectorAll("[data-curriculum-select]").forEach(input => input.addEventListener("change", event => {
+    const id = Number(event.target.dataset.curriculumSelect);
+    event.target.checked ? curriculumView.selectedIds.add(id) : curriculumView.selectedIds.delete(id);
+    renderCurriculumResults(formation, allRows);
+  }));
+  root.querySelectorAll("[data-curriculum-group]").forEach(group => group.addEventListener("toggle", () => {
+    curriculumView.openGroups.set(group.dataset.curriculumGroup, group.open);
+    group.querySelector("summary")?.setAttribute("aria-expanded", String(group.open));
+  }));
+  syncCurriculumTableScrollers(root);
+  return rows;
 }
 
 function curriculumBulkToolbar(formationId, rows) {
@@ -731,20 +1271,23 @@ async function openStructuralCandidates(formationId) {
 
 async function renderFormations() {
   const renderRevision = ++formationRenderRevision;
+  let drawRevision = 0;
   const formations = await api(`/formations?state=${formationView.filter}`);
   let selected = formations.find(item => item.id === formationView.selectedId) || formations[0] || null;
   formationView.selectedId = selected?.id || null;
   if (curriculumView.formationId !== selected?.id) {
     curriculumView.formationId = selected?.id || null;
     curriculumView.selectedIds.clear();
+    curriculumView.openGroups.clear();
   }
   syncFormationLocation();
 
   const draw = async () => {
+    const currentDraw = ++drawRevision;
     const requestedSelection = selected;
-    const parameters = new URLSearchParams({visibility:curriculumView.visibility, q:curriculumView.q, period:curriculumView.period, academic_status:curriculumView.academicStatus, review_status:curriculumView.reviewStatus, quick:curriculumView.quick, sort:curriculumView.sort});
+    const parameters = new URLSearchParams({visibility:curriculumView.visibility});
     const management = requestedSelection ? await api(`/formations/${requestedSelection.id}/curriculum/management?${parameters}`) : {items:[], summary:{}, periods:[]};
-    if (renderRevision !== formationRenderRevision || requestedSelection?.id !== selected?.id) return;
+    if (currentDraw !== drawRevision || renderRevision !== formationRenderRevision || requestedSelection?.id !== selected?.id) return;
     const allRows = asRows(management);
     const rows = curriculumLocalFilter(allRows);
     curriculumView.rows = allRows;
@@ -756,20 +1299,106 @@ async function renderFormations() {
     const progressCards = `<section class="academic-progress"><div class="academic-progress-heading"><div><span class="tag">PROGRESSO ACADÊMICO</span><h3>${summary.percent}% concluído</h3><p>Concluídas e dispensadas contam para a grade; revisão é um indicador separado.</p></div><strong>${summary.completed + summary.exempted}/${summary.total}</strong></div><div class="progress progress-large" aria-label="${summary.percent}% do currículo concluído"><i style="width:${summary.percent}%"></i></div><div class="academic-metrics"><span><strong>${summary.completed}</strong> concluídas</span><span><strong>${summary.exempted}</strong> dispensadas</span><span><strong>${summary.inProgress}</strong> em andamento</span><span><strong>${summary.pending}</strong> pendentes</span><span><strong>${summary.review}</strong> para revisar</span></div>${periodSummary.length ? `<details class="period-progress" open><summary>Progresso por período / módulo</summary><div>${periodSummary.map(period => `<article><div class="row"><strong>${esc(period.period)}</strong><span>${clampPercent(period.academic_progress_percent)}%</span></div><div class="progress"><i style="width:${clampPercent(period.academic_progress_percent)}%"></i></div><span>${period.completed + period.exempted}/${period.total_subjects} concluídas ou dispensadas · ${period.pending} pendentes · ${period.review} para revisar</span></article>`).join("")}</div></details>` : ""}</section>`;
     const curriculumActions = isArchived ? `<div class="action-unavailable"><span>Restaure a formação para alterar a grade.</span><button class="button primary" data-restore-formation="${selected.id}">Restaurar formação</button></div>` : `<div class="action-group"><button class="button" data-add-subject>+ Adicionar disciplina</button><button class="button ghost" data-import>Importar grade</button><button class="button ghost" data-open-duplicate-review="${selected.id}">Revisar duplicidades</button><button class="button ghost" data-open-structural-candidates="${selected.id}">Linhas estruturais</button></div>`;
     app.innerHTML = `<div class="bar"><div><label class="inline-filter">Mostrar <select id="formation-filter"><option value="active" ${formationView.filter === "active" ? "selected" : ""}>Ativas</option><option value="archived" ${formationView.filter === "archived" ? "selected" : ""}>Arquivadas</option><option value="all" ${formationView.filter === "all" ? "selected" : ""}>Todas</option></select></label><span class="muted">${formations.length} formação(ões)</span></div><button class="button primary" data-new-formation>Nova formação</button></div><div class="grid formation-layout"><aside class="stack">${formations.map(item => { const progress = curriculumSummary([], item.academic_progress || item.progress || item, item); return `<article class="card formation-select ${item.id === selected?.id ? "selected" : ""}" data-formation="${item.id}" data-select-formation="${item.id}" role="button" aria-label="Selecionar ${esc(item.name)}${item.id === selected?.id ? " (selecionada)" : ""}" tabindex="0"><div class="row"><div><strong>${esc(item.name)}</strong><div class="muted">${esc(item.institution || "Instituição não informada")}</div><div class="muted">${item.curriculum_count ?? progress.total} disciplina(s) · ${item.active_studies || 0} estudo(s) ativo(s)</div><div class="mini-progress"><i style="width:${progress.percent}%"></i><span>${progress.percent}% acadêmico</span></div></div><span class="status">${label(item.status)}</span></div></article>`; }).join("") || empty("Nenhuma formação nesta lista", formationView.filter === "archived" ? "Não há formações arquivadas." : "Crie uma formação para montar sua grade.")}</aside><section class="stack">${selected ? `<section class="card"><div class="bar"><div><h2>${esc(selected.name)}</h2><p class="muted">${esc(selected.institution || "Instituição não informada")} · ${esc(selected.modality || "Modalidade não informada")}</p></div><div class="action-group">${isArchived ? `<button class="button primary" data-restore-formation="${selected.id}">Restaurar</button>` : `<button class="button" data-edit-formation="${selected.id}">Editar formação</button><button class="button" data-archive-formation="${selected.id}">Arquivar</button>`}<button class="button ghost" data-formation-dependencies="${selected.id}">Dependências</button><button class="button danger" data-delete-formation="${selected.id}">Excluir</button></div></div><div class="formation-details"><span class="tag">Prioridade de foco ${selected.focus_priority}/5</span>${selected.start_date || selected.expected_end_date ? `<span class="muted">${esc(selected.start_date || "—")} → ${esc(selected.expected_end_date || "—")}</span>` : ""}</div>${progressCards}${knownDependencies ? `<p class="formation-delete-hint" role="status"><strong>A exclusão definitiva exige confirmação.</strong> Esta formação possui ${knownDependencies}. Consulte as dependências para ver a prévia completa ou use Arquivar para preservar o histórico.</p>` : ""}</section><section class="card curriculum-management"><div class="bar"><div><span class="tag">CENTRAL DE DISCIPLINAS</span><h2>Grade curricular</h2><p class="muted">${rows.length} resultado(s) de ${allRows.length}. Filtros e progresso usam as informações devolvidas pelo servidor.</p></div>${curriculumActions}</div><section class="curriculum-controls" aria-label="Filtros da grade"><label>Pesquisar<input id="curriculum-q" value="${esc(curriculumView.q)}" placeholder="Nome ou código"></label><label>Período / módulo<select id="curriculum-period"><option value="">Todos</option>${periods.map(value => `<option value="${esc(value)}" ${curriculumView.period === value ? "selected" : ""}>${esc(value)}</option>`).join("")}</select></label><label>Estado acadêmico<select id="curriculum-status"><option value="">Todos</option>${curriculumAcademicStatuses.map(value => `<option value="${value}" ${curriculumView.academicStatus === value ? "selected" : ""}>${label(value)}</option>`).join("")}</select></label><label>Revisão<select id="curriculum-review"><option value="">Todas</option>${curriculumReviewStatuses.map(value => `<option value="${value}" ${curriculumView.reviewStatus === value ? "selected" : ""}>${curriculumReviewLabel(value)}</option>`).join("")}</select></label><label>Visibilidade<select id="curriculum-visibility"><option value="active" ${curriculumView.visibility === "active" ? "selected" : ""}>Ativas</option><option value="archived" ${curriculumView.visibility === "archived" ? "selected" : ""}>Arquivadas</option><option value="all" ${curriculumView.visibility === "all" ? "selected" : ""}>Todas</option></select></label><label>Ordenar<select id="curriculum-sort"><option value="period" ${curriculumView.sort === "period" ? "selected" : ""}>Período</option><option value="order" ${curriculumView.sort === "order" ? "selected" : ""}>Ordem</option><option value="name" ${curriculumView.sort === "name" ? "selected" : ""}>Nome</option><option value="status" ${curriculumView.sort === "status" ? "selected" : ""}>Status</option><option value="updated" ${curriculumView.sort === "updated" ? "selected" : ""}>Atualização</option></select></label></section>${curriculumQuickFilters()}${curriculumBulkToolbar(selected.id, rows)}${curriculumSectionsMarkup(rows)}<div class="table-wrap"><table class="table curriculum-table"><thead><tr><th><label class="select-all-label"><input id="curriculum-select-all" type="checkbox" ${rows.length && rows.every(row => curriculumView.selectedIds.has(row.id)) ? "checked" : ""} aria-label="Selecionar todas as disciplinas visíveis"> Selecionar</label></th><th>Disciplina</th><th>Período</th><th>Estado acadêmico</th><th>Revisão</th><th>Atualização</th><th>Ações</th></tr></thead><tbody>${rows.map(row => `<tr class="${curriculumIsArchived(row) ? "is-archived" : ""} ${isStructuralCurriculum(row) ? "is-structural" : ""}"><td><input type="checkbox" data-curriculum-select="${row.id}" ${curriculumView.selectedIds.has(row.id) ? "checked" : ""} aria-label="Selecionar ${esc(row.name)}"></td><td><strong>${esc(row.name)}</strong><div class="muted">${isStructuralCurriculum(row) ? "Linha estrutural · " : ""}${esc(row.code || "Sem código")} · ${formatMinutesAsHours(row.workload_minutes)} · ordem ${row.sort_order ?? 0}</div></td><td>${esc(row.period || "—")}</td><td><span class="status status-${esc(row.academic_status)}">${label(row.academic_status)}</span></td><td><span class="review-status ${row.review_status || "none"}">${curriculumReviewLabel(row.review_status)}</span>${row.review_priority ? `<div class="muted">prioridade ${row.review_priority}/5</div>` : ""}</td><td class="muted">${esc(row.updated_at || row.created_at || "—")}</td><td>${curriculumActionsMarkup(row, selected)}</td></tr>`).join("") || `<tr><td colspan="7">${empty("Nenhuma disciplina encontrada", "Ajuste os filtros ou cadastre uma nova disciplina.")}</td></tr>`}</tbody></table></div></section>` : empty("Selecione uma formação", "Escolha um cartão à esquerda ou crie uma nova formação.")}</section></div>`;
+    const curriculumTable = null;
+    if (curriculumTable && rows.length) {
+      const header = $("thead tr", curriculumTable);
+      const periodHeader = header?.children[2];
+      if (periodHeader) {
+        periodHeader.insertAdjacentHTML("afterend", "<th>Datas / prazo</th><th>Esforço</th>");
+      }
+      [...curriculumTable.querySelectorAll("tbody tr")].slice(0, rows.length).forEach((tr, index) => {
+        const row = rows[index];
+        const periodCell = tr.children[2];
+        if (!periodCell) return;
+        const dates = `${row.start_date || "—"} → ${row.end_date || "—"}${row.deadline_date ? `<br><span class=\"muted\">prazo ${esc(row.deadline_date)}</span>` : ""}`;
+        const effort = row.required_study_minutes ? `${formatMinutesAsHours(row.required_study_minutes)}<br><span class=\"muted\">base ${row.priority_base || 3}/5</span>` : "<span class=\"muted\">não definido</span>";
+        periodCell.insertAdjacentHTML("afterend", `<td class="muted">${dates}</td><td>${effort}</td>`);
+      });
+    }
+    $(".formation-delete-hint", app)?.remove();
+    const curriculumManagement = $(".curriculum-management", app);
+    if (curriculumManagement && selected) {
+      curriculumManagement.innerHTML = `<div class="bar"><div><span class="tag">CENTRAL DE DISCIPLINAS</span><h2>Grade curricular</h2><p class="muted">Organize a grade por estado acadêmico. Revisão aparece dentro da disciplina e não cria uma categoria acadêmica paralela.</p></div>${curriculumActions}</div><section class="curriculum-controls" aria-label="Filtros da grade"><label>Pesquisar<input id="curriculum-q" value="${esc(curriculumView.q)}" placeholder="Nome ou código" autocomplete="off"></label><label>Período / módulo<select id="curriculum-period"><option value="">Todos</option>${periods.map(value => `<option value="${esc(value)}" ${curriculumView.period === value ? "selected" : ""}>${esc(value)}</option>`).join("")}</select></label><label>Estado acadêmico<select id="curriculum-status"><option value="">Todos</option>${curriculumAcademicStatuses.map(value => `<option value="${value}" ${curriculumView.academicStatus === value ? "selected" : ""}>${label(value)}</option>`).join("")}</select></label><label>Revisão<select id="curriculum-review"><option value="">Todas</option>${curriculumReviewStatuses.map(value => `<option value="${value}" ${curriculumView.reviewStatus === value ? "selected" : ""}>${curriculumReviewLabel(value)}</option>`).join("")}</select></label><label>Visibilidade<select id="curriculum-visibility"><option value="active" ${curriculumView.visibility === "active" ? "selected" : ""}>Ativas</option><option value="archived" ${curriculumView.visibility === "archived" ? "selected" : ""}>Arquivadas</option><option value="all" ${curriculumView.visibility === "all" ? "selected" : ""}>Todas</option></select></label><label>Ordenar<select id="curriculum-sort"><option value="period" ${curriculumView.sort === "period" ? "selected" : ""}>Período</option><option value="order" ${curriculumView.sort === "order" ? "selected" : ""}>Ordem</option><option value="name" ${curriculumView.sort === "name" ? "selected" : ""}>Nome</option><option value="status" ${curriculumView.sort === "status" ? "selected" : ""}>Status</option><option value="updated" ${curriculumView.sort === "updated" ? "selected" : ""}>Atualização</option></select></label></section><div id="curriculum-results"></div>`;
+      renderCurriculumResults(selected, allRows);
+    }
+    const detailStack = $(".formation-layout > section.stack", app);
+    const overviewPanel = detailStack?.querySelector(":scope > section.card:not(.curriculum-management)");
+    const curriculumPanel = detailStack?.querySelector(":scope > .curriculum-management");
+    if (detailStack && overviewPanel && curriculumPanel && selected) {
+      overviewPanel.classList.add("formation-tab-panel");
+      overviewPanel.dataset.formationPanel = "overview";
+      overviewPanel.id = `formation-overview-${selected.id}`;
+      overviewPanel.setAttribute("role", "tabpanel");
+      overviewPanel.setAttribute("aria-labelledby", `formation-tab-overview-${selected.id}`);
+      curriculumPanel.classList.add("formation-tab-panel");
+      curriculumPanel.dataset.formationPanel = "curriculum";
+      curriculumPanel.id = `formation-curriculum-${selected.id}`;
+      curriculumPanel.setAttribute("role", "tabpanel");
+      curriculumPanel.setAttribute("aria-labelledby", `formation-tab-curriculum-${selected.id}`);
+
+      const dependenciesPanel = document.createElement("section");
+      dependenciesPanel.className = "card formation-tab-panel";
+      dependenciesPanel.dataset.formationPanel = "dependencies";
+      dependenciesPanel.id = `formation-dependencies-${selected.id}`;
+      dependenciesPanel.setAttribute("role", "tabpanel");
+      dependenciesPanel.setAttribute("aria-labelledby", `formation-tab-dependencies-${selected.id}`);
+      dependenciesPanel.innerHTML = panelTitle("DEPENDÊNCIAS", "O que depende desta formação", "Consulte a prévia antes de arquivar ou excluir. Nenhum dado é alterado nesta tela.", `<button class="button primary" type="button" data-formation-dependencies="${selected.id}">Consultar dependências</button>`);
+
+      const settingsPanel = document.createElement("section");
+      settingsPanel.className = "card formation-tab-panel formation-settings-card";
+      settingsPanel.dataset.formationPanel = "settings";
+      settingsPanel.id = `formation-settings-${selected.id}`;
+      settingsPanel.setAttribute("role", "tabpanel");
+      settingsPanel.setAttribute("aria-labelledby", `formation-tab-settings-${selected.id}`);
+      settingsPanel.innerHTML = `${panelTitle("CONFIGURAÇÕES", "Gerenciar formação", isArchived ? "A formação está arquivada. Restaure-a para voltar a alterar a grade." : "Alterações de nome, período e prioridade continuam usando os mesmos dados da formação.")}
+        <div class="formation-details"><span class="tag">Prioridade de foco ${selected.focus_priority}/5</span>${selected.start_date || selected.expected_end_date ? `<span class="muted">${esc(selected.start_date || "—")} → ${esc(selected.expected_end_date || "—")}</span>` : ""}</div>
+        <div class="action-group">${isArchived ? `<button class="button primary" type="button" data-restore-formation="${selected.id}">Restaurar formação</button>` : `<button class="button" type="button" data-edit-formation="${selected.id}">Editar formação</button><button class="button" type="button" data-archive-formation="${selected.id}">Arquivar formação</button>`}<button class="button danger" type="button" data-delete-formation="${selected.id}">Excluir formação</button></div>`;
+
+      const tabs = document.createElement("nav");
+      tabs.className = "formation-detail-tabs";
+      tabs.setAttribute("aria-label", "Seções da formação");
+      tabs.setAttribute("role", "tablist");
+      tabs.innerHTML = [["overview", "Visão geral"], ["curriculum", "Grade curricular"], ["dependencies", "Dependências"], ["settings", "Configurações"]].map(([value, text]) => `<button id="formation-tab-${value}-${selected.id}" type="button" role="tab" data-formation-tab="${value}" aria-controls="formation-${value}-${selected.id}" aria-selected="false">${text}</button>`).join("");
+      detailStack.prepend(tabs);
+      detailStack.append(dependenciesPanel, settingsPanel);
+
+      const setFormationTab = tab => {
+        const nextTab = ["overview", "curriculum", "dependencies", "settings"].includes(tab) ? tab : "overview";
+        formationView.tab = nextTab;
+        detailStack.closest(".formation-layout")?.classList.toggle("formation-curriculum-open", nextTab === "curriculum");
+        detailStack.querySelectorAll("[data-formation-panel]").forEach(panel => { panel.hidden = panel.dataset.formationPanel !== nextTab; });
+        tabs.querySelectorAll("[data-formation-tab]").forEach(button => {
+          const active = button.dataset.formationTab === nextTab;
+          button.setAttribute("aria-selected", String(active));
+          button.tabIndex = active ? 0 : -1;
+        });
+        syncFormationLocation();
+      };
+      tabs.querySelectorAll("[data-formation-tab]").forEach(button => button.addEventListener("click", () => setFormationTab(button.dataset.formationTab)));
+      tabs.addEventListener("keydown", event => {
+        const buttons = [...tabs.querySelectorAll("[data-formation-tab]")];
+        const currentIndex = buttons.indexOf(event.target.closest("[data-formation-tab]"));
+        if (currentIndex < 0 || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+        event.preventDefault();
+        const nextIndex = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (currentIndex + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length;
+        const nextButton = buttons[nextIndex];
+        setFormationTab(nextButton.dataset.formationTab);
+        nextButton.focus();
+      });
+      setFormationTab(formationView.tab);
+    }
     $("#formation-filter", app).onchange = event => { formationView.filter = event.target.value; formationView.selectedId = null; syncFormationLocation(); render(); };
     const controlMap = [["#curriculum-q", "q"], ["#curriculum-period", "period"], ["#curriculum-status", "academicStatus"], ["#curriculum-review", "reviewStatus"], ["#curriculum-visibility", "visibility"], ["#curriculum-sort", "sort"]];
-    controlMap.forEach(([selector, key]) => $(selector, app)?.addEventListener(key === "q" ? "input" : "change", event => { curriculumView[key] = event.target.value; if (key === "q") { window.clearTimeout(curriculumView.queryTimer); curriculumView.queryTimer = window.setTimeout(() => draw(), 220); } else draw(); }));
-    app.querySelectorAll("[data-curriculum-quick]").forEach(button => button.addEventListener("click", () => {
-      const nextQuick = button.dataset.curriculumQuick;
-      if (nextQuick === "archived") curriculumView.visibility = "archived";
-      else if (curriculumView.quick === "archived" && curriculumView.visibility === "archived") curriculumView.visibility = "active";
-      curriculumView.quick = nextQuick;
-      draw();
+    controlMap.forEach(([selector, key]) => $(selector, app)?.addEventListener(key === "q" ? "input" : "change", event => {
+      curriculumView[key] = event.target.value;
+      if (key === "visibility") return draw();
+      if (key === "q") {
+        window.clearTimeout(curriculumView.queryTimer);
+        curriculumView.queryTimer = window.setTimeout(() => renderCurriculumResults(selected, allRows), 120);
+      } else renderCurriculumResults(selected, allRows);
     }));
-    $("#curriculum-select-all", app)?.addEventListener("change", event => { rows.forEach(row => event.target.checked ? curriculumView.selectedIds.add(row.id) : curriculumView.selectedIds.delete(row.id)); draw(); });
-    app.querySelectorAll("[data-curriculum-select]").forEach(input => input.addEventListener("change", event => { const id = Number(event.target.dataset.curriculumSelect); event.target.checked ? curriculumView.selectedIds.add(id) : curriculumView.selectedIds.delete(id); draw(); }));
     app.querySelectorAll("[data-select-formation]").forEach(card => {
-      const select = () => { selected = formations.find(item => item.id === Number(card.dataset.selectFormation)); formationView.selectedId = selected?.id || null; curriculumView.formationId = selected?.id || null; curriculumView.selectedIds.clear(); syncFormationLocation(); draw(); };
+      const select = () => { selected = formations.find(item => item.id === Number(card.dataset.selectFormation)); formationView.selectedId = selected?.id || null; formationView.tab = "overview"; curriculumView.formationId = selected?.id || null; curriculumView.selectedIds.clear(); curriculumView.openGroups.clear(); syncFormationLocation(); draw(); };
       card.onclick = event => { if (!event.target.closest("button, a, input, select")) select(); };
       card.onkeydown = event => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); select(); } };
     });
@@ -791,7 +1420,44 @@ function formationEditor(current = null) {
   return form;
 }
 
-function curriculumEditor(formationId, current = null) { modal(current ? "Editar disciplina" : "Adicionar disciplina", `<label>Nome<input name="name" value="${esc(current?.name || "")}" required></label><label>Código<input name="code" value="${esc(current?.code || "")}"></label><label>Período / módulo<input name="period" value="${esc(current?.period || "")}"></label><label>Carga horária (min)<input name="workload_minutes" type="number" min="1" value="${current?.workload_minutes || ""}"></label><label>Ordem<input name="sort_order" type="number" min="0" value="${current?.sort_order || 0}"></label><label>Status<select name="academic_status">${["not_available","available","in_progress","completed","failed","locked","exempted"].map(key => `<option value="${key}" ${key===current?.academic_status?"selected":""}>${label(key)}</option>`).join("")}</select></label>`, async values => { values.workload_minutes = values.workload_minutes ? Number(values.workload_minutes) : null; values.sort_order = Number(values.sort_order); if (current) await api(`/curriculum/${current.id}`,{method:"PATCH",body:JSON.stringify(values)}); else await api(`/formations/${formationId}/curriculum`,{method:"POST",body:JSON.stringify(values)}); }); }
+function curriculumEditor(formationId, current = null) {
+  const existingEffort = current?.required_study_minutes || "";
+  const form = modal(current ? "Editar disciplina" : "Adicionar disciplina", `
+    <label>Nome<input name="name" value="${esc(current?.name || "")}" required></label>
+    <label>Código<input name="code" value="${esc(current?.code || "")}"></label>
+    <label>Período / módulo<input name="period" value="${esc(current?.period || "")}"></label>
+    <label>Data de início<input name="start_date" type="date" value="${esc(current?.start_date || "")}"></label>
+    <label>Término da oferta<input name="end_date" type="date" value="${esc(current?.end_date || "")}"></label>
+    <label>Prazo principal / entrega<input name="deadline_date" type="date" value="${esc(current?.deadline_date || "")}"></label>
+    <label>Carga da instituição (min)<span class="field-help">Informação da grade; não é contabilizada como estudo pessoal.</span><input name="workload_minutes" type="number" min="1" value="${current?.workload_minutes || ""}"></label>
+    <fieldset class="choice-list"><legend>Esforço pessoal necessário</legend><label><input type="radio" name="effort_mode" value="manual" ${existingEffort || !current ? "checked" : ""}> Definir manualmente</label><label><input type="radio" name="effort_mode" value="workload" ${!existingEffort && current?.workload_minutes ? "checked" : ""}> Usar a carga da grade como estimativa inicial</label></fieldset>
+    <label>Esforço pessoal (min)<input name="required_study_minutes" type="number" min="1" value="${existingEffort}"></label>
+    <label>Prioridade-base (1 a 5)<input name="priority_base" type="number" min="1" max="5" value="${current?.priority_base || 3}"></label>
+    <label>Duração preferida do bloco (min)<input name="preferred_block_minutes" type="number" min="1" value="${current?.preferred_block_minutes || ""}"></label>
+    <label class="toggle-row"><input name="planning_enabled" type="checkbox" ${current?.planning_enabled ? "checked" : ""}> Incluir no planejamento quando estiver disponível <span class="field-help">A disciplina precisa continuar nos Estudos atuais para receber blocos.</span></label>
+    ${weekdaysInputs(current?.allowed_weekdays)}
+    <label>Nota mínima para aprovação<input name="minimum_grade" type="number" min="0" step="0.01" value="${current?.minimum_grade ?? ""}"></label>
+    <label>Ordem<input name="sort_order" type="number" min="0" value="${current?.sort_order || 0}"></label>
+    <label>Status<select name="academic_status">${["not_available","available","in_progress","completed","failed","locked","exempted"].map(key => `<option value="${key}" ${key===current?.academic_status?"selected":""}>${label(key)}</option>`).join("")}</select></label>
+    <label>Observações<textarea name="notes">${esc(current?.notes || "")}</textarea></label>`,
+  async (values, node) => {
+    values.workload_minutes = values.workload_minutes ? Number(values.workload_minutes) : null;
+    values.required_study_minutes = values.effort_mode === "workload" ? values.workload_minutes : values.required_study_minutes ? Number(values.required_study_minutes) : null;
+    values.priority_base = Number(values.priority_base || 3);
+    values.preferred_block_minutes = values.preferred_block_minutes ? Number(values.preferred_block_minutes) : null;
+    values.minimum_grade = values.minimum_grade === "" ? null : Number(values.minimum_grade);
+    values.sort_order = Number(values.sort_order);
+    values.planning_enabled = node.querySelector('[name="planning_enabled"]').checked;
+    values.allowed_weekdays = checkedWeekdays(node);
+    delete values.effort_mode;
+    if (current) await api(`/curriculum/${current.id}`, {method:"PATCH", body:JSON.stringify(values)});
+    else await api(`/formations/${formationId}/curriculum`, {method:"POST", body:JSON.stringify(values)});
+  });
+  const workload = $(`[name="workload_minutes"]`, form);
+  form.querySelectorAll('[name="effort_mode"]').forEach(input => input.addEventListener("change", () => {
+    if (input.value === "workload" && input.checked && workload?.value) $(`[name="required_study_minutes"]`, form).value = workload.value;
+  }));
+}
 
 const curriculumImportStatuses = ["not_available", "available", "in_progress", "completed", "failed", "locked", "exempted"];
 
@@ -1212,34 +1878,184 @@ function studyActionMarkup(study) {
     const parentAction = study.formation_archived_at ? '<a class="button primary" href="/formations?filter=archived">Restaurar formação</a>' : study.curriculum_archived_at ? '<a class="button primary" href="/formations">Restaurar disciplina</a>' : "";
     return `<div class="action-unavailable"><span>${esc(blockedReason || "Este estudo está arquivado.")} — restaure o item indicado antes de editar, planejar ou iniciar foco.</span>${ownArchive ? `<button class="button primary" data-study-restore="${study.id}">Restaurar estudo</button>` : parentAction}<button class="button ghost" data-study-dependencies="${study.id}">Dependências</button></div>`;
   }
-  return `<details class="action-menu"><summary>Ações</summary><div class="action-menu-content"><button class="button" data-study-detail="${study.id}">Tópicos</button><button class="button" data-edit-study="${study.id}">Editar</button>${study.status === "active" ? `<button class="button" data-study-pause="${study.id}">Pausar</button>` : ""}${study.status === "paused" ? `<button class="button primary" data-study-resume="${study.id}">Continuar</button>` : ""}${canFocus ? `<button class="button primary" data-start-study-focus="${study.id}">Iniciar foco</button>` : ""}${study.origin === "curriculum" && current ? `<button class="button" data-study-finish="${study.id}">Finalizar</button><button class="button" data-study-remove-current="${study.id}">Remover dos atuais</button>` : ""}<button class="button" data-study-archive="${study.id}">Arquivar estudo</button><button class="button ghost" data-study-dependencies="${study.id}">Consultar dependências</button><button class="button danger" data-study-destroy="${study.id}">Excluir definitivamente</button></div></details>`;
+  return `<details class="action-menu"><summary>Ações</summary><div class="action-menu-content"><button class="button" data-study-detail="${study.id}">Tópicos</button>${current ? `<button class="button" data-plan-study="${study.id}">Planejar sessão</button>` : ""}<button class="button" data-edit-study="${study.id}">Editar</button>${study.status === "active" ? `<button class="button" data-study-pause="${study.id}">Pausar</button>` : ""}${study.status === "paused" ? `<button class="button primary" data-study-resume="${study.id}">Continuar</button>` : ""}${canFocus ? `<button class="button primary" data-start-study-focus="${study.id}">Iniciar foco</button>` : ""}${study.origin === "curriculum" && current ? `<button class="button" data-study-finish="${study.id}">Finalizar</button><button class="button" data-study-remove-current="${study.id}">Remover dos atuais</button>` : ""}<button class="button" data-study-archive="${study.id}">Arquivar estudo</button><button class="button ghost" data-study-dependencies="${study.id}">Consultar dependências</button><button class="button danger" data-study-destroy="${study.id}">Excluir definitivamente</button></div></details>`;
 }
 
-async function renderStudies() {
-  const parameters = new URLSearchParams({visibility:studiesView.visibility, formation_id:studiesView.formationId, q:studiesView.q});
-  const [payload, formations] = await Promise.all([api(`/studies?${parameters}`), api("/formations?state=all")]);
-  const studies = asRows(payload);
-  studiesView.rows = studies;
-  syncStudiesLocation();
-  const counts = {
+function studyCounts(studies) {
+  return {
     active: studies.filter(study => study.status === "active" && !studyVisibilityText(study)).length,
     paused: studies.filter(study => study.status === "paused" && !studyVisibilityText(study)).length,
     review: studies.filter(study => ["queued", "in_progress"].includes(study.review_status)).length,
     completed: studies.filter(study => study.status === "completed" && !studyVisibilityText(study)).length,
     archived: studies.filter(study => Boolean(studyVisibilityText(study))).length,
   };
-  const filters = [["active", "Ativos"], ["paused", "Pausados"], ["review", "Para revisar"], ["completed", "Concluídos"], ["archived", "Arquivados"], ["all", "Todos"]];
-  app.innerHTML = `<div class="bar"><div><span class="tag">ESTUDOS ATUAIS</span><p class="muted">${studies.length} estudo(s) nos filtros atuais. Estudos sob formação ou disciplina arquivada aparecem em Arquivados, com o motivo.</p></div><button class="button primary" data-new-study>Novo estudo paralelo</button></div><section class="study-controls" aria-label="Filtros de estudos"><div class="quick-filter-list" role="group" aria-label="Filtro de situação">${filters.map(([value, title]) => `<button class="filter-pill ${studiesView.visibility === value ? "active" : ""}" type="button" data-study-filter="${value}" aria-pressed="${studiesView.visibility === value}">${title}${value !== "all" ? ` <span>${counts[value] || 0}</span>` : ""}</button>`).join("")}</div><label>Formação<select id="study-formation-filter"><option value="">Todas</option>${formations.map(formation => `<option value="${formation.id}" ${String(studiesView.formationId) === String(formation.id) ? "selected" : ""}>${esc(formation.name)}${formation.archived_at ? " · arquivada" : ""}</option>`).join("")}</select></label><label>Pesquisar<input id="study-q" value="${esc(studiesView.q)}" placeholder="Nome da matéria"></label></section><div class="stack">${studies.map(study => { const reason = studyVisibilityText(study); return `<section class="card study-card ${reason ? "is-archived" : ""}"><div class="row"><div><div class="tag-row"><span class="tag">${study.origin === "curriculum" ? "CURRICULAR" : "PARALELO"}</span><span class="status">${label(study.status)}</span>${study.academic_status ? `<span class="status status-${esc(study.academic_status)}">${label(study.academic_status)}</span>` : ""}${study.review_status && study.review_status !== "none" ? `<span class="review-status ${study.review_status}">${curriculumReviewLabel(study.review_status)}</span>` : ""}</div><h2>${esc(study.name)}</h2><p class="muted">${esc(study.formation_name || "Sem formação")} · prioridade ${study.priority}/5 · dificuldade ${study.difficulty}/5 · meta ${study.weekly_goal_minutes ? `${study.weekly_goal_minutes} min/semana` : "não definida"}</p>${reason ? `<p class="archive-reason" role="status">${esc(reason)}. O estudo não pode ser iniciado enquanto o item pai permanecer arquivado.</p>` : ""}</div>${studyActionMarkup(study)}</div><div class="progress"><i style="width:${clampPercent(study.progress_percent)}%"></i></div><p class="muted">Progresso dos tópicos: ${study.completed_topics}/${study.topic_count} (${study.progress_percent}%). Domínio médio: ${study.mastery_average}/5.</p><div id="study-topics-${study.id}"></div></section>`; }).join("") || empty("Nenhum estudo neste filtro", studiesView.visibility === "archived" ? "Não há estudos arquivados ou ocultos por um item pai." : "Adicione uma disciplina da grade ou crie um assunto paralelo.")}</div>`;
-  app.querySelectorAll("[data-study-filter]").forEach(button => button.addEventListener("click", () => { studiesView.visibility = button.dataset.studyFilter; syncStudiesLocation(); render(); }));
-  $("#study-formation-filter", app)?.addEventListener("change", event => { studiesView.formationId = event.target.value; syncStudiesLocation(); render(); });
-  $("#study-q", app)?.addEventListener("input", event => { studiesView.q = event.target.value; window.clearTimeout(studiesView.queryTimer); studiesView.queryTimer = window.setTimeout(() => { syncStudiesLocation(); render(); }, 220); });
 }
 
-async function renderReviews() { const reviews = await api("/reviews"); const today = localDateISO(); app.innerHTML = `<div class="grid kpis">${card("Pendentes",reviews.length,"cadeias ativas")}${card("Atrasadas",reviews.filter(item=>item.due_date<today).length,"até hoje")}</div><section class="card"><h2>Revisões</h2>${reviews.map(item => `<div class="list-item row"><div><strong>${esc(item.topic_name)}</strong><div class="muted">${esc(item.subject_name)} · ${item.due_date} · ${item.review_stage === "d1" ? "primeira revisão" : item.review_stage === "d7" ? "segunda revisão" : "revisão de consolidação"}</div></div><div class="review-buttons">${[["wrong","Errei"],["hard","Difícil"],["good","Fui bem"],["easy","Fácil"]].map(([rating,text])=>`<button class="button" data-review="${item.id}" data-rating="${rating}">${text}</button>`).join("")}</div></div>`).join("") || empty("Sem revisões pendentes","Uma sessão relevante cria D+1; depois vêm D+7 e D+30.")}</section>`; }
+function studyCardMarkup(study) {
+  const reason = studyVisibilityText(study);
+  const effort = study.origin === "curriculum" ? study.curriculum_required_study_minutes : study.required_study_minutes;
+  const weeklyTarget = study.origin === "personal" ? study.minimum_weekly_minutes || study.weekly_goal_minutes : study.weekly_goal_minutes;
+  return `<article id="study-card-${study.id}" class="card study-card study-result-card ${reason ? "is-archived" : ""} ${Number(studiesView.selectedId) === Number(study.id) ? "is-selected" : ""}">
+    <div class="study-result-top"><div><div class="tag-row"><span class="tag">${study.origin === "curriculum" ? "CURRICULAR" : "PARALELO"}</span><span class="status">${label(study.status)}</span>${study.academic_status ? `<span class="status status-${esc(study.academic_status)}">${label(study.academic_status)}</span>` : ""}${study.review_status && study.review_status !== "none" ? `<span class="review-status ${study.review_status}">${curriculumReviewLabel(study.review_status)}</span>` : ""}</div><h2>${esc(study.name)}</h2><p>${esc(study.formation_name || "Estudo paralelo")}</p>${reason ? `<p class="archive-reason" role="status">${esc(reason)}. Este estudo permanece preservado, mas não entra em foco nem planejamento.</p>` : ""}</div>${studyActionMarkup(study)}</div>
+    <div class="study-result-meta"><span>Prioridade ${study.priority}/5</span><span>Dificuldade ${study.difficulty}/5</span><span>Esforço ${effort ? minutesLabel(effort) : "não definido"}</span><span>${weeklyTarget ? `Meta semanal ${minutesLabel(weeklyTarget)}` : "Meta semanal não definida"}</span></div>
+    <div class="progress" aria-label="${clampPercent(study.progress_percent)}% dos tópicos concluídos"><i style="width:${clampPercent(study.progress_percent)}%"></i></div>
+    <div class="study-result-footer"><span class="muted">${study.completed_topics}/${study.topic_count} tópico(s) concluído(s) · domínio médio ${study.mastery_average}/5</span><span class="muted">${clampPercent(study.progress_percent)}%</span></div>
+    <div id="study-topics-${study.id}"></div>
+  </article>`;
+}
 
-async function renderHistory() { const rows = await api("/sessions"); app.innerHTML = `<div class="bar"><h2>Histórico real</h2><div><button class="button" data-export>Exportar CSV</button><button class="button primary" data-manual>Registrar sessão</button></div></div><section class="card"><div class="table-wrap"><table class="table"><thead><tr><th>Data</th><th>Matéria / tópico</th><th>Tipo</th><th>Duração</th><th>Horário</th><th></th></tr></thead><tbody>${rows.map(row => `<tr><td>${row.date}</td><td><strong>${esc(row.subject_name)}</strong><div class="muted">${esc(row.topic_name || "Sem tópico")}</div></td><td>${row.entry_method === "review" ? "Revisão" : row.entry_method === "timer" ? "Timer" : "Manual"}</td><td>${hours(row.duration_seconds)}</td><td>${row.started_at && row.ended_at ? `${new Date(row.started_at).toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})}–${new Date(row.ended_at).toLocaleTimeString("pt-BR",{hour:"2-digit",minute:"2-digit"})}` : "—"}</td><td><button class="button ghost" data-delete-session="${row.id}">Excluir</button></td></tr>`).join("")}</tbody></table></div>${!rows.length?empty("Sem sessões","O histórico será preenchido apenas pelo que você realmente estudar."):""}</section>`; }
+function availableCurriculumMarkup(rows, formationName) {
+  if (!studiesView.formationId) return `<section class="card available-curriculum-results"><div class="panel-heading"><div><span class="tag">COMECE PELA GRADE</span><h2>Escolha uma formação para adicionar disciplinas</h2><p class="muted">Formação ativa não coloca todas as matérias no planejamento. Selecione uma formação acima e escolha apenas a disciplina disponível ou em andamento que deseja transformar em Estudo atual.</p></div></div></section>`;
+  const query = normalizedText(studiesView.q || "");
+  const candidates = rows.filter(row => !isStructuralCurriculum(row) && ["available", "in_progress"].includes(row.academic_status) && !row.archived_at && !row.active_study_id && (!query || [row.name, row.code, row.period].some(value => normalizedText(value).includes(query)))).slice(0, 12);
+  return `<section class="card available-curriculum-results"><div class="panel-heading"><div><span class="tag">DA GRADE PARA OS ESTUDOS</span><h2>Disciplinas prontas para estudar</h2><p class="muted">${esc(formationName || "A formação selecionada")} · disponíveis ou em andamento, mas ainda sem um estudo atual vinculado.</p></div></div>${candidates.map(row => `<div class="available-curriculum-row"><div><strong>${esc(row.name)}</strong><div class="muted">${esc(row.code || "Sem código")} · ${esc(row.period || "Sem período")} · <span class="status status-${esc(row.academic_status)}">${label(row.academic_status)}</span></div></div><button class="button" type="button" data-add-study="${row.id}" data-add-study-formation="${row.formation_id}">${row.academic_status === "in_progress" ? "Vincular aos atuais" : "Iniciar estudo"}</button></div>`).join("") || `<p class="muted">Nenhuma disciplina disponível ou em andamento corresponde à busca atual.</p>`}</section>`;
+}
 
-async function renderAnalytics() {
+function studiesResultsMarkup(studies, formationName) {
+  const cards = studies.map(studyCardMarkup).join("") || empty("Nenhum estudo neste filtro", studiesView.visibility === "archived" ? "Não há estudos arquivados ou ocultos por um item pai." : "Adicione uma disciplina da grade ou crie um assunto paralelo.");
+  return `<div class="study-results">${cards}</div>${availableCurriculumMarkup(studiesView.curriculumRows || [], formationName)}`;
+}
+
+function studyTopicMarkup(topic, studyId) {
+  const metadata = [
+    topic.unit,
+    topic.estimated_minutes ? `estimativa ${minutesLabel(topic.estimated_minutes)}` : "sem estimativa",
+    `domínio ${topic.mastery ?? 0}/5`,
+  ].filter(Boolean).join(" · ");
+  return `<article class="study-topic-row"><div><div class="tag-row"><span class="status">${label(topic.status)}</span></div><strong>${esc(topic.name)}</strong><p class="muted">${esc(metadata)}</p>${topic.description ? `<p class="field-help">${esc(topic.description)}</p>` : ""}</div><div class="study-topic-actions"><button type="button" class="button ghost" data-plan-study-topic="${studyId}" data-topic-id="${topic.id}">Planejar</button><button type="button" class="button ghost" data-edit-study-topic="${topic.id}" data-topic-study="${studyId}">Editar</button>${topic.status !== "completed" ? `<button type="button" class="button" data-complete-study-topic="${topic.id}" data-topic-study="${studyId}">Concluir</button>` : ""}</div></article>`;
+}
+
+async function renderStudyTopics(studyId) {
+  const holder = $(`#study-topics-${studyId}`, app);
+  if (!holder) return;
+  holder.innerHTML = `<section class="topic-panel" aria-busy="true" role="status">Carregando tópicos…</section>`;
+  const detail = await api(`/studies/${studyId}`);
+  const groups = [...(detail.groups || []), ...(detail.ungrouped_topics?.length ? [{name:"Sem unidade", topics:detail.ungrouped_topics}] : [])];
+  holder.innerHTML = `<section class="topic-panel" aria-label="Tópicos de ${esc(detail.name)}"><div class="bar"><div><span class="tag">TÓPICOS DO ESTUDO</span><p class="muted">Adicione o que será estudado nesta disciplina; cada tópico pode ser planejado separadamente.</p></div><div class="action-group"><button type="button" class="button" data-plan-study="${detail.id}">Planejar sessão</button><button type="button" class="button primary" data-new-topic="${detail.id}">+ Adicionar tópico</button></div></div>${groups.map(group => `<section class="study-topic-group"><h3>${esc(group.name)}</h3>${(group.topics || []).map(topic => studyTopicMarkup(topic, detail.id)).join("") || `<p class="muted">Sem tópicos nesta unidade.</p>`}</section>`).join("") || empty("Sem tópicos", "Adicione as unidades ou tópicos que você pretende estudar nesta disciplina.", `<button type="button" class="button primary" data-new-topic="${detail.id}">+ Adicionar tópico</button>`)}</section>`;
+}
+
+function studyTopicEditor(studyId, current = null) {
+  studiesView.selectedId = Number(studyId);
+  studiesView.expandedStudyId = Number(studyId);
+  studiesView.panel = "topics";
+  syncStudiesLocation();
+  const form = modal(current ? "Editar tópico" : "Adicionar tópico", `<label>Título<input name="name" value="${esc(current?.name || "")}" required></label><label>Unidade / grupo<input name="unit" value="${esc(current?.unit || "")}" placeholder="Ex.: Unidade 1"></label><label>Descrição<textarea name="description">${esc(current?.description || "")}</textarea></label><div class="settings-grid"><label>Tempo estimado (min)<input name="estimated_minutes" type="number" min="1" value="${current?.estimated_minutes || ""}"></label><label>Domínio (0–5)<input name="mastery" type="number" min="0" max="5" value="${current?.mastery ?? 0}"></label></div><label>Status<select name="status">${["not_started", "in_progress", "completed"].map(value => `<option value="${value}" ${value === (current?.status || "not_started") ? "selected" : ""}>${label(value)}</option>`).join("")}</select></label>`, async values => {
+    const payload = {...values, mastery:Number(values.mastery || 0), estimated_minutes:values.estimated_minutes ? Number(values.estimated_minutes) : null};
+    if (current) await api(`/topics/${current.id}`, {method:"PATCH", body:JSON.stringify(payload)});
+    else await api(`/studies/${studyId}/topics`, {method:"POST", body:JSON.stringify(payload)});
+  });
+  $(".button.primary", form).textContent = current ? "Salvar tópico" : "Adicionar tópico";
+}
+
+async function refreshStudiesSearchResults(formationName) {
+  const revision = ++studiesView.searchRevision;
+  const parameters = new URLSearchParams({visibility:studiesView.visibility, formation_id:studiesView.formationId, q:studiesView.q});
+  const payload = await api(`/studies?${parameters}`);
+  if (revision !== studiesView.searchRevision || page !== "studies") return;
+  const studies = asRows(payload);
+  studiesView.rows = studies;
+  syncStudiesLocation();
+  const result = $("#studies-results", app);
+  if (result) result.innerHTML = studiesResultsMarkup(studies, formationName);
+  const expanded = studiesView.expandedStudyId || (studiesView.panel === "topics" ? studiesView.selectedId : null);
+  if (expanded && studies.some(study => Number(study.id) === Number(expanded))) renderStudyTopics(expanded).catch(error => toast(error.message));
+  const summary = $("#studies-summary-count", app);
+  if (summary) summary.textContent = `${studies.length} estudo(s) nos filtros atuais.`;
+}
+
+async function renderStudies() {
+  const parameters = new URLSearchParams({visibility:studiesView.visibility, formation_id:studiesView.formationId, q:studiesView.q});
+  const countParameters = new URLSearchParams({visibility:"all", formation_id:studiesView.formationId});
+  const [payload, allPayload, formations, curriculumPayload] = await Promise.all([
+    api(`/studies?${parameters}`),
+    api(`/studies?${countParameters}`),
+    api("/formations?state=all"),
+    studiesView.formationId ? api(`/formations/${Number(studiesView.formationId)}/curriculum`).catch(() => []) : Promise.resolve([]),
+  ]);
+  const studies = asRows(payload);
+  const formation = formations.find(item => String(item.id) === String(studiesView.formationId));
+  studiesView.rows = studies;
+  studiesView.curriculumRows = asRows(curriculumPayload);
+  syncStudiesLocation();
+  const counts = studyCounts(asRows(allPayload));
+  const filters = [["active", "Ativos"], ["paused", "Pausados"], ["review", "Para revisar"], ["completed", "Concluídos"], ["archived", "Arquivados"], ["all", "Todos"]];
+  app.innerHTML = `<section class="studies-shell"><div class="bar"><div><span class="tag">ESTUDOS ATUAIS</span><p class="muted"><span id="studies-summary-count">${studies.length} estudo(s) nos filtros atuais.</span> Estudos sob formação ou disciplina arquivada aparecem em Arquivados, com o motivo.</p></div><button class="button primary" data-new-study>Novo estudo paralelo</button></div><section class="study-controls" aria-label="Filtros de estudos"><div class="quick-filter-list" role="group" aria-label="Filtro de situação">${filters.map(([value, title]) => `<button class="filter-pill ${studiesView.visibility === value ? "active" : ""}" type="button" data-study-filter="${value}" aria-pressed="${studiesView.visibility === value}">${title}${value !== "all" ? ` <span>${counts[value] || 0}</span>` : ""}</button>`).join("")}</div><label>Formação<select id="study-formation-filter"><option value="">Todas</option>${formations.map(item => `<option value="${item.id}" ${String(studiesView.formationId) === String(item.id) ? "selected" : ""}>${esc(item.name)}${item.archived_at ? " · arquivada" : ""}</option>`).join("")}</select></label><label>Pesquisar<input id="study-q" value="${esc(studiesView.q)}" placeholder="Nome da matéria ou estudo" autocomplete="off"></label></section><div id="studies-results">${studiesResultsMarkup(studies, formation?.name)}</div></section>`;
+  const expanded = studiesView.expandedStudyId || (studiesView.panel === "topics" ? studiesView.selectedId : null);
+  if (expanded && studies.some(study => Number(study.id) === Number(expanded))) renderStudyTopics(expanded).catch(error => toast(error.message));
+  app.querySelectorAll("[data-study-filter]").forEach(button => button.addEventListener("click", () => { studiesView.visibility = button.dataset.studyFilter; studiesView.selectedId = null; studiesView.expandedStudyId = null; studiesView.panel = ""; syncStudiesLocation(); render(); }));
+  $("#study-formation-filter", app)?.addEventListener("change", event => { studiesView.formationId = event.target.value; studiesView.selectedId = null; studiesView.expandedStudyId = null; studiesView.panel = ""; studiesView.searchRevision += 1; syncStudiesLocation(); render(); });
+  $("#study-q", app)?.addEventListener("input", event => {
+    studiesView.q = event.target.value;
+    window.clearTimeout(studiesView.queryTimer);
+    studiesView.queryTimer = window.setTimeout(() => refreshStudiesSearchResults(formation?.name).catch(error => toast(error.message || "Não foi possível atualizar a busca.")), 220);
+  });
+}
+
+function reviewStageText(value) {
+  return {d1:"D+1 · primeira revisão", d7:"D+7 · segunda revisão", d30:"D+30 · consolidação"}[value] || "Revisão";
+}
+
+async function renderReviews() {
+  const reviews = await api("/reviews");
+  const today = saoPauloTodayISO();
+  const nextSeven = calendarISO(calendarAddDays(calendarDateFromISO(today), 6));
+  const overdue = reviews.filter(item => item.due_date < today);
+  const dueToday = reviews.filter(item => item.due_date === today);
+  const upcoming = reviews.filter(item => item.due_date >= today && item.due_date <= nextSeven);
+  const byFilter = {today:dueToday, upcoming, overdue};
+  const visible = byFilter[reviewsView.filter] || dueToday;
+  const filters = [["today", "Hoje", dueToday.length], ["upcoming", "Próximos 7 dias", upcoming.length], ["overdue", "Atrasadas", overdue.length]];
+  app.innerHTML = `<section class="reviews-shell"><div class="grid kpis">${statCard("Pendentes", reviews.length, "cadeias de revisão ativas", "⌛", "blue")}${statCard("Atrasadas", overdue.length, overdue.length ? "priorize o que ficou para trás" : "nenhuma revisão vencida", "!", "rose")}${statCard("Próximos 7 dias", upcoming.length, "inclui as revisões de hoje", "▣", "green")}</div><section class="grid analytics-layout"><section class="card"><div class="panel-heading"><div><span class="tag">FILA DE REVISÃO</span><h2>O que precisa ser lembrado</h2><p class="muted">Escolha uma avaliação após revisar. A próxima data é calculada pela estratégia já configurada.</p></div></div><div class="content-tabs" role="group" aria-label="Filtro de revisões">${filters.map(([value, text, total]) => `<button type="button" data-review-filter="${value}" aria-pressed="${reviewsView.filter === value}">${text} <span>${total}</span></button>`).join("")}</div><div class="review-queue">${visible.map(item => `<article class="review-queue-item"><div><strong>${esc(item.topic_name)}</strong><div class="muted">${esc(item.subject_name)} · prevista para ${formatLocalDate(item.due_date, {day:"2-digit", month:"short"})}</div><span class="review-stage">${reviewStageText(item.review_stage)}</span></div><div class="review-buttons" aria-label="Avaliar revisão de ${esc(item.topic_name)}">${[["wrong","Errei"],["hard","Difícil"],["good","Fui bem"],["easy","Fácil"]].map(([rating,text])=>`<button class="button" data-review="${item.id}" data-rating="${rating}">${text}</button>`).join("")}</div></article>`).join("") || empty(reviewsView.filter === "overdue" ? "Nenhuma revisão atrasada" : "Nenhuma revisão neste recorte", reviewsView.filter === "today" ? "As revisões surgem depois de uma sessão com conteúdo." : "Mude o recorte para consultar as demais revisões pendentes.")}</div></section><aside class="card"><div class="panel-heading"><div><span class="tag">COMO FUNCIONA</span><h2>Revisão espaçada</h2></div></div><div class="stack"><div><strong>D+1</strong><p class="muted">Reforça o conteúdo depois da primeira sessão.</p></div><div><strong>D+7</strong><p class="muted">Consolida a lembrança após uma boa revisão inicial.</p></div><div><strong>D+30</strong><p class="muted">Ajuda a manter o conteúdo em longo prazo.</p></div></div></aside></section></section>`;
+  app.querySelectorAll("[data-review-filter]").forEach(button => button.addEventListener("click", () => { reviewsView.filter = button.dataset.reviewFilter; renderReviews(); }));
+}
+
+function historyRangeDates() {
+  const today = calendarDateFromISO(saoPauloTodayISO());
+  if (historyView.range === "all") return {start:"", end:"", label:"Sessões mais recentes"};
+  const days = Number(historyView.range || 30);
+  return {start:calendarISO(calendarAddDays(today, -(days - 1))), end:calendarISO(today), label:`Últimos ${days} dias`};
+}
+
+function historyEntryLabel(value) { return {review:"Revisão", timer:"Timer", manual:"Manual"}[value] || "Sessão"; }
+
+function historyTimeRange(row) {
+  if (!row.started_at || !row.ended_at) return "—";
+  const options = {hour:"2-digit", minute:"2-digit", timeZone:"America/Sao_Paulo"};
+  return `${new Intl.DateTimeFormat("pt-BR", options).format(new Date(row.started_at))}–${new Intl.DateTimeFormat("pt-BR", options).format(new Date(row.ended_at))}`;
+}
+
+function historyRowsMarkup(rows) {
+  return rows.map(row => `<tr><td>${formatLocalDate(row.date, {day:"2-digit", month:"2-digit", year:"numeric"})}</td><td><strong>${esc(row.subject_name)}</strong><div class="muted">${esc(row.topic_name || "Sem tópico")}</div></td><td><span class="status">${historyEntryLabel(row.entry_method)}</span></td><td>${hours(row.duration_seconds)}</td><td>${historyTimeRange(row)}</td><td><button class="button ghost" data-delete-session="${row.id}">Excluir</button></td></tr>`).join("");
+}
+
+function filterHistoryRows(rows) {
+  const query = String(historyView.query || "").trim().toLocaleLowerCase("pt-BR");
+  if (!query) return rows;
+  return rows.filter(row => [row.subject_name, row.topic_name, historyEntryLabel(row.entry_method), row.date].some(value => String(value || "").toLocaleLowerCase("pt-BR").includes(query)));
+}
+
+async function renderHistory() {
+  const range = historyRangeDates();
+  const query = new URLSearchParams();
+  if (range.start) query.set("start", range.start);
+  if (range.end) query.set("end", range.end);
+  const rows = await api(`/sessions${query.toString() ? `?${query}` : ""}`);
+  historyView.rows = rows;
+  const visible = filterHistoryRows(rows);
+  const totalSeconds = rows.reduce((total, row) => total + Number(row.duration_seconds || 0), 0);
+  const days = new Set(rows.map(row => row.date)).size;
+  const subjects = new Set(rows.map(row => row.subject_name).filter(Boolean)).size;
+  app.innerHTML = `<section class="history-shell"><div class="bar"><div><span class="tag">HISTÓRICO REAL</span><h2>O que foi realmente estudado</h2><p class="muted">${range.label}. Planejamento e estudo realizado continuam separados.</p></div><div class="action-group"><button class="button" data-export>Exportar CSV</button><button class="button primary" data-manual>Registrar sessão</button></div></div><div class="history-summary">${statCard("Tempo no período", hours(totalSeconds), "sessões reais registradas", "ϟ", "violet")}${statCard("Sessões", rows.length, "neste recorte", "▣", "blue")}${statCard("Dias estudados", days, "datas com atividade", "◷", "green")}${statCard("Matérias", subjects, "com tempo real", "◉", "amber")}</div><section class="card"><div class="history-filters"><div class="content-tabs" role="group" aria-label="Período do histórico">${[["7","7 dias"],["30","30 dias"],["all","Recentes"]].map(([value,text]) => `<button type="button" data-history-range="${value}" aria-pressed="${historyView.range === value}">${text}</button>`).join("")}</div><label>Buscar no período carregado<input id="history-q" value="${esc(historyView.query)}" placeholder="Matéria, tópico, tipo ou data" autocomplete="off"></label></div><div class="table-wrap"><table class="table"><thead><tr><th>Data</th><th>Matéria / tópico</th><th>Tipo</th><th>Duração</th><th>Horário</th><th><span class="sr-only">Ações</span></th></tr></thead><tbody id="history-table-body">${historyRowsMarkup(visible)}</tbody></table></div><p id="history-result-count" class="muted">${visible.length} de ${rows.length} sessão(ões) no período carregado.</p>${!rows.length ? empty("Sem sessões neste período", "O histórico será preenchido apenas pelo que você realmente estudar.") : ""}</section></section>`;
+  app.querySelectorAll("[data-history-range]").forEach(button => button.addEventListener("click", () => { historyView.range = button.dataset.historyRange; historyView.query = ""; renderHistory(); }));
+  $("#history-q", app)?.addEventListener("input", event => {
+    historyView.query = event.target.value;
+    const filtered = filterHistoryRows(historyView.rows || []);
+    $("#history-table-body", app).innerHTML = historyRowsMarkup(filtered);
+    $("#history-result-count", app).textContent = `${filtered.length} de ${(historyView.rows || []).length} sessão(ões) no período carregado.`;
+  });
+}
+
+async function renderAnalyticsLegacy() {
   const data = await api("/analytics");
   const distribution = Object.fromEntries((data.academic_distribution || []).map(row => [row.status, count(row.count)]));
   const formations = data.academic_progress || [];
@@ -1247,11 +2063,106 @@ async function renderAnalytics() {
   app.innerHTML = `<div class="grid kpis">${card("Tempo real registrado", hours(data.total_seconds), "soma de sessões reais")}${card("Esta semana",hours(data.week_seconds),"sessões reais, segunda a domingo")}${card("Dias estudados",data.days_studied,"datas distintas de sessões reais")}${card("Sessões registradas",data.real_sessions ?? data.sessions,"linhas em sessões de estudo")}${card("Blocos concluídos",data.completed_planned_blocks || 0,"planejamento, não tempo real")}</div>${missingRealSessions ? `<section class="card analytics-warning" role="status"><div><span class="tag warning">REGISTRO PENDENTE</span><h2>${plural(missingRealSessions, "bloco concluído", "blocos concluídos")} sem sessão real</h2><p>Planejamento concluído não é contabilizado automaticamente como tempo estudado. Registre ou corrija a sessão para que a análise reflita o estudo real.</p></div><a class="button primary" href="/history">Registrar sessão real</a></section>` : ""}<section class="grid analytics-layout"><section class="card"><div class="bar"><div><span class="tag">PROGRESSO ACADÊMICO</span><h2>Por formação</h2></div><a class="button ghost" href="/formations">Abrir central de disciplinas</a></div>${formations.map(formation => { const progress = curriculumSummary([], formation.academic_progress || formation, formation); return `<div class="academic-formation-row"><div class="row"><strong>${esc(formation.name)}</strong><span>${progress.percent}%</span></div><div class="progress"><i style="width:${progress.percent}%"></i></div><div class="muted">${progress.completed} concluídas · ${progress.exempted} dispensadas · ${progress.inProgress} em andamento · ${progress.pending} pendentes · ${progress.review} para revisar</div></div>`; }).join("") || empty("Sem formações", "Cadastre uma formação para acompanhar o progresso acadêmico.")}</section><section class="card"><span class="tag">DISTRIBUIÇÃO</span><h2>Situação das disciplinas</h2><div class="status-distribution">${curriculumAcademicStatuses.map(value => `<div><span>${label(value)}</span><strong>${distribution[value] || 0}</strong></div>`).join("")}</div><p class="muted">Concluídas e dispensadas compõem o progresso. “Para revisar” é uma intenção paralela, mostrada dentro de cada formação.</p></section></section><section class="grid analytics-layout"><section class="card"><span class="tag">PRÓXIMAS PENDÊNCIAS</span><h2>Matérias em andamento e pendentes</h2>${(data.next_pending_subjects || []).map(row => `<div class="list-item"><div class="row"><strong>${esc(row.name)}</strong><span class="status status-${esc(row.academic_status)}">${label(row.academic_status)}</span></div><div class="muted">${esc(row.formation_name)} · ${esc(row.period || "Sem período")}${row.review_status && row.review_status !== "none" ? ` · ${curriculumReviewLabel(row.review_status)}` : ""}</div></div>`).join("") || empty("Sem pendências", "Não há disciplinas pendentes nas formações ativas.")}</section><section class="card"><h2>Horas por matéria</h2>${data.by_subject.map(row => `<div class="list-item"><div class="row"><strong>${esc(row.name)}</strong><span>${hours(row.seconds)}</span></div><div class="progress"><i style="width:${data.total_seconds ? Math.round(row.seconds/data.total_seconds*100) : 0}%"></i></div></div>`).join("") || empty("Sem dados", "Registre sessões reais para analisar seus hábitos.")}</section></section>`;
 }
 
-async function renderProjects() { const projects = await api("/projects"); app.innerHTML = `<div class="bar"><h2>Projetos</h2><button class="button primary" data-new-project>Novo projeto</button></div><section class="stack">${projects.map(project => `<article class="card"><div class="row"><div><h2>${esc(project.name)}</h2><p class="muted">${esc(project.objective || project.description || "Sem objetivo")}</p></div><button class="button" data-project="${project.id}">Abrir tarefas</button></div><div class="progress"><i style="width:${project.task_count ? project.completed_tasks/project.task_count*100 : 0}%"></i></div><div class="muted">${project.completed_tasks}/${project.task_count} tarefas concluídas</div></article>`).join("") || empty("Nenhum projeto", "Projetos são acompanhados separadamente dos estudos.")}</section>`; }
+function analyticsDates() {
+  const today = calendarDateFromISO(saoPauloTodayISO());
+  if (analyticsView.range === "custom") {
+    if (validCalendarDate(analyticsView.start) && validCalendarDate(analyticsView.end) && analyticsView.start <= analyticsView.end) return {start:analyticsView.start, end:analyticsView.end};
+    analyticsView.range = "30";
+    analyticsView.start = "";
+    analyticsView.end = "";
+  }
+  const days = [7, 14, 30].includes(Number(analyticsView.range)) ? Number(analyticsView.range) : 30;
+  return {start:calendarISO(calendarAddDays(today, -(days - 1))), end:calendarISO(today)};
+}
 
-function newStudy() { modal("Novo estudo paralelo", `<label>Nome<input name="personal_name" required></label><label>Prioridade<input name="priority" type="number" min="1" max="5" value="3"></label><label>Dificuldade<input name="difficulty" type="number" min="1" max="5" value="3"></label><label>Meta semanal (min)<input name="weekly_goal_minutes" type="number" min="1"></label>`, async values => api("/studies",{method:"POST",body:JSON.stringify({...values,priority:Number(values.priority),difficulty:Number(values.difficulty),weekly_goal_minutes:values.weekly_goal_minutes?Number(values.weekly_goal_minutes):null})})); }
+function analyticsCapacityMarkup(capacity, days) {
+  const balance = Number(capacity?.surplus_minutes || 0);
+  return `<article class="capacity-card"><span class="tag">${days} DIAS</span><strong>${minutesLabel(capacity?.capacity_minutes)}</strong><span class="muted">capacidade · ${minutesLabel(capacity?.free_minutes)} livre</span><span class="${balance < 0 ? "planning-deficit" : "field-help"}">${balance < 0 ? `déficit ${minutesLabel(Math.abs(balance))}` : `folga ${minutesLabel(balance)}`}</span></article>`;
+}
 
-function studyEditor(study) { modal(`Editar ${esc(study.name)}`, `<label>Prioridade<input name="priority" type="number" min="1" max="5" value="${study.priority}"></label><label>Dificuldade<input name="difficulty" type="number" min="1" max="5" value="${study.difficulty}"></label><label>Meta semanal (min)<input name="weekly_goal_minutes" type="number" min="1" value="${study.weekly_goal_minutes || ""}"></label><label>Prazo<input name="target_date" type="date" value="${study.target_date || ""}"></label><label>Status<select name="status">${["active","paused"].map(key=>`<option value="${key}" ${key===study.status?"selected":""}>${label(key)}</option>`).join("")}</select></label>`, values => api(`/studies/${study.id}`,{method:"PATCH",body:JSON.stringify({...values,priority:Number(values.priority),difficulty:Number(values.difficulty),weekly_goal_minutes:values.weekly_goal_minutes?Number(values.weekly_goal_minutes):null})})); }
+async function renderAnalytics() {
+  const dates = analyticsDates();
+  const params = new URLSearchParams({start:dates.start, end:dates.end});
+  if (analyticsView.formationId) params.set("formation_id", analyticsView.formationId);
+  if (analyticsView.itemId) params.set("item_id", analyticsView.itemId);
+  if (analyticsView.kind) params.set("kind", analyticsView.kind);
+  const today = saoPauloTodayISO();
+  const monday = calendarISO(calendarMonday(calendarDateFromISO(today)));
+  const monthStart = `${today.slice(0, 7)}-01`;
+  const [data, dayData, weekData, monthData, formations, studies] = await Promise.all([
+    api(`/analytics/workload?${params}`),
+    api(`/analytics/workload?start=${today}&end=${today}`),
+    api(`/analytics/workload?start=${monday}&end=${today}`),
+    api(`/analytics/workload?start=${monthStart}&end=${today}`),
+    api("/formations?state=all"),
+    api("/studies?visibility=all"),
+  ]);
+  syncAnalyticsLocation();
+  const completion = data.completion_rate_percent == null ? "—" : `${data.completion_rate_percent}%`;
+  const effortItems = data.ideal?.items || [];
+  app.innerHTML = `<section class="bar"><div><span class="tag">ANÁLISES OPERACIONAIS</span><h2>Tempo, capacidade e risco</h2><p class="muted">Sessões reais, planejamento e carga restante são mostrados separadamente. O progresso acadêmico completo permanece na Central de Disciplinas.</p></div></section><form id="analytics-filters" class="analytics-filters"><label>Período<select name="range" id="analytics-range">${[["7","7 dias"],["14","14 dias"],["30","30 dias"],["custom","Personalizado"]].map(([value,text]) => `<option value="${value}" ${analyticsView.range === value ? "selected" : ""}>${text}</option>`).join("")}</select></label><label>Início<input name="start" type="date" value="${esc(analyticsView.range === "custom" ? dates.start : analyticsView.start || dates.start)}"></label><label>Fim<input name="end" type="date" value="${esc(analyticsView.range === "custom" ? dates.end : analyticsView.end || dates.end)}"></label><label>Formação<select name="formation_id"><option value="">Todas</option>${formations.map(item => `<option value="${item.id}" ${String(analyticsView.formationId) === String(item.id) ? "selected" : ""}>${esc(item.name)}</option>`).join("")}</select></label><label>Disciplina / estudo<select name="item_id"><option value="">Todos</option>${studies.map(item => `<option value="${item.id}" ${String(analyticsView.itemId) === String(item.id) ? "selected" : ""}>${esc(item.name)}</option>`).join("")}</select></label><label>Tipo<select name="kind"><option value="">Curricular e paralelo</option><option value="curriculum" ${analyticsView.kind === "curriculum" ? "selected" : ""}>Curricular</option><option value="personal" ${analyticsView.kind === "personal" ? "selected" : ""}>Paralelo</option></select></label><button class="button primary">Aplicar filtros</button></form><div class="grid kpis">${card("Hoje", minutesLabel(dayData.total_seconds / 60), "tempo real")}${card("Esta semana", minutesLabel(weekData.total_seconds / 60), "tempo real")}${card("Este mês", minutesLabel(monthData.total_seconds / 60), "tempo real")}${card("Período filtrado", minutesLabel(data.total_seconds / 60), `${data.sessions} sessão(ões) reais`) }${card("Cumprimento", completion, `${data.planned.completed || 0}/${data.planned.total || 0} blocos concluídos`)}</div>${data.completed_planned_without_real_session ? `<section class="card analytics-warning" role="status"><div><span class="tag warning">REGISTRO PENDENTE</span><h2>${plural(data.completed_planned_without_real_session, "bloco concluído", "blocos concluídos")} sem sessão real</h2><p>Bloco concluído não reduz a carga de esforço. Registre ou corrija a sessão real para que as análises fiquem corretas.</p></div><a class="button primary" href="/history">Registrar sessão real</a></section>` : ""}<section class="card"><div class="bar"><div><span class="tag">CAPACIDADE</span><h2>Próximos horizontes</h2></div><a class="button ghost" href="/planning?tab=ideal">Abrir mundo ideal</a></div><div class="capacity-grid">${analyticsCapacityMarkup(data.capacity?.["7"], 7)}${analyticsCapacityMarkup(data.capacity?.["14"], 14)}${analyticsCapacityMarkup(data.capacity?.["30"], 30)}</div></section><section class="grid analytics-layout"><section class="card"><span class="tag">PLANEJADO X REALIZADO</span><h2>Execução do período</h2><div class="status-distribution"><div><span>Blocos previstos</span><strong>${data.planned.total || 0}</strong></div><div><span>Concluídos</span><strong>${data.planned.completed || 0}</strong></div><div><span>Cancelados</span><strong>${data.planned.cancelled || 0}</strong></div><div><span>Futuros</span><strong>${minutesLabel(data.planned.future_minutes)}</strong></div></div><p class="muted">O tempo real vem de ${data.sessions} sessão(ões) em ${data.days_studied} dia(s). Planejamento não é contabilizado como tempo estudado.</p></section><section class="card"><span class="tag">HORAS POR ITEM</span><h2>Onde o tempo foi investido</h2>${data.by_item?.map(item => `<div class="list-item"><div class="row"><strong>${esc(item.name)}</strong><span>${minutesLabel(item.seconds / 60)}</span></div><div class="progress"><i style="width:${data.total_seconds ? Math.round(item.seconds / data.total_seconds * 100) : 0}%"></i></div><div class="field-help">${item.origin === "personal" ? "Estudo paralelo" : "Disciplina curricular"} · ${item.sessions} sessão(ões)</div></div>`).join("") || empty("Sem dados no período", "Registre sessões reais para analisar a distribuição do seu tempo.")}</section></section><section class="grid analytics-layout"><section class="card"><span class="tag">ESFORÇO RESTANTE E RISCO</span><h2>Itens ativos</h2>${effortItems.length ? effortItems.map(item => `<div class="list-item"><div class="row"><strong>${esc(item.name)}</strong><span class="status">${esc(item.risk_label)}</span></div><div class="muted">Real ${minutesLabel(item.real_minutes)} · faltam ${minutesLabel(item.remaining_minutes)} · não alocado ${minutesLabel(item.unallocated_minutes)} · prioridade ${item.priority_effective}/10</div>${item.deficit_minutes ? `<div class="planning-deficit">Déficit ${minutesLabel(item.deficit_minutes)} até ${esc(item.deadline || "o prazo")}</div>` : ""}</div>`).join("") : empty("Nenhum item ativo", "Ative uma disciplina ou configure um estudo paralelo.")}</section><section class="card"><span class="tag">EM RISCO</span><h2>Decisões que pedem atenção</h2>${data.at_risk?.length ? data.at_risk.map(item => `<div class="list-item"><strong>${esc(item.name)}</strong><div class="muted">${esc(item.risk_label)} · faltam ${minutesLabel(item.remaining_minutes)} · capacidade ${minutesLabel(item.capacity_until_deadline_minutes)}${item.first_feasible_date ? ` · viável em ${esc(item.first_feasible_date)}` : ""}</div></div>`).join("") : empty("Sem risco crítico", "A capacidade atual comporta os itens com prazo configurado.")}</section></section><section class="grid analytics-layout"><section class="card"><span class="tag">PRÓXIMOS PRAZOS E AVALIAÇÕES</span><h2>Acompanhar a seguir</h2>${data.upcoming_evaluations?.map(item => `<div class="list-item"><strong>${esc(item.title)}</strong><div class="muted">${esc(item.subject_name)} · ${esc(item.date)} · ${label(item.status)}${item.score != null ? ` · nota ${item.score}/${item.max_score || "—"}` : ""}</div></div>`).join("") || empty("Sem avaliações próximas", "Avaliações cadastradas nas disciplinas aparecerão aqui.")}</section><section class="card"><span class="tag">CONTEÚDOS</span><h2>Mais estudados e sem atividade</h2><h3>Mais estudados</h3>${data.most_studied_contents?.slice(0, 5).map(item => `<div class="list-item"><strong>${esc(item.name)}</strong><div class="muted">${esc(item.subject_name)} · ${minutesLabel(item.seconds / 60)} · última atividade ${esc(item.last_activity || "—")}</div></div>`).join("") || '<p class="muted">Ainda não há tempo real por conteúdo.</p>'}<h3>Sem atividade recente</h3>${data.inactive_contents?.slice(0, 5).map(item => `<div class="list-item"><strong>${esc(item.name)}</strong><div class="muted">${esc(item.subject_name)} · última atividade ${esc(item.last_session_date || "nunca")}</div></div>`).join("") || '<p class="muted">Nenhum conteúdo pendente sem atividade recente.</p>'}</section></section><section class="card future-subjects"><span class="tag">PRÓXIMAS DISCIPLINAS</span><h2>Futuras, sem demanda de horário</h2><p class="muted">Estas disciplinas estão como Não disponível; aparecem apenas para referência e não participam de risco, demanda ou planejamento.</p>${data.ideal?.future_subjects?.length ? data.ideal.future_subjects.slice(0, 8).map(item => `<span class="future-chip">${esc(item.name)} · ${esc(item.start_date || item.end_date || item.deadline_date || "sem data")}</span>`).join("") : "<p class=\"muted\">Nenhuma disciplina futura cadastrada.</p>"}</section>`;
+  app.insertAdjacentHTML("beforeend", `<section class="grid analytics-layout"><section class="card"><span class="tag">PRÓXIMOS ENCERRAMENTOS</span><h2>Prazos por esforço</h2>${data.upcoming_deadlines?.length ? data.upcoming_deadlines.map(item => `<div class="list-item"><strong>${esc(item.name)}</strong><div class="muted">${esc(item.deadline)} · faltam ${minutesLabel(item.remaining_minutes)} · ${esc(item.risk_label)}</div></div>`).join("") : empty("Sem prazos configurados", "Defina prazo e esforço pessoal na disciplina ou no estudo paralelo.")}</section><section class="card"><span class="tag">MÉDIAS E NOTAS</span><h2>Aproveitamento por disciplina</h2>${data.grade_by_subject?.length ? data.grade_by_subject.map(item => `<div class="list-item"><div class="row"><strong>${esc(item.subject_name)}</strong><span>${item.weighted_average_percent == null ? `${item.simple_average_percent}%` : `${item.weighted_average_percent}%`}</span></div><div class="muted">${item.evaluations} avaliação(ões) com nota · média simples ${item.simple_average_percent}%${item.weighted_average_percent == null ? "" : ` · ponderada ${item.weighted_average_percent}%`}</div></div>`).join("") : empty("Sem notas lançadas", "Cadastre avaliações e notas no detalhe da disciplina.")}</section></section>`);
+  $("#analytics-filters", app).onsubmit = event => {
+    event.preventDefault();
+    const values = fields(event.currentTarget);
+    analyticsView.range = values.range;
+    analyticsView.start = values.start;
+    analyticsView.end = values.end;
+    analyticsView.formationId = values.formation_id;
+    analyticsView.itemId = values.item_id;
+    analyticsView.kind = values.kind;
+    if (analyticsView.range === "custom" && (!validCalendarDate(values.start) || !validCalendarDate(values.end) || values.end < values.start)) return toast("Informe um intervalo de datas válido.");
+    syncAnalyticsLocation(); render();
+  };
+}
+
+function projectProgress(project) {
+  const total = Number(project.task_count || 0);
+  const completed = Number(project.completed_tasks || 0);
+  return {total, completed, percent: total ? clampPercent(completed / total * 100) : 0};
+}
+
+async function renderProjects() {
+  const projects = await api("/projects?archived=1");
+  const groups = {
+    active: projects.filter(project => !project.archived_at && project.status !== "completed"),
+    completed: projects.filter(project => !project.archived_at && project.status === "completed"),
+    archived: projects.filter(project => Boolean(project.archived_at) || project.status === "archived"),
+    all: projects,
+  };
+  const visible = groups[projectsView.filter] || groups.active;
+  const taskTotal = projects.reduce((total, project) => total + Number(project.task_count || 0), 0);
+  const taskCompleted = projects.reduce((total, project) => total + Number(project.completed_tasks || 0), 0);
+  const filters = [["active", "Ativos"], ["completed", "Concluídos"], ["archived", "Arquivados"], ["all", "Todos"]];
+  app.innerHTML = `<section class="projects-shell"><div class="bar"><div><span class="tag">PROJETOS</span><h2>Um espaço separado dos estudos</h2><p class="muted">Tarefas, prazo e progresso de cada projeto sem interferir na sua agenda de estudo.</p></div><button class="button primary" data-new-project>Novo projeto</button></div><div class="grid kpis">${statCard("Projetos ativos", groups.active.length, "em andamento ou pausados", "▣", "violet")}${statCard("Concluídos", groups.completed.length, "mantidos para consulta", "✓", "green")}${statCard("Arquivados", groups.archived.length, "fora da lista principal", "▤", "blue")}${statCard("Tarefas concluídas", `${taskCompleted}/${taskTotal}`, "em todos os projetos", "☑", "amber")}</div><div class="content-tabs" role="group" aria-label="Filtro de projetos">${filters.map(([value,text]) => `<button type="button" data-project-filter="${value}" aria-pressed="${projectsView.filter === value}">${text} <span>${groups[value].length}</span></button>`).join("")}</div><section class="project-grid">${visible.map(project => { const progress = projectProgress(project); return `<article class="card project-card"><div class="project-card-header"><div><span class="tag">${project.archived_at ? "ARQUIVADO" : label(project.status)}</span><h2>${esc(project.name)}</h2><p class="muted">${esc(project.objective || project.description || "Sem objetivo registrado.")}</p></div><button class="button" data-project="${project.id}">Abrir tarefas</button></div><div class="progress" aria-label="${progress.percent}% das tarefas concluídas"><i style="width:${progress.percent}%"></i></div><div class="project-card-meta"><span>${progress.completed}/${progress.total} tarefa(s) concluída(s)</span><span>${project.target_date ? `Prazo ${formatLocalDate(project.target_date, {day:"2-digit", month:"short", year:"numeric"})}` : "Sem prazo"}</span><span>${project.estimated_minutes ? `Estimativa ${minutesLabel(project.estimated_minutes)}` : "Sem estimativa"}</span></div></article>`; }).join("") || empty("Nenhum projeto neste recorte", projectsView.filter === "archived" ? "Não há projetos arquivados." : "Crie um projeto para acompanhar tarefas fora dos estudos.")}</section></section>`;
+  app.querySelectorAll("[data-project-filter]").forEach(button => button.addEventListener("click", () => { projectsView.filter = button.dataset.projectFilter; renderProjects(); }));
+}
+
+function studyPlanningPayload(values, form) {
+  const numberOrNull = key => values[key] === "" || values[key] == null ? null : Number(values[key]);
+  return {
+    ...values,
+    priority:Number(values.priority), difficulty:Number(values.difficulty),
+    weekly_goal_minutes:numberOrNull("weekly_goal_minutes"),
+    required_study_minutes:numberOrNull("required_study_minutes"),
+    minimum_weekly_minutes:numberOrNull("minimum_weekly_minutes"),
+    preferred_block_minutes:numberOrNull("preferred_block_minutes"),
+    allowed_weekdays:checkedWeekdays(form),
+  };
+}
+
+function studyPlanningFields(study = {}) {
+  const parallel = study.origin !== "curriculum";
+  return `<label>Prioridade-base (1–5)<input name="priority" type="number" min="1" max="5" value="${study.priority || 3}" required></label><label>Dificuldade (1–5)<input name="difficulty" type="number" min="1" max="5" value="${study.difficulty || 3}" required></label><label>Objetivo total <span class="field-help">Minutos que você pretende dedicar pessoalmente.</span><input name="required_study_minutes" type="number" min="1" value="${study.required_study_minutes || ""}" placeholder="ex.: 2520 para 42 h"></label><label>Meta semanal <span class="field-help">Minutos por semana; mantém o item planejável mesmo sem objetivo total.</span><input name="weekly_goal_minutes" type="number" min="1" value="${study.weekly_goal_minutes || ""}"></label>${parallel ? `<label>Mínimo semanal garantido <span class="field-help">O planejador reserva esse tempo antes de preencher matérias urgentes.</span><input name="minimum_weekly_minutes" type="number" min="1" value="${study.minimum_weekly_minutes || ""}"></label>` : ""}<label>Prazo<input name="target_date" type="date" value="${study.target_date || ""}"></label><label>Duração preferida do bloco (min)<input name="preferred_block_minutes" type="number" min="1" value="${study.preferred_block_minutes || ""}" placeholder="usa a duração padrão"></label>${weekdaysInputs(study.allowed_weekdays)}`;
+}
+
+function newStudy() {
+  modal("Novo estudo paralelo", `<label>Nome<input name="personal_name" required></label><p class="muted">Configure esforço total, meta semanal ou ambos. Um mínimo semanal garante que este estudo não seja esquecido quando houver prazos curriculares urgentes.</p>${studyPlanningFields()}`, async (values, form) => api("/studies", {method:"POST", body:JSON.stringify(studyPlanningPayload(values, form))}));
+}
+
+function studyEditor(study) {
+  modal(`Editar ${esc(study.name)}`, `${studyPlanningFields(study)}<label>Status<select name="status">${["active", "paused"].map(key => `<option value="${key}" ${key === study.status ? "selected" : ""}>${label(key)}</option>`).join("")}</select></label>`, (values, form) => api(`/studies/${study.id}`, {method:"PATCH", body:JSON.stringify(studyPlanningPayload(values, form))}));
+}
 
 function projectEditor(current = null) { modal(current ? "Editar projeto" : "Novo projeto", `<label>Nome<input name="name" value="${esc(current?.name || "")}" required></label><label>Descrição<textarea name="description">${esc(current?.description || "")}</textarea></label><label>Objetivo<textarea name="objective">${esc(current?.objective || "")}</textarea></label><label>Início<input name="start_date" type="date" value="${current?.start_date || ""}"></label><label>Prazo<input name="target_date" type="date" value="${current?.target_date || ""}"></label><label>Tempo estimado (min)<input name="estimated_minutes" type="number" min="0" value="${current?.estimated_minutes || ""}"></label><label>Status<select name="status">${["active","paused","completed"].map(key=>`<option value="${key}" ${key===current?.status?"selected":""}>${label(key)}</option>`).join("")}</select></label><label>Notas<textarea name="notes">${esc(current?.notes || "")}</textarea></label>`, async values => { values.estimated_minutes=values.estimated_minutes?Number(values.estimated_minutes):null; if (current) await api(`/projects/${current.id}`,{method:"PATCH",body:JSON.stringify(values)}); else await api("/projects",{method:"POST",body:JSON.stringify(values)}); }); }
 
@@ -1292,13 +2203,26 @@ document.addEventListener("click", async event => { const target = event.target.
   if (target.dataset.action === "manual-session") return openSession();
   if (target.dataset.action === "search") return openSearch();
   if (target.dataset.focus !== undefined) return openPlanningFocus(null, target);
+  if (target.dataset.focusStudy) return startTimer(null, Number(target.dataset.focusStudy), target.dataset.focusTopic ? Number(target.dataset.focusTopic) : null);
+  if (target.dataset.addTodaySuggestion !== undefined) {
+    await api("/planned", {method:"POST", body:JSON.stringify({
+      study_subject_id:Number(target.dataset.suggestStudy),
+      topic_id:target.dataset.suggestTopic ? Number(target.dataset.suggestTopic) : null,
+      scheduled_date:target.dataset.suggestDate,
+      start_time:target.dataset.suggestStart,
+      planned_duration_minutes:Number(target.dataset.suggestDuration),
+    })});
+    toast("Sugestão adicionada à agenda de hoje.");
+    return render();
+  }
   if (target.dataset.manual !== undefined) return openSession();
   if (target.dataset.startPlan) return openPlanningFocus(Number(target.dataset.startPlan), target);
   if (target.dataset.availability !== undefined) return openAvailability();
+  if (target.dataset.editPlanningSettings !== undefined) return openPlanningSettings(await api("/settings"));
   if (target.dataset.newPlan !== undefined) return openPlanEditor();
   if (target.dataset.plan) return openPlanActions(Number(target.dataset.plan), target);
   if (target.dataset.deletePlanningDay) return openPlanningDayDelete(target.dataset.deletePlanningDay, Number(target.dataset.planningDayCount), target);
-  if (target.dataset.generate !== undefined) { const range = planningRange(); return openPlanPreview(await api("/planning/generate",{method:"POST",body:JSON.stringify({start:range.start,days:range.dates.length})})); }
+  if (target.dataset.generate !== undefined) return openPlanGenerationDialog();
   if (target.dataset.editAvailability) return editAvailability(Number(target.dataset.editAvailability));
   if (target.dataset.deleteAvailability) { await api(`/availability/${target.dataset.deleteAvailability}`,{method:"DELETE"}); toast("Faixa excluída."); return render(); }
   if (target.dataset.newFormation !== undefined) return formationEditor();
@@ -1327,6 +2251,7 @@ document.addEventListener("click", async event => { const target = event.target.
   if (target.dataset.curriculumAction) {
     const row = curriculumView.rows?.find(item => item.id === Number(target.dataset.curriculumId));
     if (!row) throw new Error("Não foi possível localizar a disciplina. Atualize a grade e tente novamente.");
+    if (target.dataset.curriculumAction === "details") return openCurriculumDetail(row.id, target);
     if (target.dataset.curriculumAction === "edit") return curriculumEditor(row.formation_id || formationView.selectedId, row);
     if (target.dataset.curriculumAction === "status") return openCurriculumStatus(row);
     if (target.dataset.curriculumAction === "review") return openCurriculumReview(row);
@@ -1336,7 +2261,58 @@ document.addEventListener("click", async event => { const target = event.target.
     if (target.dataset.curriculumAction === "dependencies") return openDependencies("curriculum", row.id, row.name, target);
     if (target.dataset.curriculumAction === "destroy") return openTypedDestroy({kind:"curriculum", ident:row.id, name:row.name, endpoint:`/curriculum/${row.id}/destroy`, opener:target, description:"A exclusão definitiva pode incluir estudos, tópicos, blocos, sessões, anotações e revisões vinculados a esta disciplina."});
   }
-  if (target.dataset.addStudy) { await api(`/curriculum/${target.dataset.addStudy}/add-study`,{method:"POST",body:JSON.stringify({})}); toast("Disciplina adicionada aos estudos."); return render(); }
+  if (target.dataset.detailEditCurriculum) {
+    const detail = await api(`/curriculum/${target.dataset.detailEditCurriculum}`);
+    $("#modal-root").replaceChildren();
+    return curriculumEditor(detail.curriculum.formation_id, detail.curriculum);
+  }
+  if (target.dataset.detailAddContent) { $("#modal-root").replaceChildren(); return contentEditor(Number(target.dataset.detailAddContent)); }
+  if (target.dataset.detailEditContent) {
+    const data = await api(`/contents/${target.dataset.detailEditContent}/history`);
+    $("#modal-root").replaceChildren();
+    return contentEditor(data.content.curriculum_subject_id, data.content);
+  }
+  if (target.dataset.detailArchiveContent) {
+    return confirmAction({title:"Arquivar conteúdo", message:"Arquivar este conteúdo? Ele sai das sugestões e do planejamento, mas o histórico é preservado.", confirmLabel:"Arquivar conteúdo", opener:target, onConfirm:async () => { await api(`/contents/${target.dataset.detailArchiveContent}/archive`, {method:"POST"}); toast("Conteúdo arquivado."); }});
+  }
+  if (target.dataset.detailRestoreContent) {
+    await api(`/contents/${target.dataset.detailRestoreContent}/restore`, {method:"POST"});
+    toast("Conteúdo restaurado.");
+    return render();
+  }
+  if (target.dataset.detailDeleteContent) {
+    return confirmAction({title:"Excluir conteúdo", message:`Excluir “${target.dataset.detailContentName}” definitivamente? Se houver sessões, blocos ou avaliações, arquive-o para preservar o histórico.`, confirmLabel:"Excluir conteúdo", opener:target, onConfirm:async () => { await api(`/contents/${target.dataset.detailDeleteContent}`, {method:"DELETE"}); toast("Conteúdo excluído."); }});
+  }
+  if (target.dataset.detailContentHistory) return openContentHistory(Number(target.dataset.detailContentHistory), target);
+  if (target.dataset.detailAddEvaluation) {
+    const currentModal = target.closest("form"); const contents = JSON.parse(currentModal?.dataset.curriculumContents || "[]");
+    $("#modal-root").replaceChildren(); return evaluationEditor(Number(target.dataset.detailAddEvaluation), contents);
+  }
+  if (target.dataset.detailEditEvaluation) {
+    const currentModal = target.closest("form"); const curriculumId = Number(currentModal?.dataset.curriculumId);
+    const detail = await api(`/curriculum/${curriculumId}`); const evaluation = detail.evaluations.evaluations.find(item => item.id === Number(target.dataset.detailEditEvaluation));
+    $("#modal-root").replaceChildren(); return evaluationEditor(curriculumId, detail.contents || [], evaluation);
+  }
+  if (target.dataset.detailDeleteEvaluation) {
+    return confirmAction({title:"Excluir avaliação", message:`Excluir “${target.dataset.detailEvaluationName}” definitivamente?`, confirmLabel:"Excluir avaliação", opener:target, onConfirm:async () => { await api(`/evaluations/${target.dataset.detailDeleteEvaluation}`, {method:"DELETE"}); toast("Avaliação excluída."); }});
+  }
+  if (target.dataset.detailTimeline) { $("#modal-root").replaceChildren(); return openCurriculumTimeline(Number(target.dataset.detailTimeline)); }
+  if (target.dataset.addStudy) {
+    const created = await api(`/curriculum/${target.dataset.addStudy}/add-study`, {method:"POST", body:JSON.stringify({})});
+    const formationId = target.dataset.addStudyFormation;
+    toast("Disciplina vinculada aos Estudos atuais. Agora adicione os tópicos que deseja estudar.");
+    if (page === "formations" && formationId) {
+      window.location.assign(`/studies?study_filter=active&formation_id=${encodeURIComponent(formationId)}&selected=${encodeURIComponent(created.id)}&panel=topics`);
+      return;
+    }
+    studiesView.formationId = formationId || studiesView.formationId;
+    studiesView.visibility = "active";
+    studiesView.selectedId = created.id;
+    studiesView.expandedStudyId = created.id;
+    studiesView.panel = "topics";
+    syncStudiesLocation();
+    return render();
+  }
   if (target.dataset.import !== undefined) return openCurriculumImport(formationView.selectedId, target);
   if (target.dataset.curriculumBulk) return openCurriculumBulkAction(formationView.selectedId, target.dataset.curriculumBulk);
   if (target.dataset.openDuplicateReview) return openDuplicateCandidates(Number(target.dataset.openDuplicateReview));
@@ -1351,6 +2327,7 @@ document.addEventListener("click", async event => { const target = event.target.
     return openCurriculumBulkAction(Number(target.dataset.formationId), "classify");
   }
   if (target.dataset.newStudy !== undefined) return newStudy();
+  if (target.dataset.planStudy) return openPlanEditor(null, {studyId:Number(target.dataset.planStudy)});
   if (target.dataset.editStudy) {
     const study = studiesView.rows?.find(item => item.id === Number(target.dataset.editStudy)) || (await api("/studies?visibility=all")).find(item => item.id === Number(target.dataset.editStudy));
     return studyEditor(study);
@@ -1379,12 +2356,52 @@ document.addEventListener("click", async event => { const target = event.target.
   if (target.dataset.addTask) return modal("Nova tarefa", `<label>Nome<input name="name" required></label>`, values => api(`/projects/${target.dataset.addTask}/tasks`,{method:"POST",body:JSON.stringify(values)}));
   if (target.dataset.toggleTask) { await api(`/project-tasks/${target.dataset.toggleTask}`,{method:"PATCH",body:JSON.stringify({status:target.dataset.taskStatus==="completed"?"pending":"completed"})}); return openProject(Number(target.closest(".modal")?.querySelector("[data-edit-project]")?.dataset.editProject)); }
   if (target.dataset.deleteTask) { await api(`/project-tasks/${target.dataset.deleteTask}`,{method:"DELETE"}); $("#modal-root").replaceChildren(); toast("Tarefa excluída."); return render(); }
-  if (target.dataset.studyDetail) { const detail = await api(`/studies/${target.dataset.studyDetail}`); const holder = $(`#study-topics-${detail.id}`); holder.innerHTML = `<div class="topic-panel">${[...detail.groups.flatMap(group => group.topics),...detail.ungrouped_topics].map(topic => `<div class="list-item"><strong>${esc(topic.name)}</strong><div class="muted">${label(topic.status)} · domínio ${topic.mastery}/5</div></div>`).join("") || "<p class='muted'>Sem tópicos.</p>"}<button class="button" data-new-topic="${detail.id}">+ Tópico</button></div>`; return; }
-  if (target.dataset.newTopic) return modal("Novo tópico", `<label>Nome<input name="name" required></label><label>Domínio inicial<select name="mastery">${[0,1,2,3,4,5].map(value=>`<option value="${value}">${value}/5</option>`).join("")}</select></label>`, values => api(`/studies/${target.dataset.newTopic}/topics`,{method:"POST",body:JSON.stringify({...values,mastery:Number(values.mastery)})}));
+  if (target.dataset.studyDetail) {
+    const studyId = Number(target.dataset.studyDetail);
+    studiesView.selectedId = studyId;
+    studiesView.expandedStudyId = studyId;
+    studiesView.panel = "topics";
+    syncStudiesLocation();
+    return renderStudyTopics(studyId);
+  }
+  if (target.dataset.newTopic) return studyTopicEditor(Number(target.dataset.newTopic));
+  if (target.dataset.editStudyTopic) {
+    const detail = await api(`/studies/${target.dataset.topicStudy}`);
+    const topic = [...(detail.groups || []).flatMap(group => group.topics || []), ...(detail.ungrouped_topics || [])].find(item => Number(item.id) === Number(target.dataset.editStudyTopic));
+    if (!topic) throw new Error("Não foi possível localizar este tópico.");
+    return studyTopicEditor(Number(target.dataset.topicStudy), topic);
+  }
+  if (target.dataset.completeStudyTopic) {
+    await api(`/topics/${target.dataset.completeStudyTopic}`, {method:"PATCH", body:JSON.stringify({status:"completed"})});
+    studiesView.selectedId = Number(target.dataset.topicStudy);
+    studiesView.expandedStudyId = Number(target.dataset.topicStudy);
+    studiesView.panel = "topics";
+    toast("Tópico concluído.");
+    return render();
+  }
+  if (target.dataset.planStudyTopic) return openPlanEditor(null, {studyId:Number(target.dataset.planStudyTopic), topicId:Number(target.dataset.topicId)});
   if (target.dataset.review) { const review = (await api("/reviews")).find(item => item.id === Number(target.dataset.review)); return openSession({review:{...review,rating:target.dataset.rating}}); }
   if (target.dataset.deleteSession) { await api(`/sessions/${target.dataset.deleteSession}`,{method:"DELETE"}); toast("Sessão excluída e domínio reconciliado."); return render(); }
   if (target.dataset.export !== undefined) { const rows = await api("/sessions"); const header = ["data","matéria","tópico","tipo","duração_segundos","início","fim","domínio_antes","domínio_depois","observação"]; const csv = [header,...rows.map(row=>[row.date,row.subject_name,row.topic_name,row.entry_method,row.duration_seconds,row.started_at,row.ended_at,row.mastery_before,row.mastery_after,row.notes])].map(row=>row.map(value=>`"${String(value??"").replaceAll('"','""')}"`).join(",")).join("\n"); const link = document.createElement("a"); link.href=URL.createObjectURL(new Blob([csv],{type:"text/csv;charset=utf-8"})); link.download="historico-plano.csv"; link.click(); URL.revokeObjectURL(link.href); return; }
 } catch (error) { toast(error.message); } });
 
-async function render() { try { $("[data-nav='" + page + "']")?.classList.add("active"); $("#date-label").textContent = new Date().toLocaleDateString("pt-BR",{weekday:"long",day:"numeric",month:"long"}); const pages = {today:renderToday,planning:renderPlanning,formations:renderFormations,studies:renderStudies,reviews:renderReviews,history:renderHistory,analytics:renderAnalytics,projects:renderProjects}; await (pages[page] || renderToday)(); } catch (error) { app.innerHTML = empty("Não foi possível carregar esta página", esc(error.message)); } }
+async function render() {
+  app.setAttribute("aria-busy", "true");
+  try {
+    document.querySelectorAll("[data-nav]").forEach(link => {
+      const active = link.dataset.nav === page;
+      link.classList.toggle("active", active);
+      if (active) link.setAttribute("aria-current", "page"); else link.removeAttribute("aria-current");
+    });
+    $("#date-label").textContent = formatLocalDate(new Date(), {weekday:"long", day:"numeric", month:"long", year:"numeric"});
+    const pages = {today:renderToday,planning:renderPlanning,formations:renderFormations,studies:renderStudies,reviews:renderReviews,history:renderHistory,analytics:renderAnalytics,projects:renderProjects};
+    await (pages[page] || renderToday)();
+  } catch (error) {
+    app.innerHTML = empty("Não foi possível carregar esta página", esc(error.message));
+  } finally {
+    app.setAttribute("aria-busy", "false");
+  }
+}
+
+installResponsiveNavigation();
 render();
