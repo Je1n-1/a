@@ -132,6 +132,11 @@ def curriculum_schedule_settings(ident):
 @api.route("/curriculum/<int:ident>/contents", methods=["GET","POST"])
 def curriculum_contents(ident):
     return run(lambda conn: core.contents(conn, ident, request.args.get("archived") == "1") if request.method == "GET" else core.create_content(conn, ident, body()))
+@api.route("/curriculum/<int:ident>/contents/distribution", methods=["GET", "POST"])
+def curriculum_content_distribution(ident):
+    return run(lambda conn: core.topic_effort_summary_for_curriculum(conn, ident) if request.method == "GET" else core.distribute_topic_effort(conn, "curriculum", ident, body()))
+@api.post("/curriculum/<int:ident>/contents/reorder")
+def curriculum_content_reorder(ident): return run(lambda conn: core.reorder_topics(conn, "curriculum", ident, body()))
 @api.get("/contents/<int:ident>/history")
 def content_history(ident): return run(lambda conn: core.content_history(conn, ident))
 @api.route("/contents/<int:ident>", methods=["PATCH","DELETE"])
@@ -195,14 +200,49 @@ def group_create(ident): return run(lambda conn: core.create_group(conn,ident,bo
 def study_new_attempt(ident): return run(lambda conn: core.new_academic_attempt(conn,ident,body()))
 @api.post("/studies/<int:ident>/topics")
 def topic_create(ident): return run(lambda conn: core.create_topic(conn,ident,body()))
+@api.route("/studies/<int:ident>/topics/distribution", methods=["GET", "POST"])
+def study_topic_distribution(ident):
+    return run(lambda conn: core.topic_effort_summary_for_study(conn, ident) if request.method == "GET" else core.distribute_topic_effort(conn, "study", ident, body()))
+@api.post("/studies/<int:ident>/topics/reorder")
+def study_topic_reorder(ident): return run(lambda conn: core.reorder_topics(conn, "study", ident, body()))
 @api.patch("/topics/<int:ident>")
 def topic_item(ident): return run(lambda conn: core.update_topic(conn,ident,body()))
+@api.post("/topics/<int:ident>/<action>")
+def topic_action(ident, action):
+    if action == "archive": return run(lambda conn: core.archive_topic(conn, ident))
+    if action == "restore": return run(lambda conn: core.archive_topic(conn, ident, True))
+    return respond({"error":"Ação de tópico inválida."}, 400)
+@api.route("/topics/<int:ident>/dependencies", methods=["GET", "PUT"])
+def topic_dependencies(ident):
+    if request.method == "GET":
+        return run(lambda conn: {"topic": core._get(conn, "topicos", ident), "prerequisite_topic_ids": core._topic_dependencies_map(conn, [ident]).get(ident, [])})
+    return run(lambda conn: core.set_topic_dependencies(conn, ident, body()))
 
 
 @api.route("/sessions",methods=["GET","POST"])
 def session_collection(): return run(lambda conn: core.history(conn,request.args.get("start"),request.args.get("end")) if request.method=="GET" else core.create_session(conn,body()))
 @api.route("/sessions/<int:ident>",methods=["PATCH","DELETE"])
 def session_item(ident): return run(lambda conn: core.update_session(conn,ident,body()) if request.method=="PATCH" else core.delete_session(conn,ident) or {"deleted":True})
+
+
+@api.get("/focus/active")
+def focus_active(): return run(core.active_focus_session)
+@api.post("/focus/sessions")
+def focus_start(): return run(lambda conn: core.start_focus_session(conn, body()))
+@api.get("/focus/sessions/<int:ident>")
+def focus_session(ident): return run(lambda conn: core._focus_snapshot(conn, core._focus_row(conn, ident)))
+@api.post("/focus/sessions/<int:ident>/pause")
+def focus_pause(ident): return run(lambda conn: core.pause_focus_session(conn, ident, body()))
+@api.post("/focus/sessions/<int:ident>/resume")
+def focus_resume(ident): return run(lambda conn: core.resume_focus_session(conn, ident, body()))
+@api.post("/focus/sessions/<int:ident>/recover")
+def focus_recover(ident): return run(lambda conn: core.recover_focus_session(conn, ident, body()))
+@api.put("/focus/sessions/<int:ident>/note")
+def focus_note(ident): return run(lambda conn: core.save_focus_note(conn, ident, body()))
+@api.post("/focus/sessions/<int:ident>/finish")
+def focus_finish(ident): return run(lambda conn: core.finish_focus_session(conn, ident, body()))
+@api.post("/focus/sessions/<int:ident>/cancel")
+def focus_cancel(ident): return run(lambda conn: core.cancel_focus_session(conn, ident, body()))
 
 
 @api.route("/notes", methods=["GET", "POST"])

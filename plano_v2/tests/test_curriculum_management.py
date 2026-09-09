@@ -196,12 +196,16 @@ class CurriculumManagementApiTest(unittest.TestCase):
     def test_analytics_keeps_real_sessions_distinct_from_completed_plans(self):
         study = self.client.post("/api/studies", json={"personal_name": "Estudo livre"}).get_json()
         block = self.planned(study, "2026-09-04")
-        self.client.patch(f"/api/planned/{block['id']}", json={"status": "completed"})
+        recorded = self.client.post("/api/sessions", json={
+            "study_subject_id": study["id"], "planned_session_id": block["id"],
+            "date": "2026-09-04", "duration_seconds": 50 * 60,
+        })
+        self.assertEqual(recorded.status_code, 200, recorded.get_json())
         analytics = self.client.get("/api/analytics")
         self.assertEqual(analytics.status_code, 200, analytics.get_json())
-        self.assertEqual(analytics.get_json()["real_sessions"], 0)
+        self.assertEqual(analytics.get_json()["real_sessions"], 1)
         self.assertEqual(analytics.get_json()["completed_planned_blocks"], 1)
-        self.assertEqual(analytics.get_json()["completed_planned_without_real_session"], 1)
+        self.assertEqual(analytics.get_json()["completed_planned_without_real_session"], 0)
 
 
 if __name__ == "__main__":

@@ -4,7 +4,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const app = $("#app");
 const page = document.body.dataset.page;
 const weekdays = ["Segunda", "Terça", "Quarta", "Quinta", "Sexta", "Sábado", "Domingo"];
-const status = {not_available:"Não disponível",available:"Disponível",in_progress:"Em andamento",completed:"Concluída",failed:"Reprovada",locked:"Bloqueada",exempted:"Dispensada",not_started:"Não iniciado",planned:"Planejada",skipped:"Não realizada",rescheduled:"Reagendada",cancelled:"Cancelada",active:"Ativo",paused:"Pausado",archived:"Arquivado",queued:"Na fila de revisão",reviewed:"Revisada",withdrawn:"Retirada",scheduled:"Prevista",delivered:"Entregue",corrected:"Corrigida"};
+const status = {not_available:"Não disponível",available:"Disponível",in_progress:"Em andamento",completed:"Concluída",failed:"Reprovada",locked:"Bloqueada",exempted:"Dispensada",not_started:"Não iniciado",for_review:"Para revisar",planned:"Planejada",skipped:"Não realizada",rescheduled:"Reagendada",cancelled:"Cancelada",active:"Ativo",paused:"Pausado",archived:"Arquivado",queued:"Na fila de revisão",reviewed:"Revisada",withdrawn:"Retirada",scheduled:"Prevista",delivered:"Entregue",corrected:"Corrigida"};
 const esc = value => String(value ?? "").replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#039;"}[char]));
 const hours = value => `${(Number(value || 0) / 3600).toFixed(1).replace(".", ",")} h`;
 const empty = (title, message, action = "") => `<div class="empty"><strong>${title}</strong><span>${message}</span>${action}</div>`;
@@ -499,11 +499,11 @@ async function openSession({planned = null, review = null} = {}) {
   const studies = await api("/studies");
   if (!studies.length) return toast("Crie ou adicione um estudo antes de registrar uma sessão.");
   const preferred = planned?.study_subject_id || review?.study_subject_id || studies[0].id;
-  const form = modal(planned ? "Começar sessão planejada" : review ? "Registrar revisão" : "Registrar sessão", `<label>Matéria<select name="study_subject_id" id="session-study">${studyOptions(studies, preferred)}</select></label><label>Tópico<select name="topic_id" id="session-topic"></select></label><label>Data<input name="date" type="date" value="${localDateISO()}" required></label><label>Horário inicial (opcional)<input name="started_at" type="datetime-local"></label><label>Duração (minutos)<input name="minutes" type="number" min="1" value="${planned?.planned_duration_minutes || 25}" required></label><label>Domínio depois<select name="mastery_after"><option value="">Não informar</option>${[0,1,2,3,4,5].map(value => `<option value="${value}">${value}/5</option>`).join("")}</select></label><label><input name="topic_completed" type="checkbox" value="true"> Concluí este tópico</label><label>O que foi estudado?<textarea name="notes" placeholder="Dificuldades, exercícios e próximos passos."></textarea></label>`, async values => {
+  const form = modal(planned ? "Começar sessão planejada" : review ? "Registrar revisão" : "Registrar sessão", `<label>Matéria<select name="study_subject_id" id="session-study">${studyOptions(studies, preferred)}</select></label><label>Tópico<select name="topic_id" id="session-topic"></select></label><label>Data<input name="date" type="date" value="${localDateISO()}" required></label><label>Horário inicial (opcional)<input name="started_at" type="datetime-local"></label><label>Duração (minutos)<input name="minutes" type="number" min="1" value="${planned?.planned_duration_minutes || 25}" required></label><label>Domínio depois<select name="mastery_after"><option value="">Não informar</option>${[0,1,2,3,4,5].map(value => `<option value="${value}">${value}/5</option>`).join("")}</select></label><label><input name="topic_completed" type="checkbox" value="true"> Concluí este tópico</label><label>Se houver blocos automáticos futuros deste tópico<select name="future_blocks_action"><option value="">Perguntar antes de concluir</option><option value="next_topic">Avançar blocos para o próximo tópico</option><option value="replan">Cancelar blocos automáticos e replanejar</option><option value="review">Manter blocos como revisão</option></select></label><p class="field-help">A escolha só é usada se você marcar o tópico como concluído. Blocos manuais nunca são alterados aqui.</p><label>O que foi estudado?<textarea name="notes" placeholder="Dificuldades, exercícios e próximos passos."></textarea></label>`, async values => {
     const seconds = Number(values.minutes) * 60;
     const started = values.started_at ? new Date(values.started_at) : null;
     const ended = started ? new Date(started.getTime() + seconds * 1000) : null;
-    const payload = {study_subject_id:Number(values.study_subject_id), topic_id:values.topic_id ? Number(values.topic_id) : null, date:values.date, duration_seconds:seconds, started_at:started?.toISOString(), ended_at:ended?.toISOString(), mastery_after:values.mastery_after === "" ? null : Number(values.mastery_after), topic_completed:values.topic_completed === "true", entry_method:review ? "review" : "manual", notes:values.notes};
+    const payload = {study_subject_id:Number(values.study_subject_id), topic_id:values.topic_id ? Number(values.topic_id) : null, date:values.date, duration_seconds:seconds, started_at:started?.toISOString(), ended_at:ended?.toISOString(), mastery_after:values.mastery_after === "" ? null : Number(values.mastery_after), topic_completed:values.topic_completed === "true", future_blocks_action:values.future_blocks_action || null, entry_method:review ? "review" : "manual", notes:values.notes};
     if (planned) payload.planned_session_id = planned.id;
     if (review) {
       await api(`/reviews/${review.id}/complete`, {method:"POST", body:JSON.stringify({rating: review.rating, duration_seconds: seconds, notes: values.notes})});
@@ -514,48 +514,21 @@ async function openSession({planned = null, review = null} = {}) {
   study.onchange = load; await load();
 }
 
-async function startTimer(planned = null, preferredStudyId = null, preferredTopicId = null) {
-  const studies = await api("/studies");
-  if (!studies.length) return toast("Crie um estudo antes de iniciar o foco.");
-  const started = new Date();
-  const preferred = preferredStudyId || planned?.study_subject_id || studies[0].id;
-  const form = modal("Foco em andamento", `<label>Matéria<select name="study_subject_id" id="timer-study">${studyOptions(studies, preferred)}</select></label><label>Tópico<select name="topic_id" id="timer-topic"></select></label><div class="card"><div class="muted">TEMPO DECORRIDO</div><div class="metric" id="timer-clock">00:00:00</div></div><label>Observação<textarea name="notes" placeholder="O que você estudou?"></textarea></label>`, async values => {
-    const ended = new Date();
-    await api("/sessions", {method:"POST", body:JSON.stringify({study_subject_id:Number(values.study_subject_id), topic_id:values.topic_id ? Number(values.topic_id) : null, planned_session_id:planned?.id || null, date:localDateISO(started), started_at:started.toISOString(), ended_at:ended.toISOString(), duration_seconds:Math.max(1, Math.round((ended - started) / 1000)), entry_method:"timer", notes:values.notes})});
-  });
-  const study = $("#timer-study", form), topic = $("#timer-topic", form);
-  let interval = null;
-  const stopClock = () => {
-    if (interval !== null) window.clearInterval(interval);
-    interval = null;
-  };
-  form.addEventListener("submit", stopClock, {once:true});
-  form.addEventListener("modalclose", stopClock, {once:true});
-  form.addEventListener("click", event => { if (event.target.closest("[data-close]")) stopClock(); });
-  const load = async () => { topic.innerHTML = topicOptions(await topicsFor(study.value), planned?.topic_id || preferredTopicId); };
-  study.onchange = load; await load();
-  if (!form.isConnected) return;
-  interval = window.setInterval(() => {
-    const clock = $("#timer-clock", form);
-    if (!clock) return stopClock();
-    const seconds = Math.floor((Date.now() - started.getTime()) / 1000);
-    clock.textContent = new Date(seconds * 1000).toISOString().slice(11, 19);
-  }, 500);
-}
-
 async function renderToday() {
   const [data, reviews] = await Promise.all([api("/today"), api("/reviews")]);
   const rec = data.suggestion;
   const agenda = data.agenda || [];
   const dateLabel = formatLocalDate(data.date, {day:"2-digit", month:"2-digit", year:"numeric"});
   const nextAgenda = agenda.find(item => !["completed", "cancelled"].includes(item.status));
+  const freeTime = data.on_track ? `<section class="card today-free-time"><span class="tag">FOLGA CONQUISTADA</span><h2>Você está em dia</h2><p>${esc(data.free_time_message || "A demanda obrigatória de hoje já foi cumprida.")}</p>${data.free_time_preference === "preserve" ? `<p class="muted">Sua preferência atual é preservar o tempo livre; nenhuma sugestão foi incluída automaticamente.</p>` : ""}${(data.free_time_options || []).length ? `<div class="tag-row">${data.free_time_options.map(option => `<span class="tag">${esc(option)}</span>`).join("")}</div>` : ""}</section>` : "";
   const suggestion = rec ? `<section class="card today-suggestion">${panelTitle("SUGESTÃO DE ESTUDO", rec.study_subject.name, rec.topic?.name || "Sem conteúdo específico cadastrado", `<div class="action-group"><button type="button" class="button" data-focus-study="${rec.study_subject.id}" data-focus-topic="${rec.topic?.id || ""}">Começar</button><button type="button" class="button primary" data-add-today-suggestion data-suggest-study="${rec.study_subject.id}" data-suggest-topic="${rec.topic?.id || ""}" data-suggest-date="${rec.slot.scheduled_date}" data-suggest-start="${rec.slot.start_time}" data-suggest-duration="${rec.slot.planned_duration_minutes}">Adicionar às ${esc(rec.slot.start_time)}</button></div>`)}<div class="suggestion-reason"><span aria-hidden="true">✦</span><p class="muted">${rec.reasons.map(esc).join(" · ")} · bloco sugerido de ${minutesLabel(rec.slot.planned_duration_minutes)}.</p></div>${rec.alternatives?.length ? `<p class="field-help">Alternativas de menor prioridade: ${esc(rec.alternatives.join(", "))}.</p>` : ""}</section>` : `<section class="card today-suggestion">${data.day_is_full ? empty("Dia já está cheio", "A agenda ocupa a capacidade disponível hoje. Reagende ou altere a disponibilidade se precisar abrir espaço.", '<a href="/planning" class="button ghost">Abrir planejamento</a>') : empty("Sem sugestão adicional", data.suggestion_unavailable ? "Há uma prioridade pendente, mas não cabe um bloco mínimo no horário restante de hoje." : "Cadastre uma meta, esforço necessário ou conteúdo para receber sugestões.", '<a href="/planning" class="button ghost">Abrir planejamento</a>')}</section>`;
   const agendaMarkup = agenda.length ? `<div class="agenda-timeline">${agenda.map(item => {
     const isNext = item.id === nextAgenda?.id;
     const state = label(item.status || "planned");
-    return `<article class="agenda-item ${isNext ? "is-next" : ""}"><div class="agenda-time">${esc(item.start_time || "Livre")}</div><div class="agenda-marker" aria-hidden="true"></div><div class="agenda-item-main"><strong>${esc(item.subject_name)}</strong><span>${esc(item.topic_name || "Sessão sem conteúdo")}</span></div><div class="agenda-item-meta"><span class="status">${esc(state)}</span><span>${minutesLabel(item.planned_duration_minutes)}</span></div><button type="button" class="button ${isNext ? "primary" : "ghost"}" data-start-plan="${item.id}">${isNext ? "Começar" : "Abrir"}</button></article>`;
+    const context = planningBlockContext(item);
+    return `<article class="agenda-item ${isNext ? "is-next" : ""}"><div class="agenda-time">${esc(item.start_time || "Livre")}</div><div class="agenda-marker" aria-hidden="true"></div><div class="agenda-item-main"><strong>${esc(item.subject_name)}</strong><span>${esc(item.topic_name || "Sessão sem conteúdo")}</span>${context ? `<small class="agenda-item-context">${esc(context)}</small>` : ""}</div><div class="agenda-item-meta"><span class="status">${esc(state)}</span><span>${minutesLabel(item.planned_duration_minutes)}</span></div><button type="button" class="button ${isNext ? "primary" : "ghost"}" data-start-plan="${item.id}">${isNext ? "Começar" : "Abrir"}</button></article>`;
   }).join("")}</div>` : empty("Nenhum bloco agendado", "Use Planejamento para criar blocos ou aproveite a sugestão abaixo.", '<a href="/planning" class="button ghost">Abrir planejamento</a>');
-  app.innerHTML = `<section class="today-dashboard"><div class="grid kpis today-kpis">${statCard("Capacidade hoje", minutesLabel(data.capacity_minutes), "janelas disponíveis", "ϟ", "blue")}${statCard("Planejado", minutesLabel(data.planned_minutes), `${agenda.length} bloco(s) na agenda`, "▣", "violet")}${statCard("Estudado", minutesLabel(data.studied_minutes), "sessões reais", "▥", "amber")}${statCard("Livre restante", minutesLabel(data.free_minutes), data.day_is_full ? "dia cheio" : "após os blocos atuais", "◷", "green")}${statCard("Demanda obrigatória hoje", minutesLabel(data.required_minutes), "agenda salva", "◎", "violet")}</div><div class="grid split today-layout"><section class="stack"><section class="card agenda-card">${panelTitle("AGENDA ÚNICA DO DIA", `Agenda de hoje · ${dateLabel}`, "A agenda salva é a prioridade do dia.", '<a href="/planning" class="button ghost">Abrir planejamento</a>')}${agendaMarkup}</section>${suggestion}</section><aside class="stack"><section class="card reviews-today-card">${panelTitle("REVISÕES", "Revisões pendentes", reviews.length ? `${reviews.length} item(ns) aguardando revisão.` : "Nenhuma revisão exige atenção agora.", '<a href="/reviews" class="button ghost">Ver revisões</a>')}${reviews.length ? `<div class="compact-list">${reviews.slice(0, 4).map(item => `<div class="list-item"><strong>${esc(item.topic_name)}</strong><div class="muted">${esc(item.subject_name)} · ${formatLocalDate(item.due_date, {day:"2-digit", month:"2-digit"})}</div></div>`).join("")}</div>` : empty("Sem revisões pendentes", "Uma sessão com conteúdo inicia a sequência D+1, D+7 e D+30.")}</section><section class="card how-to-use-card">${panelTitle("COMO USAR O TEMPO", "Planejar e estudar são coisas diferentes")}<div class="guidance-row"><span aria-hidden="true">☼</span><p>A agenda salva vem primeiro. A sugestão ocupa somente uma faixa livre e não repete uma matéria já agendada hoje.</p></div><div class="guidance-row"><span aria-hidden="true">↗</span><p>O indicador Estudado aumenta somente ao registrar uma sessão real.</p></div></section></aside></div></section>`;
+  app.innerHTML = `<section class="today-dashboard"><div class="grid kpis today-kpis">${statCard("Capacidade hoje", minutesLabel(data.capacity_minutes), "janelas disponíveis", "ϟ", "blue")}${statCard("Planejado", minutesLabel(data.planned_minutes), `${agenda.length} bloco(s) na agenda`, "▣", "violet")}${statCard("Estudado", minutesLabel(data.studied_minutes), "sessões reais", "▥", "amber")}${statCard("Livre restante", minutesLabel(data.free_minutes), data.day_is_full ? "dia cheio" : "após os blocos atuais", "◷", "green")}${statCard("Demanda obrigatória hoje", minutesLabel(data.required_minutes), "agenda salva", "◎", "violet")}</div><div class="grid split today-layout"><section class="stack"><section class="card agenda-card">${panelTitle("AGENDA ÚNICA DO DIA", `Agenda de hoje · ${dateLabel}`, "A agenda salva é a prioridade do dia.", '<a href="/planning" class="button ghost">Abrir planejamento</a>')}${agendaMarkup}</section>${freeTime}${suggestion}</section><aside class="stack"><section class="card reviews-today-card">${panelTitle("REVISÕES", "Revisões pendentes", reviews.length ? `${reviews.length} item(ns) aguardando revisão.` : "Nenhuma revisão exige atenção agora.", '<a href="/reviews" class="button ghost">Ver revisões</a>')}${reviews.length ? `<div class="compact-list">${reviews.slice(0, 4).map(item => `<div class="list-item"><strong>${esc(item.topic_name)}</strong><div class="muted">${esc(item.subject_name)} · ${formatLocalDate(item.due_date, {day:"2-digit", month:"2-digit"})}</div></div>`).join("")}</div>` : empty("Sem revisões pendentes", "Uma sessão com conteúdo inicia a sequência D+1, D+7 e D+30.")}</section><section class="card how-to-use-card">${panelTitle("COMO USAR O TEMPO", "Planejar e estudar são coisas diferentes")}<div class="guidance-row"><span aria-hidden="true">☼</span><p>A agenda salva vem primeiro. A sugestão ocupa somente uma faixa livre e não repete uma matéria já agendada hoje.</p></div><div class="guidance-row"><span aria-hidden="true">↗</span><p>O indicador Estudado aumenta somente ao registrar uma sessão real.</p></div></section></aside></div></section>`;
 }
 
 async function openAvailability() {
@@ -594,12 +567,14 @@ async function openPlanEditor(id, defaults = {}) {
 
 let focusOpening = false;
 
-function openPlanningFocus(plannedId, opener = null) {
+function openPlanningFocus(plannedId, opener = null, studyId = null, topicId = null) {
   if (focusOpening) return;
   focusOpening = true;
   if (opener instanceof HTMLButtonElement) opener.disabled = true;
   const url = new URL("/focus", window.location.origin);
   if (plannedId) url.searchParams.set("planned_id", String(plannedId));
+  if (studyId) url.searchParams.set("study_id", String(studyId));
+  if (topicId) url.searchParams.set("topic_id", String(topicId));
   window.open(url.href, "_blank", "noopener");
   window.setTimeout(() => {
     focusOpening = false;
@@ -621,7 +596,8 @@ async function openPlanRescheduleEditor(current) {
 
 async function openPlanActions(id, opener) {
   const current = await api(`/planned/${id}`);
-  const form = modal("Bloco planejado", `<div class="planning-block-summary"><strong>${esc(current.subject_name)}</strong><span>${esc(current.topic_name || "Sessão sem tópico")}</span><span>${esc(current.scheduled_date)} · ${esc(current.start_time || "Horário livre")} · ${current.planned_duration_minutes} min</span></div><p class="muted">Cancelar mantém o bloco no histórico como cancelado. Excluir remove o bloco definitivamente.</p>`, null);
+  const context = planningBlockContext(current);
+  const form = modal("Bloco planejado", `<div class="planning-block-summary"><strong>${esc(current.subject_name)}</strong><span>${esc(current.topic_name || "Sessão sem tópico")}</span><span>${esc(current.scheduled_date)} · ${esc(current.start_time || "Horário livre")} · ${current.planned_duration_minutes} min</span>${context ? `<span class="field-help">${esc(context)}</span>` : ""}</div><p class="muted">Cancelar mantém o bloco no histórico como cancelado. Excluir remove o bloco definitivamente.</p>`, null);
   $(".form-actions", form).innerHTML = `<button class="button" type="button" data-close>Fechar</button><button class="button" type="button" data-plan-edit>Editar</button><button class="button primary" type="button" data-plan-start>Começar</button><button class="button" type="button" data-plan-reschedule>Reagendar</button><button class="button" type="button" data-plan-cancel>Cancelar</button><button class="button danger" type="button" data-plan-delete>Excluir</button>`;
   const close = () => $("#modal-root").replaceChildren();
   $("[data-plan-edit]", form).onclick = () => { close(); openPlanEditor(current.id).catch(error => toast(error.message)); };
@@ -687,6 +663,8 @@ function planningPreviewSessionContext(item) {
   if (item.formation_name) values.push(`Formação: ${item.formation_name}`);
   if (item.deadline_date) values.push(`Prazo: ${formatLocalDate(item.deadline_date, {dateStyle:"short"})}`);
   if (item.risk_label) values.push(item.risk_label);
+  if (item.topic_progress_percent !== undefined && item.topic_progress_percent !== null) values.push(`tópico em ${clampPercent(item.topic_progress_percent)}%`);
+  if (item.topic_remaining_minutes !== undefined && item.topic_remaining_minutes !== null) values.push(`faltam ${minutesLabel(item.topic_remaining_minutes)}`);
   if (item.remaining_after_minutes !== undefined && item.remaining_after_minutes !== null) values.push(`restam ${minutesLabel(item.remaining_after_minutes)} para alocar`);
   return values.join(" · ");
 }
@@ -790,8 +768,9 @@ async function editAvailability(id) {
 }
 
 function openPlanningSettings(preferences = {}) {
-  const form = modal("Duração e pausa", `<p class="muted">Essas preferências orientam apenas os blocos criados automaticamente.</p><div class="settings-grid"><label>Duração padrão (min)<input name="default_session_minutes" type="number" min="1" value="${preferences.default_session_minutes || 50}" required></label><label>Intervalo padrão (min)<input name="planning_break_minutes" type="number" min="0" value="${preferences.planning_break_minutes || 10}" required></label><label>Duração mínima (min)<input name="minimum_session_minutes" type="number" min="1" value="${preferences.minimum_session_minutes || 25}" required></label><label>Duração máxima (min)<input name="maximum_session_minutes" type="number" min="1" value="${preferences.maximum_session_minutes || 120}" required></label></div>`, async values => {
-    for (const key of ["default_session_minutes", "minimum_session_minutes", "maximum_session_minutes", "planning_break_minutes"]) values[key] = Number(values[key]);
+  const form = modal("Duração, descanso e folga", `<p class="muted">Essas preferências orientam apenas blocos criados automaticamente; sua agenda manual não é apagada nem preenchida sem escolha.</p><div class="settings-grid"><label>Duração padrão (min)<input name="default_session_minutes" type="number" min="1" value="${preferences.default_session_minutes || 50}" required></label><label>Intervalo padrão (min)<input name="planning_break_minutes" type="number" min="0" value="${preferences.planning_break_minutes || 10}" required></label><label>Duração mínima (min)<input name="minimum_session_minutes" type="number" min="1" value="${preferences.minimum_session_minutes || 25}" required></label><label>Duração máxima (min)<input name="maximum_session_minutes" type="number" min="1" value="${preferences.maximum_session_minutes || 120}" required></label><label>Máximo de estudo por dia (min)<input name="daily_max_study_minutes" type="number" min="0" value="${preferences.daily_max_study_minutes || ""}" placeholder="Sem limite"></label><label>Descanso reservado por dia (min)<input name="minimum_rest_minutes" type="number" min="0" value="${preferences.minimum_rest_minutes || ""}" placeholder="Sem reserva"></label></div><label class="toggle-row"><input name="suggest_during_free_time" type="checkbox" value="true" ${String(preferences.suggest_during_free_time ?? "true") !== "false" && String(preferences.suggest_during_free_time ?? "true") !== "0" ? "checked" : ""}> Mostrar sugestões durante a folga</label><label>Quando houver folga<select name="free_time_preference"><option value="suggest" ${(preferences.free_time_preference || "suggest") === "suggest" ? "selected" : ""}>Mostrar opções, sem preencher automaticamente</option><option value="preserve" ${preferences.free_time_preference === "preserve" ? "selected" : ""}>Preservar o horário livre</option></select></label>`, async (values, currentForm) => {
+    for (const key of ["default_session_minutes", "minimum_session_minutes", "maximum_session_minutes", "planning_break_minutes", "daily_max_study_minutes", "minimum_rest_minutes"]) values[key] = Number(values[key] || 0);
+    values.suggest_during_free_time = currentForm.querySelector("[name=suggest_during_free_time]")?.checked || false;
     if (values.maximum_session_minutes < values.minimum_session_minutes) throw new Error("A duração máxima deve ser maior ou igual à mínima.");
     await api("/settings", {method:"PUT", body:JSON.stringify(values)});
   });
@@ -815,6 +794,15 @@ function planningTitle(range) {
 
 function planningBlockSummary(item) {
   return `${item.subject_name || "Matéria"} · ${item.scheduled_date} · ${item.start_time || "horário livre"}`;
+}
+
+function planningBlockContext(item) {
+  const values = [];
+  const reason = item?.selection_reason || item?.reason;
+  if (reason) values.push(String(reason));
+  if (item?.topic_progress_percent !== null && item?.topic_progress_percent !== undefined) values.push(`tópico ${clampPercent(item.topic_progress_percent)}%`);
+  if (item?.topic_remaining_minutes !== null && item?.topic_remaining_minutes !== undefined) values.push(`faltam ${minutesLabel(item.topic_remaining_minutes)}`);
+  return values.join(" · ");
 }
 
 function planningDaySummary(day) {
@@ -943,12 +931,12 @@ async function renderPlanning() {
     const dayLabel = calendarDayLabel(date);
     const plannedBlockLabel = `${sessions.length} ${sessions.length === 1 ? "bloco planejado" : "blocos planejados"}`;
     const deleteDay = sessions.length ? `<button type="button" class="button ghost danger calendar-day-delete" data-delete-planning-day="${day}" data-planning-day-count="${sessions.length}" aria-label="Excluir os ${plannedBlockLabel} de ${esc(planningDaySummary(day))}" title="Excluir todos os blocos deste dia">Excluir dia</button>` : "";
-    return `<article class="calendar-day ${outsideMonth ? "outside-month" : ""} ${day === today ? "today" : ""}" role="gridcell" aria-label="${esc(dayLabel)}${day === today ? ", hoje" : ""}"><header><div class="calendar-day-date"><time datetime="${day}">${date.getUTCDate()}</time><span>${esc(dayLabel.replace(/^\S+\s*/, ""))}</span></div>${deleteDay}</header><div class="calendar-sessions">${sessions.map(item => `<button type="button" class="session session-block" data-plan="${item.id}" aria-label="Abrir ações para ${esc(planningBlockSummary(item))}"><span class="session-time">${esc(item.start_time || "Livre")}</span><strong>${esc(item.subject_name)}</strong><span class="session-topic">${esc(item.topic_name || "Sessão sem conteúdo")}</span><span class="session-duration">${minutesLabel(item.planned_duration_minutes)}</span></button>`).join("") || `<span class="calendar-free">Dia livre</span>`}</div></article>`;
+    return `<article class="calendar-day ${outsideMonth ? "outside-month" : ""} ${day === today ? "today" : ""}" role="gridcell" aria-label="${esc(dayLabel)}${day === today ? ", hoje" : ""}"><header><div class="calendar-day-date"><time datetime="${day}">${date.getUTCDate()}</time><span>${esc(dayLabel.replace(/^\S+\s*/, ""))}</span></div>${deleteDay}</header><div class="calendar-sessions">${sessions.map(item => { const context = planningBlockContext(item); return `<button type="button" class="session session-block" data-plan="${item.id}" aria-label="Abrir ações para ${esc(planningBlockSummary(item))}"><span class="session-time">${esc(item.start_time || "Livre")}</span><strong>${esc(item.subject_name)}</strong><span class="session-topic">${esc(item.topic_name || "Sessão sem conteúdo")}</span><span class="session-duration">${minutesLabel(item.planned_duration_minutes)}</span>${context ? `<span class="session-context">${esc(context)}</span>` : ""}</button>`; }).join("") || `<span class="calendar-free">Dia livre</span>`}</div></article>`;
   }).join("")}</div></section>`;
   const idealMarkup = `<section class="stack ideal-list"><section class="card"><div class="bar"><div><span class="tag">MUNDO IDEAL</span><h2>Esforço e risco por item</h2><p class="muted">O esforço realizado vem somente de sessões reais. Blocos futuros reduzem apenas o que ainda falta alocar.</p></div><button class="button primary" data-generate>Gerar prévia</button></div>${ideal.items?.length ? ideal.items.map(planningRiskMarkup).join("") : empty("Nenhum item planejável", "Ative uma disciplina disponível ou configure um estudo paralelo com esforço ou meta semanal.")}</section><section class="card"><span class="tag">PRÓXIMAS DISCIPLINAS</span><h2>Futuras, fora da demanda atual</h2>${ideal.future_subjects?.length ? ideal.future_subjects.map(item => `<div class="list-item"><strong>${esc(item.name)}</strong><div class="muted">${esc(item.formation_name)} · ${esc(item.start_date || item.end_date || item.deadline_date || "sem data prevista")}</div></div>`).join("") : empty("Nenhuma disciplina futura", "Disciplinas não disponíveis aparecerão aqui, sem ocupar nenhum horário.")}</section></section>`;
   const groupedAvailability = weekdays.map((day, weekday) => ({day, weekday, ranges:availability.filter(item => Number(item.weekday) === weekday)})).filter(group => group.ranges.length);
   const availabilityMarkup = groupedAvailability.length ? `<div class="availability-groups">${groupedAvailability.map(group => `<section class="availability-day-group"><strong>${esc(group.day)}</strong><div class="availability-ranges">${group.ranges.map(item => `<div class="availability-range ${item.enabled === 0 || item.enabled === false ? "is-disabled" : ""}"><span>${esc(item.start_time)}–${esc(item.end_time)}</span><div class="range-actions"><button type="button" class="icon-button" data-edit-availability="${item.id}" aria-label="Editar faixa de ${esc(group.day)} ${esc(item.start_time)} até ${esc(item.end_time)}" title="Editar faixa">✎</button><button type="button" class="icon-button danger" data-delete-availability="${item.id}" aria-label="Excluir faixa de ${esc(group.day)} ${esc(item.start_time)} até ${esc(item.end_time)}" title="Excluir faixa">×</button></div></div>`).join("")}</div></section>`).join("")}</div>` : empty("Nenhuma faixa", "Adicione os horários em que você pode estudar.");
-  const sideMarkup = `<aside class="stack planning-side"><section class="card availability-panel">${panelTitle("DISPONIBILIDADE", "Disponibilidade semanal", "Você pode cadastrar mais de uma faixa por dia; os intervalos ficam livres.", '<button type="button" class="button ghost" data-availability>+ Adicionar faixa</button>')}${availabilityMarkup}</section><section class="card planning-preferences">${panelTitle("DURAÇÃO E PAUSA", "Preferências do plano", "Ajuste somente como os blocos automáticos são apresentados.", '<button type="button" class="button ghost" data-edit-planning-settings>Editar preferências</button>')}<dl><div><dt>Bloco padrão</dt><dd>${minutesLabel(preferences.default_session_minutes || 50)}</dd></div><div><dt>Pausa</dt><dd>${minutesLabel(preferences.planning_break_minutes || 10)}</dd></div><div><dt>Limites</dt><dd>${preferences.minimum_session_minutes || 25}–${preferences.maximum_session_minutes || 120} min</dd></div></dl></section></aside>`;
+  const sideMarkup = `<aside class="stack planning-side"><section class="card availability-panel">${panelTitle("DISPONIBILIDADE", "Disponibilidade semanal", "Você pode cadastrar mais de uma faixa por dia; os intervalos ficam livres.", '<button type="button" class="button ghost" data-availability>+ Adicionar faixa</button>')}${availabilityMarkup}</section><section class="card planning-preferences">${panelTitle("DURAÇÃO E PAUSA", "Preferências do plano", "Limites e descanso restringem apenas novas sugestões e blocos automáticos.", '<button type="button" class="button ghost" data-edit-planning-settings>Editar preferências</button>')}<dl><div><dt>Bloco padrão</dt><dd>${minutesLabel(preferences.default_session_minutes || 50)}</dd></div><div><dt>Pausa</dt><dd>${minutesLabel(preferences.planning_break_minutes || 10)}</dd></div><div><dt>Limites</dt><dd>${preferences.minimum_session_minutes || 25}–${preferences.maximum_session_minutes || 120} min</dd></div><div><dt>Máximo diário</dt><dd>${preferences.daily_max_study_minutes ? minutesLabel(preferences.daily_max_study_minutes) : "Sem limite"}</dd></div><div><dt>Descanso reservado</dt><dd>${preferences.minimum_rest_minutes ? minutesLabel(preferences.minimum_rest_minutes) : "Não definido"}</dd></div><div><dt>Folga</dt><dd>${preferences.free_time_preference === "preserve" ? "Preservar horário" : "Mostrar opções"}</dd></div></dl></section></aside>`;
   app.innerHTML = `<section class="planning-workspace"><div class="planning-toolbar"><div class="planning-toolbar-group" role="group" aria-label="Área do planejamento"><button type="button" class="button ${planningView.tab === "calendar" ? "primary" : "ghost"}" data-planning-tab="calendar" aria-pressed="${planningView.tab === "calendar"}">Calendário</button><button type="button" class="button ${planningView.tab === "ideal" ? "primary" : "ghost"}" data-planning-tab="ideal" aria-pressed="${planningView.tab === "ideal"}">Mundo ideal</button></div><div class="planning-toolbar-group" role="group" aria-label="Visualização do calendário"><button type="button" class="button ${planningView.mode === "month" ? "primary" : "ghost"}" data-planning-mode="month" aria-pressed="${planningView.mode === "month"}">Mês</button><button type="button" class="button ${planningView.mode === "week" ? "primary" : "ghost"}" data-planning-mode="week" aria-pressed="${planningView.mode === "week"}">Semana</button></div><div class="planning-actions"><button type="button" class="button ghost" data-availability>Disponibilidade</button><button type="button" class="button" data-new-plan>+ Nova sessão</button><button type="button" class="button primary" data-generate>✦ Gerar plano</button></div></div><p class="planning-range-note"><strong>${esc(periodLabel)}</strong><span>Capacidade no intervalo visível: ${formatLocalDate(range.start, {day:"2-digit", month:"2-digit"})} a ${formatLocalDate(range.end, {day:"2-digit", month:"2-digit", year:"numeric"})}. O replanejamento preserva blocos manuais.</span></p><div class="planning-navigation" aria-label="Navegação do calendário"><button type="button" class="button ghost" data-planning-nav="previous">← ${previousLabel}</button><button type="button" class="button" data-planning-nav="today">Hoje</button><button type="button" class="button ghost" data-planning-nav="next">${nextLabel} →</button></div><div class="grid kpis planning-kpis">${statCard("Capacidade", minutesLabel(ideal.capacity_minutes), `livre: ${minutesLabel(ideal.free_minutes)}`, "ϟ", "blue")}${statCard("Planejado", minutesLabel(ideal.planned_minutes), `${plannedRows.length} bloco(s) ativos`, "▣", "violet")}${statCard("Demanda", minutesLabel(ideal.demand_minutes), "ainda não alocada", "▥", "amber")}${statCard(balance >= 0 ? "Folga" : "Déficit", minutesLabel(Math.abs(balance)), balance >= 0 ? "capacidade após a demanda" : "faltam horas na capacidade", balance >= 0 ? "◷" : "!", balance >= 0 ? "green" : "red")}</div><div class="grid split planning-layout">${planningView.tab === "calendar" ? calendarMarkup : idealMarkup}${sideMarkup}</div></section>`;
   syncPlanningLocation();
   app.querySelectorAll("[data-planning-nav]").forEach(button => {
@@ -1062,13 +1050,29 @@ function curriculumQuickFilters() {
   return `<div class="quick-filter-list" role="group" aria-label="Filtros rápidos">${filters.map(([value, text]) => `<button class="filter-pill ${curriculumView.quick === value ? "active" : ""}" type="button" data-curriculum-quick="${value}" aria-pressed="${curriculumView.quick === value}">${text}</button>`).join("")}</div>`;
 }
 
-function contentEditor(curriculumId, current = null) {
-  modal(current ? "Editar conteúdo" : "Adicionar conteúdo", `<label>Título<input name="name" value="${esc(current?.name || "")}" required></label><label>Unidade / grupo<input name="unit" value="${esc(current?.unit || "")}" placeholder="Ex.: Unidade 1"></label><label>Descrição<textarea name="description">${esc(current?.description || "")}</textarea></label><label>Ordem<input name="sort_order" type="number" min="0" value="${current?.sort_order || 0}"></label><label>Dificuldade<input name="difficulty" type="number" min="1" max="5" value="${current?.difficulty || ""}"></label><label>Tempo estimado (min)<input name="estimated_minutes" type="number" min="1" value="${current?.estimated_minutes || ""}"></label><label>Status<select name="status">${["not_started","in_progress","completed"].map(value => `<option value="${value}" ${value === current?.status ? "selected" : ""}>${label(value)}</option>`).join("")}</select></label><label>Domínio (0 a 5)<input name="mastery" type="number" min="0" max="5" value="${current?.mastery ?? 0}"></label>`, async values => {
-    values.sort_order = Number(values.sort_order || 0); values.difficulty = values.difficulty ? Number(values.difficulty) : null;
-    values.estimated_minutes = values.estimated_minutes ? Number(values.estimated_minutes) : null; values.mastery = Number(values.mastery || 0);
-    if (current) await api(`/contents/${current.id}`, {method:"PATCH", body:JSON.stringify(values)});
-    else await api(`/curriculum/${curriculumId}/contents`, {method:"POST", body:JSON.stringify(values)});
+async function contentEditor(curriculumId, current = null) {
+  const detail = await api(`/curriculum/${curriculumId}/contents`);
+  const topics = topicRowsFor(detail);
+  const fresh = current ? topics.find(topic => Number(topic.id) === Number(current.id)) || current : null;
+  const prerequisites = new Set((fresh?.prerequisite_topic_ids || []).map(Number));
+  const candidates = topics.filter(topic => Number(topic.id) !== Number(fresh?.id));
+  const form = modal(fresh ? "Editar tópico" : "Adicionar tópico", `<label>Título<input name="name" value="${esc(fresh?.name || "")}" required></label><label>Unidade / módulo<input name="unit" value="${esc(fresh?.unit || "")}" placeholder="Ex.: Módulo 1"></label><label>Descrição<textarea name="description">${esc(fresh?.description || "")}</textarea></label><div class="settings-grid"><label>Tempo estimado (min)<input name="estimated_minutes" type="number" min="1" value="${fresh?.estimated_minutes ?? ""}" placeholder="Divide o esforço total"></label><label>Peso<select name="effort_weight">${topicWeights.map(([value, text]) => `<option value="${value}" ${Number(fresh?.effort_weight || 2) === value ? "selected" : ""}>${text}</option>`).join("")}</select></label><label>Domínio (0–5)<input name="mastery" type="number" min="0" max="5" value="${fresh?.mastery ?? 0}"></label><label>Dificuldade (1–5)<input name="difficulty" type="number" min="1" max="5" value="${fresh?.difficulty ?? ""}"></label><label>Ordem<input name="sort_order" type="number" min="0" value="${fresh?.sort_order ?? topics.length}"></label></div><label>Status<select name="status">${topicStatuses.map(value => `<option value="${value}" ${value === (fresh?.status || "not_started") ? "selected" : ""}>${label(value)}</option>`).join("")}</select></label><label class="toggle-row"><input name="review_requested" type="checkbox" value="true" ${Number(fresh?.review_requested) || fresh?.status === "for_review" ? "checked" : ""}> Indicar este tópico para revisão</label><label>Ao concluir com blocos automáticos futuros<select name="future_blocks_action"><option value="">Perguntar antes de concluir</option><option value="next_topic">Avançar ao próximo tópico</option><option value="replan">Cancelar automáticos e replanejar</option><option value="review">Manter como revisão</option></select></label><label>Observações<textarea name="observations" placeholder="Dúvidas, materiais e próximo passo.">${esc(fresh?.observations || "")}</textarea></label><fieldset class="choice-list"><legend>Pré-requisitos (opcional)</legend>${candidates.length ? candidates.map(topic => `<label><input type="checkbox" name="prerequisite_topic_id" value="${topic.id}" ${prerequisites.has(Number(topic.id)) ? "checked" : ""}> ${esc(topic.name)}<span>${esc(topic.unit || "Sem unidade")} · ${topicDisplayStatus(topic)}</span></label>`).join("") : "<p class=\"muted\">Ainda não há outro tópico desta disciplina.</p>"}</fieldset>`, async (values, editorForm) => {
+    const payload = {
+      ...values,
+      sort_order:Number(values.sort_order || 0),
+      mastery:Number(values.mastery || 0),
+      difficulty:values.difficulty === "" ? null : Number(values.difficulty),
+      estimated_minutes:values.estimated_minutes === "" ? null : Number(values.estimated_minutes),
+      effort_weight:Number(values.effort_weight || 2),
+      review_requested:editorForm.querySelector("[name=review_requested]")?.checked || false,
+      prerequisite_topic_ids:[...editorForm.querySelectorAll("[name=prerequisite_topic_id]:checked")].map(input => Number(input.value)),
+    };
+    delete payload.prerequisite_topic_id;
+    if (fresh) await api(`/contents/${fresh.id}`, {method:"PATCH", body:JSON.stringify(payload)});
+    else await api(`/curriculum/${curriculumId}/contents`, {method:"POST", body:JSON.stringify(payload)});
   });
+  $(".button.primary", form).textContent = fresh ? "Salvar tópico" : "Adicionar tópico";
+  return form;
 }
 
 function evaluationEditor(curriculumId, contents, current = null) {
@@ -1112,17 +1116,31 @@ async function openCurriculumDetail(id, opener = null) {
   const effort = data.effort;
   const evaluation = data.evaluations;
   const contentRows = data.contents || [];
+  const topicSummary = data.topic_effort || data.effort_distribution;
+  const topicDetail = {name:subject.name, curriculum_subject_id:subject.id, curriculum:subject, contents:contentRows, topic_effort:topicSummary, effort_distribution:topicSummary};
+  const allTopics = topicRowsFor(topicDetail);
+  const topicIndexById = new Map(allTopics.map((item, index) => [Number(item.id), index]));
   const byUnit = contentRows.reduce((all, item) => {
     const key = item.unit || "Sem unidade";
     (all.get(key) || all.set(key, []).get(key)).push(item);
     return all;
   }, new Map());
-  const contentsMarkup = [...byUnit.entries()].map(([unit, items]) => `<section class="content-unit"><h4>${esc(unit)} <span>${items.length}</span></h4>${items.map(item => `<div class="list-item row"><div><strong>${esc(item.name)}</strong><div class="muted">${label(item.status)} · estimado ${item.estimated_minutes ? minutesLabel(item.estimated_minutes) : "—"} · real ${minutesLabel(item.real_minutes)} · ${item.session_count || 0} sessão(ões) · última atividade ${esc(item.last_session_date || "—")}</div>${item.description ? `<div class="field-help">${esc(item.description)}</div>` : ""}</div><span class="action-group"><button class="button ghost" type="button" data-detail-content-history="${item.id}">Histórico</button><button class="button ghost" type="button" data-detail-edit-content="${item.id}">Editar</button><button class="button ghost" type="button" data-detail-archive-content="${item.id}">Arquivar</button><button class="button danger" type="button" data-detail-delete-content="${item.id}" data-detail-content-name="${esc(item.name)}">Excluir</button></span></div>`).join("")}</section>`).join("") || empty("Sem conteúdos", "Adicione os assuntos que você quer estudar antes mesmo de ativar a disciplina.");
+  const contentsMarkup = [...byUnit.entries()].map(([unit, items]) => `<section class="content-unit"><h4>${esc(unit)} <span>${items.length}</span></h4>${items.map(item => {
+    const effective = item.effective_estimated_minutes ?? item.estimated_minutes;
+    const review = topicReviewText(item);
+    const progress = item.effort_progress_percent;
+    const index = topicIndexById.get(Number(item.id)) ?? 0;
+    const hasPrevious = index > 0;
+    const hasNext = index < allTopics.length - 1;
+    const progressMarkup = progress === null || progress === undefined ? "" : `<div class="topic-progress-line"><div class="progress" aria-label="${clampPercent(progress)}% do esforço do tópico"><i style="width:${clampPercent(progress)}%"></i></div><span>${clampPercent(progress)}% do esforço</span></div>`;
+    return `<div class="list-item row"><div><div class="tag-row"><span class="status">${esc(topicDisplayStatus(item))}</span>${review ? `<span class="review-status queued">${esc(review)}</span>` : ""}</div><strong>${esc(item.name)}</strong><div class="muted">ordem ${index + 1} · peso ${topicWeightLabel(item.effort_weight)} · dificuldade ${item.difficulty || "—"}/5 · estimativa ${effective === null || effective === undefined ? "—" : minutesLabel(effective)} · real ${minutesLabel(item.real_minutes || 0)} · futuro ${minutesLabel(item.future_planned_minutes || 0)} · restante ${item.remaining_minutes === null || item.remaining_minutes === undefined ? "—" : minutesLabel(item.remaining_minutes)} · ${item.session_count || 0} sessão(ões)</div>${progressMarkup}<div class="field-help">${esc(topicPrerequisiteText(item, allTopics))} · última atividade ${esc(topicDate(item.last_activity || item.last_session_date))}${item.started_at ? ` · início ${esc(topicDate(item.started_at))}` : ""}${item.completed_at ? ` · concluído em ${esc(topicDate(item.completed_at))}` : ""}</div>${item.description ? `<div class="field-help">${esc(item.description)}</div>` : ""}${item.observations ? `<div class="field-help"><strong>Observações:</strong> ${esc(item.observations)}</div>` : ""}</div><span class="action-group"><button class="button ghost" type="button" data-curriculum-topic-move="up" data-topic-curriculum="${subject.id}" data-topic-id="${item.id}" ${hasPrevious ? "" : "disabled"} aria-label="Mover ${esc(item.name)} para cima">↑</button><button class="button ghost" type="button" data-curriculum-topic-move="down" data-topic-curriculum="${subject.id}" data-topic-id="${item.id}" ${hasNext ? "" : "disabled"} aria-label="Mover ${esc(item.name)} para baixo">↓</button><button class="button ghost" type="button" data-detail-content-history="${item.id}">Histórico</button><button class="button ghost" type="button" data-detail-edit-content="${item.id}">Editar</button><button class="button ghost" type="button" data-detail-archive-content="${item.id}">Arquivar</button><button class="button danger" type="button" data-detail-delete-content="${item.id}" data-detail-content-name="${esc(item.name)}">Excluir</button></span></div>`;
+  }).join("")}</section>`).join("") || empty("Sem conteúdos", "Adicione os assuntos que você quer estudar antes mesmo de ativar a disciplina.");
   const form = modal(esc(subject.name), `<div class="grid kpis compact-kpis">${card("Acadêmico", label(subject.academic_status), "situação na grade")}${card("Conteúdo", `${data.content_progress.completed}/${data.content_progress.total}`, "conteúdos concluídos")}${card("Esforço real", effort.required_study_minutes ? `${effort.effort_progress_percent || 0}%` : "—", effort.required_study_minutes ? `${minutesLabel(effort.real_minutes)} de ${minutesLabel(effort.required_study_minutes)}` : "defina o esforço pessoal")}</div><section class="card nested-card"><div class="bar"><div><span class="tag">PRAZO E ESFORÇO</span><p class="muted">Início ${esc(subject.start_date || "—")} · término ${esc(subject.end_date || "—")} · prazo ${esc(subject.deadline_date || subject.end_date || "—")}</p><p class="muted">Carga institucional ${formatMinutesAsHours(subject.workload_minutes)} · faltam ${effort.remaining_minutes == null ? "—" : minutesLabel(effort.remaining_minutes)} · futuro já planejado ${minutesLabel(effort.future_planned_minutes)} · não alocado ${effort.unallocated_minutes == null ? "—" : minutesLabel(effort.unallocated_minutes)}</p></div><button class="button" type="button" data-detail-edit-curriculum="${subject.id}">Editar</button></div></section><section class="card nested-card"><div class="bar"><div><span class="tag">CONTEÚDOS</span><h3>${contentRows.length} conteúdo(s)</h3><p class="muted">A mesma fonte aparece no planejamento, foco e histórico — não é criada uma cópia ao ativar a disciplina.</p></div><button class="button" type="button" data-detail-add-content="${subject.id}">+ Conteúdo</button></div>${contentsMarkup}</section><section class="card nested-card"><div class="bar"><div><span class="tag">AVALIAÇÕES E NOTAS</span><h3>${evaluation.evaluations.length} avaliação(ões)</h3><p class="muted">Média simples ${evaluation.simple_average_percent == null ? "—" : `${evaluation.simple_average_percent}%`} · ponderada ${evaluation.weighted_average_percent == null ? "—" : `${evaluation.weighted_average_percent}%`}${evaluation.minimum_grade == null ? "" : ` · mínimo ${evaluation.minimum_grade}`}</p></div><button class="button" type="button" data-detail-add-evaluation="${subject.id}">+ Avaliação</button></div>${evaluation.overdue?.length ? `<p class="planning-deficit">${evaluation.overdue.length} avaliação(ões) com prazo vencido.</p>` : ""}${evaluation.evaluations.map(item => `<div class="list-item row"><div><strong>${esc(item.title)}</strong><div class="muted">${esc(item.date)}${item.delivery_date ? ` · entrega ${esc(item.delivery_date)}` : ""} · ${label(item.status)} · ${item.score == null ? "sem nota" : `${item.score}/${item.max_score || "—"}`} ${item.contents?.length ? `· ${item.contents.map(content => esc(content.name)).join(", ")}` : ""}</div></div><span class="action-group"><button class="button ghost" type="button" data-detail-edit-evaluation="${item.id}">Editar</button><button class="button danger" type="button" data-detail-delete-evaluation="${item.id}" data-detail-evaluation-name="${esc(item.title)}">Excluir</button></span></div>`).join("") || empty("Sem avaliações", "Cadastre provas, trabalhos e notas desta disciplina.")}</section><div class="form-actions"><button class="button ghost" type="button" data-detail-timeline="${subject.id}">Linha do tempo</button></div>`, null);
   $(".button.primary", form)?.remove();
   $(".form-actions", form)?.insertAdjacentHTML("beforeend", '<button class="button primary" type="button" data-close>Fechar</button>');
   form.dataset.curriculumContents = JSON.stringify(contentRows);
   form.dataset.curriculumId = String(subject.id);
+  form.querySelectorAll(".nested-card")[1]?.querySelector(".bar")?.insertAdjacentHTML("afterend", topicEffortSummaryMarkup(topicSummary, subject.id, "curriculum"));
   if (data.archived_contents?.length) {
     const contentPanel = form.querySelectorAll(".nested-card")[1];
     contentPanel?.insertAdjacentHTML("beforeend", `<details class="archived-content-list"><summary>${data.archived_contents.length} conteúdo(s) arquivado(s)</summary>${data.archived_contents.map(item => `<div class="list-item row"><span>${esc(item.name)}</span><button type="button" class="button ghost" data-detail-restore-content="${item.id}">Restaurar</button></div>`).join("")}</details>`);
@@ -1452,6 +1470,8 @@ function formationEditor(current = null) {
 
 function curriculumEditor(formationId, current = null) {
   const existingEffort = current?.required_study_minutes || "";
+  const hasPlanningOptOut = Boolean(current && Object.prototype.hasOwnProperty.call(current, "planning_opt_out"));
+  const planningIncluded = hasPlanningOptOut ? !Boolean(current.planning_opt_out) : current ? Boolean(current.planning_enabled) : true;
   const form = modal(current ? "Editar disciplina" : "Adicionar disciplina", `
     <label>Nome<input name="name" value="${esc(current?.name || "")}" required></label>
     <label>Código<input name="code" value="${esc(current?.code || "")}"></label>
@@ -1464,7 +1484,7 @@ function curriculumEditor(formationId, current = null) {
     <label>Esforço pessoal (min)<input name="required_study_minutes" type="number" min="1" value="${existingEffort}"></label>
     <label>Prioridade-base (1 a 5)<input name="priority_base" type="number" min="1" max="5" value="${current?.priority_base || 3}"></label>
     <label>Duração preferida do bloco (min)<input name="preferred_block_minutes" type="number" min="1" value="${current?.preferred_block_minutes || ""}"></label>
-    <label class="toggle-row"><input name="planning_enabled" type="checkbox" ${current?.planning_enabled ? "checked" : ""}> Incluir no planejamento quando estiver disponível <span class="field-help">A disciplina precisa continuar nos Estudos atuais para receber blocos.</span></label>
+    <label class="toggle-row"><input name="planning_enabled" type="checkbox" ${planningIncluded ? "checked" : ""}> Incluir no planejamento quando estiver disponível <span class="field-help">A disciplina precisa continuar nos Estudos atuais para receber blocos.</span></label>
     ${weekdaysInputs(current?.allowed_weekdays)}
     <label>Nota mínima para aprovação<input name="minimum_grade" type="number" min="0" step="0.01" value="${current?.minimum_grade ?? ""}"></label>
     <label>Ordem<input name="sort_order" type="number" min="0" value="${current?.sort_order || 0}"></label>
@@ -1946,13 +1966,175 @@ function studiesResultsMarkup(studies, formationName) {
   return `<div class="study-results">${cards}</div>${availableCurriculumMarkup(studiesView.curriculumRows || [], formationName)}`;
 }
 
-function studyTopicMarkup(topic, studyId) {
-  const metadata = [
-    topic.unit,
-    topic.estimated_minutes ? `estimativa ${minutesLabel(topic.estimated_minutes)}` : "sem estimativa",
-    `domínio ${topic.mastery ?? 0}/5`,
-  ].filter(Boolean).join(" · ");
-  return `<article class="study-topic-row"><div><div class="tag-row"><span class="status">${label(topic.status)}</span></div><strong>${esc(topic.name)}</strong><p class="muted">${esc(metadata)}</p>${topic.description ? `<p class="field-help">${esc(topic.description)}</p>` : ""}</div><div class="study-topic-actions"><button type="button" class="button ghost" data-plan-study-topic="${studyId}" data-topic-id="${topic.id}">Planejar</button><button type="button" class="button ghost" data-edit-study-topic="${topic.id}" data-topic-study="${studyId}">Editar</button>${topic.status !== "completed" ? `<button type="button" class="button" data-complete-study-topic="${topic.id}" data-topic-study="${studyId}">Concluir</button>` : ""}</div></article>`;
+const topicStatuses = ["not_started", "in_progress", "completed", "paused", "for_review"];
+const topicWeights = [[1, "Simples"], [2, "Normal"], [3, "Complexo"]];
+
+function topicRowsFor(detail) {
+  const rows = detail?.topic_effort?.topics || detail?.effort_distribution?.topics || detail?.contents || [];
+  const unique = new Map();
+  rows.filter(item => item?.id).forEach(item => unique.set(Number(item.id), item));
+  return [...unique.values()].sort((left, right) => Number(left.sort_order || 0) - Number(right.sort_order || 0) || Number(left.id) - Number(right.id));
+}
+
+function topicOwnerEndpoints(detail) {
+  const summary = detail?.topic_effort || detail?.effort_distribution || {};
+  const curriculumId = Number(summary.owner_kind === "curriculum" ? summary.owner_id : detail?.curriculum_subject_id || detail?.curriculum?.id || 0);
+  if (curriculumId) {
+    return {
+      kind: "curriculum",
+      id: curriculumId,
+      distribution: `/curriculum/${curriculumId}/contents/distribution`,
+      reorder: `/curriculum/${curriculumId}/contents/reorder`,
+    };
+  }
+  const studyId = Number(summary.owner_id || detail?.id || 0);
+  if (!studyId) throw new Error("Não foi possível identificar a disciplina dona destes tópicos.");
+  return {
+    kind: "study",
+    id: studyId,
+    distribution: `/studies/${studyId}/topics/distribution`,
+    reorder: `/studies/${studyId}/topics/reorder`,
+  };
+}
+
+function topicDisplayStatus(topic) { return topic?.archived_at ? "Arquivado" : label(topic?.status); }
+function topicWeightLabel(value) { return ({1:"simples", 2:"normal", 3:"complexo"}[Number(value)] || "normal"); }
+function topicMetric(labelText, value) { return `<span><small>${esc(labelText)}</small><strong>${esc(value)}</strong></span>`; }
+function topicDate(value) { return value ? formatLocalDate(value, {day:"2-digit", month:"2-digit", year:"numeric"}) : "—"; }
+
+function topicPrerequisiteText(topic, allTopics) {
+  const names = (topic.prerequisite_topic_ids || []).map(id => allTopics.find(item => Number(item.id) === Number(id))?.name).filter(Boolean);
+  return names.length ? `Depende de ${names.join(", ")}` : "Sem pré-requisito";
+}
+
+function topicReviewText(topic) {
+  const values = [];
+  if (topic.status === "for_review" || Number(topic.review_requested)) values.push("Revisão indicada");
+  if (Number(topic.pending_review_count)) values.push(`${topic.pending_review_count} revisão(ões) pendente(s)`);
+  if (topic.next_review_date) values.push(`próxima em ${topicDate(topic.next_review_date)}`);
+  return values.join(" · ");
+}
+
+function topicGroupsFor(detail, topics) {
+  const groupNames = new Map((detail.groups || []).map(group => [Number(group.id), group.name]));
+  const grouped = new Map();
+  topics.forEach(topic => {
+    const name = topic.unit || groupNames.get(Number(topic.group_id)) || "Sem unidade";
+    if (!grouped.has(name)) grouped.set(name, []);
+    grouped.get(name).push(topic);
+  });
+  return [...grouped.entries()].map(([name, rows]) => ({name, topics:rows}));
+}
+
+function topicEffortSummaryMarkup(summary, ownerId, ownerKind = "study") {
+  if (!summary) return "";
+  const hasTotal = summary.required_study_minutes !== null && summary.required_study_minutes !== undefined;
+  const total = hasTotal ? minutesLabel(summary.required_study_minutes) : "Não definido";
+  const distributed = minutesLabel(summary.distributed_minutes || 0);
+  const undistributed = hasTotal ? minutesLabel(summary.undistributed_minutes || 0) : "Defina o esforço";
+  const warning = Number(summary.over_distributed_minutes || 0) > 0 ? `<p class="planning-deficit">As estimativas excedem o esforço total em ${minutesLabel(summary.over_distributed_minutes)}. Revise antes de salvar.</p>` : "";
+  const actionAttribute = ownerKind === "curriculum" ? "data-curriculum-topic-distribution" : "data-topic-distribution";
+  const actions = hasTotal && (summary.topics || []).length ? `<div class="topic-effort-actions"><button type="button" class="button ghost" ${actionAttribute}="${ownerId}" data-topic-distribution-mode="proportional">Dividir igualmente</button><button type="button" class="button ghost" ${actionAttribute}="${ownerId}" data-topic-distribution-mode="weight">Distribuir por peso</button><button type="button" class="button" ${actionAttribute}="${ownerId}" data-topic-distribution-mode="manual">Distribuir manualmente</button></div>` : "";
+  return `<section class="topic-effort-summary" aria-label="Resumo da distribuição de esforço"><div class="topic-effort-heading"><div><span class="tag">DISTRIBUIÇÃO DO ESFORÇO</span><p class="muted">As estimativas dos tópicos dividem o esforço pessoal da disciplina; elas não criam uma segunda carga de horas.</p></div></div><div class="topic-effort-values">${topicMetric("Esforço total", total)}${topicMetric("Distribuído entre tópicos", distributed)}${topicMetric("Ainda não distribuído", undistributed)}</div>${warning}${actions}</section>`;
+}
+
+function studyTopicMarkup(topic, studyId, allTopics, index, total) {
+  const effectiveEstimate = topic.effective_estimated_minutes ?? topic.estimated_minutes;
+  const estimate = effectiveEstimate === null || effectiveEstimate === undefined ? "—" : minutesLabel(effectiveEstimate);
+  const estimateCaption = topic.estimated_minutes ? "Estimativa" : effectiveEstimate !== null && effectiveEstimate !== undefined ? "Sugestão" : "Estimativa";
+  const review = topicReviewText(topic);
+  const dates = [topic.started_at ? `Início ${topicDate(topic.started_at)}` : "", topic.completed_at ? `Concluído em ${topicDate(topic.completed_at)}` : ""].filter(Boolean).join(" · ");
+  const progress = topic.effort_progress_percent;
+  const delta = Number(topic.estimate_delta_minutes || 0);
+  const hasNext = index < total - 1;
+  const hasPrevious = index > 0;
+  return `<article class="study-topic-row" data-topic-row="${topic.id}"><div class="study-topic-main"><div class="tag-row"><span class="status">${esc(topicDisplayStatus(topic))}</span>${review ? `<span class="review-status queued">${esc(review)}</span>` : ""}</div><strong>${esc(topic.name)}</strong><p class="muted">${esc(topic.unit || "Sem unidade")} · ordem ${index + 1} · peso ${topicWeightLabel(topic.effort_weight)}</p>${topic.description ? `<p class="field-help">${esc(topic.description)}</p>` : ""}<div class="topic-metric-grid">${topicMetric(estimateCaption, estimate)}${topicMetric("Tempo real", minutesLabel(topic.real_minutes || 0))}${topicMetric("Futuro planejado", minutesLabel(topic.future_planned_minutes || 0))}${topicMetric("Restante", topic.remaining_minutes === null || topic.remaining_minutes === undefined ? "—" : minutesLabel(topic.remaining_minutes))}${topicMetric("Sessões", `${topic.session_count || 0}`)}${topicMetric("Domínio", `${topic.mastery ?? 0}/5`)}${topicMetric("Dificuldade", topic.difficulty ? `${topic.difficulty}/5` : "—")}</div>${progress !== null && progress !== undefined ? `<div class="topic-progress-line"><div class="progress" aria-label="${clampPercent(progress)}% do esforço do tópico"><i style="width:${clampPercent(progress)}%"></i></div><span>${clampPercent(progress)}% do esforço</span></div>` : ""}<div class="topic-context"><span>${esc(topicPrerequisiteText(topic, allTopics))}</span><span>Última atividade ${esc(topicDate(topic.last_activity || topic.last_session_date))}</span>${dates ? `<span>${esc(dates)}</span>` : ""}</div>${topic.observations ? `<p class="topic-observations"><strong>Observações:</strong> ${esc(topic.observations)}</p>` : ""}${topic.status === "completed" && Number(topic.economy_minutes || 0) ? `<p class="topic-positive">Concluído com ${minutesLabel(topic.economy_minutes)} de folga sobre a estimativa.</p>` : ""}${delta > 0 ? `<p class="planning-deficit">${minutesLabel(delta)} acima da estimativa. O tópico permanece em andamento até você concluí-lo.</p>` : ""}</div><div class="study-topic-actions"><button type="button" class="button ghost" data-topic-move="up" data-topic-study="${studyId}" data-topic-id="${topic.id}" ${hasPrevious ? "" : "disabled"} aria-label="Mover ${esc(topic.name)} para cima">↑</button><button type="button" class="button ghost" data-topic-move="down" data-topic-study="${studyId}" data-topic-id="${topic.id}" ${hasNext ? "" : "disabled"} aria-label="Mover ${esc(topic.name)} para baixo">↓</button><button type="button" class="button ghost" data-plan-study-topic="${studyId}" data-topic-id="${topic.id}">Planejar</button><button type="button" class="button ghost" data-edit-study-topic="${topic.id}" data-topic-study="${studyId}">Editar</button>${topic.status !== "completed" ? `<button type="button" class="button" data-complete-study-topic="${topic.id}" data-topic-study="${studyId}">Concluir</button>` : ""}<button type="button" class="button ghost" data-archive-study-topic="${topic.id}" data-topic-study="${studyId}">Arquivar</button></div></article>`;
+}
+
+function topicDistributionPayload(form, apply) {
+  const mode = $("[name=topic_distribution_mode]", form)?.value || "proportional";
+  const payload = {mode, apply};
+  if (mode === "manual") {
+    payload.estimates = Object.fromEntries([...form.querySelectorAll("[data-topic-manual-estimate]")].map(input => [input.dataset.topicManualEstimate, input.value === "" ? null : Number(input.value)]));
+  }
+  return payload;
+}
+
+function topicDistributionPreviewMarkup(result) {
+  const rows = result?.proposed_estimates || [];
+  if (!rows.length) return "<p class=\"muted\">Escolha uma forma de distribuição para ver a prévia.</p>";
+  return `<div class="topic-distribution-preview"><div class="topic-effort-values">${topicMetric("Esforço total", minutesLabel(result.required_study_minutes))}${topicMetric("Distribuído", minutesLabel(result.distributed_minutes))}${topicMetric("Não distribuído", minutesLabel(result.undistributed_minutes))}</div><ul>${rows.map(row => `<li><span>${esc(row.name)}</span><strong>${minutesLabel(row.estimated_minutes)}</strong></li>`).join("")}</ul></div>`;
+}
+
+function openTopicDistributionDialog(detail, opener = null, preferredMode = "proportional") {
+  const topics = topicRowsFor(detail);
+  const owner = topicOwnerEndpoints(detail);
+  if (!topics.length) return toast("Cadastre ao menos um tópico antes de distribuir o esforço.");
+  const summary = detail.topic_effort || detail.effort_distribution || {};
+  if (summary.required_study_minutes === null || summary.required_study_minutes === undefined) return toast("Defina o esforço pessoal total da disciplina antes de distribuí-lo.");
+  const form = modal(`Distribuir esforço · ${esc(detail.name || detail.curriculum?.name || "disciplina")}`, `<p class="muted">Revise a prévia antes de aplicar. A soma nunca poderá ultrapassar ${minutesLabel(summary.required_study_minutes)}.</p><label>Como distribuir<select name="topic_distribution_mode">${[["proportional", "Igualmente entre os tópicos"], ["weight", "Proporcional ao peso"], ["manual", "Manual, por tópico"]].map(([value, text]) => `<option value="${value}" ${value === preferredMode ? "selected" : ""}>${text}</option>`).join("")}</select></label><p class="field-help" data-topic-distribution-help>Pesos: simples = 1, normal = 2 e complexo = 3.</p><section class="topic-manual-estimates" data-topic-manual-estimates hidden>${topics.map(topic => `<label>${esc(topic.name)}<input type="number" min="0" name="topic-estimate-${topic.id}" data-topic-manual-estimate="${topic.id}" value="${topic.estimated_minutes ?? ""}" placeholder="minutos"></label>`).join("")}</section><div class="topic-distribution-preview" data-topic-distribution-preview aria-live="polite">Carregando prévia…</div>`, async (_values, currentForm) => {
+    await api(owner.distribution, {method:"POST", body:JSON.stringify(topicDistributionPayload(currentForm, true))});
+  });
+  form.dataset.successMessage = "Distribuição de esforço atualizada.";
+  $(".button.primary", form).textContent = "Aplicar distribuição";
+  const modeInput = $("[name=topic_distribution_mode]", form);
+  const manual = $("[data-topic-manual-estimates]", form);
+  const preview = $("[data-topic-distribution-preview]", form);
+  const refreshPreview = async () => {
+    if (!form.isConnected) return;
+    manual.hidden = modeInput.value !== "manual";
+    try {
+      const result = await api(owner.distribution, {method:"POST", body:JSON.stringify(topicDistributionPayload(form, false))});
+      if (form.isConnected) preview.innerHTML = topicDistributionPreviewMarkup(result);
+    } catch (error) {
+      if (form.isConnected) preview.innerHTML = `<p class="planning-deficit">${esc(error.message || "Não foi possível calcular a distribuição.")}</p>`;
+    }
+  };
+  modeInput.addEventListener("change", refreshPreview);
+  manual.addEventListener("input", () => { if (modeInput.value === "manual") window.clearTimeout(manual.dataset.previewTimer); manual.dataset.previewTimer = window.setTimeout(refreshPreview, 180); });
+  refreshPreview();
+  if (opener) window.setTimeout(() => modeInput.focus(), 0);
+  return form;
+}
+
+async function openTopicDistribution(studyId, opener = null, preferredMode = "proportional") {
+  return openTopicDistributionDialog(await api(`/studies/${studyId}`), opener, preferredMode);
+}
+
+async function openCurriculumTopicDistribution(curriculumId, opener = null, preferredMode = "proportional") {
+  const data = await api(`/curriculum/${curriculumId}/contents`);
+  return openTopicDistributionDialog({
+    name:data.curriculum?.name,
+    curriculum_subject_id:curriculumId,
+    curriculum:data.curriculum,
+    contents:data.contents,
+    effort_distribution:data.effort_distribution,
+  }, opener, preferredMode);
+}
+
+async function moveTopic(detail, topicId, direction) {
+  const topics = topicRowsFor(detail);
+  const index = topics.findIndex(topic => Number(topic.id) === Number(topicId));
+  const targetIndex = index + (direction === "up" ? -1 : 1);
+  if (index < 0 || targetIndex < 0 || targetIndex >= topics.length) return;
+  [topics[index], topics[targetIndex]] = [topics[targetIndex], topics[index]];
+  await api(topicOwnerEndpoints(detail).reorder, {method:"POST", body:JSON.stringify({topic_ids:topics.map(topic => topic.id)})});
+  toast("Ordem dos tópicos atualizada.");
+  return render();
+}
+
+async function moveStudyTopic(studyId, topicId, direction) {
+  return moveTopic(await api(`/studies/${studyId}`), topicId, direction);
+}
+
+async function moveCurriculumTopic(curriculumId, topicId, direction) {
+  const data = await api(`/curriculum/${curriculumId}/contents`);
+  return moveTopic({
+    curriculum_subject_id:curriculumId,
+    curriculum:data.curriculum,
+    contents:data.contents,
+    topic_effort:data.effort_distribution,
+  }, topicId, direction);
 }
 
 async function renderStudyTopics(studyId) {
@@ -1960,21 +2142,69 @@ async function renderStudyTopics(studyId) {
   if (!holder) return;
   holder.innerHTML = `<section class="topic-panel" aria-busy="true" role="status">Carregando tópicos…</section>`;
   const detail = await api(`/studies/${studyId}`);
-  const groups = [...(detail.groups || []), ...(detail.ungrouped_topics?.length ? [{name:"Sem unidade", topics:detail.ungrouped_topics}] : [])];
-  holder.innerHTML = `<section class="topic-panel" aria-label="Tópicos de ${esc(detail.name)}"><div class="bar"><div><span class="tag">TÓPICOS DO ESTUDO</span><p class="muted">Adicione o que será estudado nesta disciplina; cada tópico pode ser planejado separadamente.</p></div><div class="action-group"><button type="button" class="button" data-plan-study="${detail.id}">Planejar sessão</button><button type="button" class="button primary" data-new-topic="${detail.id}">+ Adicionar tópico</button></div></div>${groups.map(group => `<section class="study-topic-group"><h3>${esc(group.name)}</h3>${(group.topics || []).map(topic => studyTopicMarkup(topic, detail.id)).join("") || `<p class="muted">Sem tópicos nesta unidade.</p>`}</section>`).join("") || empty("Sem tópicos", "Adicione as unidades ou tópicos que você pretende estudar nesta disciplina.", `<button type="button" class="button primary" data-new-topic="${detail.id}">+ Adicionar tópico</button>`)}</section>`;
+  const topics = topicRowsFor(detail);
+  const indexById = new Map(topics.map((topic, index) => [Number(topic.id), index]));
+  const groups = topicGroupsFor(detail, topics);
+  holder.innerHTML = `<section class="topic-panel" aria-label="Tópicos de ${esc(detail.name)}"><div class="bar"><div><span class="tag">TÓPICOS DO ESTUDO</span><p class="muted">Cada tópico é uma unidade concreta do planejamento. A ordem, as dependências e o esforço guiam a próxima sessão.</p></div><div class="action-group"><button type="button" class="button" data-plan-study="${detail.id}">Planejar sessão</button><button type="button" class="button primary" data-new-topic="${detail.id}">+ Adicionar tópico</button></div></div>${topicEffortSummaryMarkup(detail.topic_effort, detail.id)}${groups.map(group => `<section class="study-topic-group"><h3>${esc(group.name)}</h3>${group.topics.map(topic => studyTopicMarkup(topic, detail.id, topics, indexById.get(Number(topic.id)), topics.length)).join("")}</section>`).join("") || empty("Sem tópicos", "Adicione as unidades ou tópicos que você pretende estudar nesta disciplina.", `<button type="button" class="button primary" data-new-topic="${detail.id}">+ Adicionar tópico</button>`)}</section>`;
 }
 
-function studyTopicEditor(studyId, current = null) {
+async function studyTopicEditor(studyId, current = null) {
   studiesView.selectedId = Number(studyId);
   studiesView.expandedStudyId = Number(studyId);
   studiesView.panel = "topics";
   syncStudiesLocation();
-  const form = modal(current ? "Editar tópico" : "Adicionar tópico", `<label>Título<input name="name" value="${esc(current?.name || "")}" required></label><label>Unidade / grupo<input name="unit" value="${esc(current?.unit || "")}" placeholder="Ex.: Unidade 1"></label><label>Descrição<textarea name="description">${esc(current?.description || "")}</textarea></label><div class="settings-grid"><label>Tempo estimado (min)<input name="estimated_minutes" type="number" min="1" value="${current?.estimated_minutes || ""}"></label><label>Domínio (0–5)<input name="mastery" type="number" min="0" max="5" value="${current?.mastery ?? 0}"></label></div><label>Status<select name="status">${["not_started", "in_progress", "completed"].map(value => `<option value="${value}" ${value === (current?.status || "not_started") ? "selected" : ""}>${label(value)}</option>`).join("")}</select></label>`, async values => {
-    const payload = {...values, mastery:Number(values.mastery || 0), estimated_minutes:values.estimated_minutes ? Number(values.estimated_minutes) : null};
-    if (current) await api(`/topics/${current.id}`, {method:"PATCH", body:JSON.stringify(payload)});
+  const detail = await api(`/studies/${studyId}`);
+  const topics = topicRowsFor(detail);
+  const fresh = current ? topics.find(topic => Number(topic.id) === Number(current.id)) || current : null;
+  const prerequisites = new Set((fresh?.prerequisite_topic_ids || []).map(Number));
+  const candidates = topics.filter(topic => Number(topic.id) !== Number(fresh?.id));
+  const form = modal(fresh ? "Editar tópico" : "Adicionar tópico", `<label>Título<input name="name" value="${esc(fresh?.name || "")}" required></label><label>Unidade / módulo<input name="unit" value="${esc(fresh?.unit || "")}" placeholder="Ex.: Módulo 1"></label><label>Descrição<textarea name="description">${esc(fresh?.description || "")}</textarea></label><div class="settings-grid"><label>Tempo estimado (min)<input name="estimated_minutes" type="number" min="1" value="${fresh?.estimated_minutes ?? ""}" placeholder="Divide o esforço total"></label><label>Peso<select name="effort_weight">${topicWeights.map(([value, text]) => `<option value="${value}" ${Number(fresh?.effort_weight || 2) === value ? "selected" : ""}>${text}</option>`).join("")}</select></label><label>Domínio (0–5)<input name="mastery" type="number" min="0" max="5" value="${fresh?.mastery ?? 0}"></label><label>Dificuldade (1–5)<input name="difficulty" type="number" min="1" max="5" value="${fresh?.difficulty ?? ""}"></label><label>Ordem<input name="sort_order" type="number" min="0" value="${fresh?.sort_order ?? topics.length}"></label></div><label>Status<select name="status">${topicStatuses.map(value => `<option value="${value}" ${value === (fresh?.status || "not_started") ? "selected" : ""}>${label(value)}</option>`).join("")}</select></label><label class="toggle-row"><input name="review_requested" type="checkbox" value="true" ${Number(fresh?.review_requested) || fresh?.status === "for_review" ? "checked" : ""}> Indicar este tópico para revisão</label><label>Ao concluir com blocos automáticos futuros<select name="future_blocks_action"><option value="">Perguntar antes de concluir</option><option value="next_topic">Avançar ao próximo tópico</option><option value="replan">Cancelar automáticos e replanejar</option><option value="review">Manter como revisão</option></select></label><label>Observações<textarea name="observations" placeholder="Dúvidas, materiais e próximo passo.">${esc(fresh?.observations || "")}</textarea></label><fieldset class="choice-list"><legend>Pré-requisitos (opcional)</legend>${candidates.length ? candidates.map(topic => `<label><input type="checkbox" name="prerequisite_topic_id" value="${topic.id}" ${prerequisites.has(Number(topic.id)) ? "checked" : ""}> ${esc(topic.name)}<span>${esc(topic.unit || "Sem unidade")} · ${topicDisplayStatus(topic)}</span></label>`).join("") : "<p class=\"muted\">Ainda não há outro tópico desta disciplina.</p>"}</fieldset>`, async (values, editorForm) => {
+    const payload = {
+      ...values,
+      sort_order:Number(values.sort_order || 0),
+      mastery:Number(values.mastery || 0),
+      difficulty:values.difficulty === "" ? null : Number(values.difficulty),
+      estimated_minutes:values.estimated_minutes === "" ? null : Number(values.estimated_minutes),
+      effort_weight:Number(values.effort_weight || 2),
+      review_requested:editorForm.querySelector("[name=review_requested]")?.checked || false,
+      prerequisite_topic_ids:[...editorForm.querySelectorAll("[name=prerequisite_topic_id]:checked")].map(input => Number(input.value)),
+    };
+    delete payload.prerequisite_topic_id;
+    if (fresh) await api(`/topics/${fresh.id}`, {method:"PATCH", body:JSON.stringify(payload)});
     else await api(`/studies/${studyId}/topics`, {method:"POST", body:JSON.stringify(payload)});
   });
-  $(".button.primary", form).textContent = current ? "Salvar tópico" : "Adicionar tópico";
+  $(".button.primary", form).textContent = fresh ? "Salvar tópico" : "Adicionar tópico";
+  return form;
+}
+
+async function completeStudyTopic(topicId, studyId) {
+  const finish = action => api(`/topics/${topicId}`, {
+    method:"PATCH", body:JSON.stringify({status:"completed", future_blocks_action:action || null}),
+  });
+  try {
+    await finish();
+    studiesView.selectedId = Number(studyId);
+    studiesView.expandedStudyId = Number(studyId);
+    studiesView.panel = "topics";
+    toast("Tópico concluído.");
+    return render();
+  } catch (error) {
+    if (error.code !== "future_topic_blocks_need_resolution") throw error;
+    const automatic = error.details?.automatic_blocks || [];
+    const manual = error.details?.manual_blocks || [];
+    const form = modal(
+      "Concluir tópico e tratar blocos futuros",
+      `<p class="muted">Há ${automatic.length} bloco(s) automático(s) futuro(s) ligado(s) a este tópico. Escolha o destino antes de concluir. ${manual.length ? `${manual.length} bloco(s) manual(is) serão preservados sem alteração.` : "Não há bloco manual para alterar."}</p><label>Destino dos blocos automáticos<select name="future_blocks_action" required><option value="next_topic">Avançar para o próximo tópico elegível</option><option value="replan">Cancelar automáticos e propor novo planejamento</option><option value="review">Manter como revisão deste tópico</option></select></label>`,
+      async values => {
+        await finish(values.future_blocks_action);
+        studiesView.selectedId = Number(studyId);
+        studiesView.expandedStudyId = Number(studyId);
+        studiesView.panel = "topics";
+      },
+    );
+    $(".button.primary", form).textContent = "Concluir tópico";
+    return form;
+  }
 }
 
 async function refreshStudiesSearchResults(formationName) {
@@ -2233,7 +2463,7 @@ document.addEventListener("click", async event => { const target = event.target.
   if (target.dataset.action === "manual-session") return openSession();
   if (target.dataset.action === "search") return openSearch();
   if (target.dataset.focus !== undefined) return openPlanningFocus(null, target);
-  if (target.dataset.focusStudy) return startTimer(null, Number(target.dataset.focusStudy), target.dataset.focusTopic ? Number(target.dataset.focusTopic) : null);
+  if (target.dataset.focusStudy) return openPlanningFocus(null, target, Number(target.dataset.focusStudy), target.dataset.focusTopic ? Number(target.dataset.focusTopic) : null);
   if (target.dataset.addTodaySuggestion !== undefined) {
     await api("/planned", {method:"POST", body:JSON.stringify({
       study_subject_id:Number(target.dataset.suggestStudy),
@@ -2286,7 +2516,12 @@ document.addEventListener("click", async event => { const target = event.target.
     if (target.dataset.curriculumAction === "status") return openCurriculumStatus(row);
     if (target.dataset.curriculumAction === "review") return openCurriculumReview(row);
     if (target.dataset.curriculumAction === "clear-review") return openCurriculumReview(row, "none");
-    if (target.dataset.curriculumAction === "archive") { await api(`/curriculum/${row.id}/archive`, {method:"POST"}); toast("Disciplina arquivada."); return render(); }
+    if (target.dataset.curriculumAction === "archive") return confirmAction({
+      title:"Arquivar disciplina",
+      message:"A disciplina deixará os estudos atuais. Blocos automáticos futuros serão cancelados; blocos manuais, sessões e histórico serão preservados.",
+      confirmLabel:"Arquivar disciplina", opener:target,
+      onConfirm:async () => api(`/curriculum/${row.id}/archive`, {method:"POST"}),
+    });
     if (target.dataset.curriculumAction === "restore") { await api(`/curriculum/${row.id}/restore`, {method:"POST"}); toast("Disciplina restaurada."); return render(); }
     if (target.dataset.curriculumAction === "dependencies") return openDependencies("curriculum", row.id, row.name, target);
     if (target.dataset.curriculumAction === "destroy") return openTypedDestroy({kind:"curriculum", ident:row.id, name:row.name, endpoint:`/curriculum/${row.id}/destroy`, opener:target, description:"A exclusão definitiva pode incluir estudos, tópicos, blocos, sessões, anotações e revisões vinculados a esta disciplina."});
@@ -2303,7 +2538,7 @@ document.addEventListener("click", async event => { const target = event.target.
     return contentEditor(data.content.curriculum_subject_id, data.content);
   }
   if (target.dataset.detailArchiveContent) {
-    return confirmAction({title:"Arquivar conteúdo", message:"Arquivar este conteúdo? Ele sai das sugestões e do planejamento, mas o histórico é preservado.", confirmLabel:"Arquivar conteúdo", opener:target, onConfirm:async () => { await api(`/contents/${target.dataset.detailArchiveContent}/archive`, {method:"POST"}); toast("Conteúdo arquivado."); }});
+    return confirmAction({title:"Arquivar conteúdo", message:"Arquivar este conteúdo? Ele sai das sugestões. Blocos automáticos futuros serão cancelados; blocos manuais e o histórico são preservados.", confirmLabel:"Arquivar conteúdo", opener:target, onConfirm:async () => { await api(`/contents/${target.dataset.detailArchiveContent}/archive`, {method:"POST"}); toast("Conteúdo arquivado."); }});
   }
   if (target.dataset.detailRestoreContent) {
     await api(`/contents/${target.dataset.detailRestoreContent}/restore`, {method:"POST"});
@@ -2364,7 +2599,12 @@ document.addEventListener("click", async event => { const target = event.target.
   }
   if (target.dataset.studyPause) { await api(`/studies/${target.dataset.studyPause}/pause`, {method:"POST"}); toast("Estudo pausado."); return render(); }
   if (target.dataset.studyResume) { await api(`/studies/${target.dataset.studyResume}/resume`, {method:"POST"}); toast("Estudo retomado."); return render(); }
-  if (target.dataset.studyArchive) { await api(`/studies/${target.dataset.studyArchive}/archive`, {method:"POST"}); toast("Estudo arquivado."); return render(); }
+  if (target.dataset.studyArchive) return confirmAction({
+    title:"Arquivar estudo",
+    message:"O estudo deixará a lista atual. Blocos automáticos futuros serão cancelados; blocos manuais, sessões e histórico serão preservados.",
+    confirmLabel:"Arquivar estudo", opener:target,
+    onConfirm:async () => api(`/studies/${target.dataset.studyArchive}/archive`, {method:"POST"}),
+  });
   if (target.dataset.studyRestore) { await api(`/studies/${target.dataset.studyRestore}/restore`, {method:"POST"}); toast("Estudo restaurado."); return render(); }
   if (target.dataset.studyDependencies || target.dataset.studyFinish || target.dataset.studyRemoveCurrent || target.dataset.studyDestroy || target.dataset.startStudyFocus) {
     const studyId = Number(target.dataset.studyDependencies || target.dataset.studyFinish || target.dataset.studyRemoveCurrent || target.dataset.studyDestroy || target.dataset.startStudyFocus);
@@ -2377,7 +2617,7 @@ document.addEventListener("click", async event => { const target = event.target.
     if (target.dataset.startStudyFocus) {
       const reason = studyVisibilityText(study);
       if (reason || !["active", "paused"].includes(study.status)) throw new Error(`${reason || "Este estudo não está atual."} Restaure ou retome o estudo antes de iniciar foco.`);
-      return startTimer(null, study.id);
+      return openPlanningFocus(null, target, study.id);
     }
   }
   if (target.dataset.newProject !== undefined) return projectEditor();
@@ -2394,6 +2634,10 @@ document.addEventListener("click", async event => { const target = event.target.
     syncStudiesLocation();
     return renderStudyTopics(studyId);
   }
+  if (target.dataset.curriculumTopicDistribution) return openCurriculumTopicDistribution(Number(target.dataset.curriculumTopicDistribution), target, target.dataset.topicDistributionMode || "proportional");
+  if (target.dataset.topicDistribution) return openTopicDistribution(Number(target.dataset.topicDistribution), target, target.dataset.topicDistributionMode || "proportional");
+  if (target.dataset.curriculumTopicMove) return moveCurriculumTopic(Number(target.dataset.topicCurriculum), Number(target.dataset.topicId), target.dataset.curriculumTopicMove);
+  if (target.dataset.topicMove) return moveStudyTopic(Number(target.dataset.topicStudy), Number(target.dataset.topicId), target.dataset.topicMove);
   if (target.dataset.newTopic) return studyTopicEditor(Number(target.dataset.newTopic));
   if (target.dataset.editStudyTopic) {
     const detail = await api(`/studies/${target.dataset.topicStudy}`);
@@ -2402,12 +2646,15 @@ document.addEventListener("click", async event => { const target = event.target.
     return studyTopicEditor(Number(target.dataset.topicStudy), topic);
   }
   if (target.dataset.completeStudyTopic) {
-    await api(`/topics/${target.dataset.completeStudyTopic}`, {method:"PATCH", body:JSON.stringify({status:"completed"})});
-    studiesView.selectedId = Number(target.dataset.topicStudy);
-    studiesView.expandedStudyId = Number(target.dataset.topicStudy);
-    studiesView.panel = "topics";
-    toast("Tópico concluído.");
-    return render();
+    return completeStudyTopic(Number(target.dataset.completeStudyTopic), Number(target.dataset.topicStudy));
+  }
+  if (target.dataset.archiveStudyTopic) {
+    return confirmAction({
+      title:"Arquivar tópico",
+      message:"O tópico sai de novas sugestões. Blocos automáticos futuros serão cancelados; blocos manuais e o histórico serão preservados.",
+      confirmLabel:"Arquivar tópico", opener:target,
+      onConfirm:async () => api(`/topics/${target.dataset.archiveStudyTopic}/archive`, {method:"POST"}),
+    });
   }
   if (target.dataset.planStudyTopic) return openPlanEditor(null, {studyId:Number(target.dataset.planStudyTopic), topicId:Number(target.dataset.topicId)});
   if (target.dataset.review) { const review = (await api("/reviews")).find(item => item.id === Number(target.dataset.review)); return openSession({review:{...review,rating:target.dataset.rating}}); }
@@ -2434,4 +2681,40 @@ async function render() {
 }
 
 installResponsiveNavigation();
+let externalRefreshTimer = null;
+let externalRefreshPending = false;
+
+function focusedEditableControl() {
+  const active = document.activeElement;
+  return active instanceof HTMLElement && active.matches("input, textarea, select");
+}
+
+function flushRemoteRefresh() {
+  if (!externalRefreshPending || document.hidden || focusedEditableControl()) return;
+  window.clearTimeout(externalRefreshTimer);
+  externalRefreshTimer = window.setTimeout(() => {
+    // A field may have regained focus while the debounce was waiting. Keep the
+    // change pending instead of rebuilding the screen and losing the draft.
+    if (document.hidden || focusedEditableControl()) return;
+    externalRefreshPending = false;
+    render();
+  }, 180);
+}
+
+function refreshAfterRemoteChange() {
+  // A alteração é mantida até ser seguro redesenhar. Assim, uma mudança vinda
+  // de outra aba não desaparece só porque a pessoa está digitando aqui.
+  externalRefreshPending = true;
+  flushRemoteRefresh();
+}
+window.addEventListener("plano:data-changed", refreshAfterRemoteChange);
+document.addEventListener("blur", event => {
+  if (!externalRefreshPending || !(event.target instanceof HTMLElement) || !event.target.matches("input, textarea, select")) return;
+  // O próximo foco ainda não foi atualizado durante o blur; aguarda um ciclo
+  // para não trocar a tela caso a pessoa apenas navegue para outro campo.
+  window.setTimeout(flushRemoteRefresh, 0);
+}, true);
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) flushRemoteRefresh();
+});
 render();

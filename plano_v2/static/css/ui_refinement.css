@@ -1739,7 +1739,18 @@ textarea[aria-invalid="true"],
 
 .agenda-item-main strong { color: #f1f3ff; font-size: 0.89rem; }
 .agenda-item-main span { margin-top: 0.2rem; color: var(--ui-muted); font-size: 0.76rem; }
+.agenda-item-context { display: block; margin-top: 0.25rem; color: var(--ui-muted); font-size: 0.67rem; line-height: 1.35; }
 .agenda-item-meta { display: grid; justify-items: end; gap: 0.25rem; color: var(--ui-muted); font-size: 0.73rem; white-space: nowrap; }
+
+.session-context {
+  grid-column: 1 / -1;
+  color: #8fa9cd;
+  font-size: 0.62rem;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 .agenda-item h3 {
   margin: 0;
@@ -2353,12 +2364,138 @@ textarea[aria-invalid="true"],
 
 .study-topic-row p { margin: 0.25rem 0 0; }
 
+.study-topic-main { min-width: 0; flex: 1 1 28rem; }
+
 .study-topic-actions {
   display: flex;
   flex-wrap: wrap;
   justify-content: flex-end;
   gap: 0.4rem;
 }
+
+.topic-effort-summary {
+  display: grid;
+  gap: 0.7rem;
+  margin-top: 0.85rem;
+  padding: 0.8rem;
+  border: 1px solid rgb(115 104 232 / 42%);
+  border-radius: var(--ui-radius-xs);
+  background: rgb(112 95 221 / 8%);
+}
+
+.topic-effort-heading p { margin: 0.3rem 0 0; max-width: 48rem; }
+
+.topic-effort-values,
+.topic-metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(7.4rem, 1fr));
+  gap: 0.45rem;
+}
+
+.topic-effort-values > span,
+.topic-metric-grid > span {
+  display: grid;
+  gap: 0.14rem;
+  min-width: 0;
+  padding: 0.48rem 0.55rem;
+  border: 1px solid var(--ui-border-subtle);
+  border-radius: 0.45rem;
+  background: rgb(3 9 23 / 24%);
+}
+
+.topic-effort-values small,
+.topic-metric-grid small {
+  color: var(--ui-muted);
+  font-size: 0.66rem;
+  line-height: 1.25;
+}
+
+.topic-effort-values strong,
+.topic-metric-grid strong {
+  color: var(--ui-text);
+  font-size: 0.78rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.topic-effort-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+}
+
+.topic-progress-line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.55rem;
+  margin-top: 0.55rem;
+  color: var(--ui-muted);
+  font-size: 0.7rem;
+}
+
+.topic-progress-line .progress { height: 0.35rem; margin: 0; }
+
+.topic-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.65rem;
+  margin-top: 0.55rem;
+  color: var(--ui-muted);
+  font-size: 0.7rem;
+  line-height: 1.4;
+}
+
+.topic-observations,
+.topic-positive {
+  padding: 0.45rem 0.55rem;
+  border-left: 2px solid rgb(132 116 247 / 76%);
+  background: rgb(112 95 221 / 8%);
+  color: var(--ui-text-soft);
+  font-size: 0.73rem;
+  line-height: 1.4;
+}
+
+.topic-positive {
+  border-left-color: rgb(83 208 149 / 78%);
+  color: #9ce6bc;
+}
+
+.topic-manual-estimates {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+  gap: 0.55rem;
+  padding: 0.7rem;
+  border: 1px solid var(--ui-border-subtle);
+  border-radius: var(--ui-radius-xs);
+  background: rgb(255 255 255 / 2%);
+}
+
+.topic-distribution-preview {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.7rem;
+  border: 1px solid var(--ui-border-subtle);
+  border-radius: var(--ui-radius-xs);
+  background: rgb(3 9 23 / 24%);
+}
+
+.topic-distribution-preview > ul {
+  display: grid;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.topic-distribution-preview li {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.7rem;
+  color: var(--ui-text-soft);
+  font-size: 0.75rem;
+}
+
+.topic-distribution-preview li strong { color: var(--ui-text); font-variant-numeric: tabular-nums; }
 
 /* Prévia: período configurável, sem salvar nada até a aplicação ---------- */
 
@@ -2485,6 +2622,8 @@ textarea[aria-invalid="true"],
   .planning-preview-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .study-topic-row { flex-direction: column; }
   .study-topic-actions { justify-content: flex-start; }
+  .topic-effort-values,
+  .topic-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .planning-diagnostic-item { align-items: flex-start; flex-direction: column; }
   .curriculum-table { min-width: 47rem; }
   .curriculum-table th:nth-child(8),

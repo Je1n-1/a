@@ -148,6 +148,73 @@ def _candidate_score(item, weekly_needs):
     )
 
 
+def _topic_choice(item, current):
+    """Escolhe a unidade concreta, sem cair sempre no primeiro tópico.
+
+    A ordem é intencional: conteúdo em andamento, próximo conteúdo liberado,
+    revisão vencida e, somente quando não há tópicos, um bloco geral. O saldo
+    calculado para a prévia impede que um tópico receba mais esforço que sua
+    estimativa enquanto os demais ficam esquecidos.
+    """
+    topics = [topic for topic in item.get("contents", []) if not topic.get("archived_at")]
+    if not topics:
+        return None, "bloco geral: a disciplina ainda não possui tópicos"
+
+    def can_receive(topic):
+        if not topic.get("prerequisites_completed", True):
+            return False
+        if item.get("review_mode") and topic.get("status") == "completed":
+            due = topic.get("next_review_date")
+            return not due or due <= current.isoformat()
+        if topic.get("status") == "for_review":
+            due = topic.get("next_review_date")
+            return not due or due <= current.isoformat()
+        return topic.get("status") in {"in_progress", "not_started"}
+
+    candidates = [topic for topic in topics if can_receive(topic)]
+    if not candidates:
+        return None, None
+
+    # Uma revisão pode ser planejada mesmo depois do esforço de conclusão;
+    # tópicos regulares precisam ter saldo concreto para receber um novo bloco.
+    regular = [topic for topic in candidates if topic.get("status") in {"in_progress", "not_started"}]
+    regular = [topic for topic in regular if topic.get("planning_remaining_minutes") is None or topic.get("planning_remaining_minutes", 0) > 0]
+    review = [topic for topic in candidates if topic not in regular]
+    candidates = regular or review
+    if not candidates:
+        return None, None
+
+    rank = {"in_progress": 0, "not_started": 1, "for_review": 2, "completed": 3}
+    selected = min(
+        candidates,
+        key=lambda topic: (
+            rank.get(topic.get("status"), 9),
+            topic.get("next_evaluation_date") or "9999-12-31",
+            int(topic.get("sort_order") or 0),
+            topic.get("next_review_date") or "9999-12-31",
+            int(topic.get("mastery") or 0),
+            int(topic.get("planning_remaining_minutes") or 0) if topic.get("planning_remaining_minutes") is not None else 0,
+            topic.get("id") or 0,
+        ),
+    )
+    message = {
+        "in_progress": "tópico em andamento",
+        "not_started": "próximo tópico com pré-requisitos concluídos",
+        "for_review": "tópico marcado para revisão",
+        "completed": "revisão dentro da janela",
+    }.get(selected.get("status"), "tópico elegível")
+    if selected.get("next_evaluation_date"):
+        message += f"; avaliação em {selected['next_evaluation_date']}"
+    return selected, message
+
+
+def _can_allocate_item(item, current):
+    if not item.get("contents"):
+        return True
+    topic, _reason = _topic_choice(item, current)
+    return topic is not None
+
+
 def distribute(items, day_windows, start: date, end: date, *, pause_minutes=10,
                default_duration=50, minimum_duration=25, maximum_duration=120):
     """Distribui itens nas janelas livres recebidas.
@@ -155,7 +222,7 @@ def distribute(items, day_windows, start: date, end: date, *, pause_minutes=10,
     ``day_windows`` é ``{date: [(inicio_minuto, fim_minuto), ...]}``, já sem
     blocos existentes e sem horários passados. A função não modifica entradas.
     """
-    mutable = [dict(item) for item in items]
+    mutable = [{**item, "contents": [dict(topic) for topic in item.get("contents", [])]} for item in items]
     by_id = {item["id"]: item for item in mutable}
     for item in mutable:
         # Metas recorrentes são controladas por semana, para que uma prévia de
@@ -204,6 +271,7 @@ def distribute(items, day_windows, start: date, end: date, *, pause_minutes=10,
                     item for item in mutable
                     if item.get("is_schedulable", True)
                     and _fits_day(item, cursor)
+                    and _can_allocate_item(item, cursor)
                     and (item["to_allocate"] > 0 or weekly_needs.get(item["id"], 0) > 0)
                     and (not item.get("effective_start_date") or cursor.isoformat() >= item["effective_start_date"])
                     and (not item.get("deadline_date") or cursor.isoformat() <= item["deadline_date"])
@@ -211,10 +279,13 @@ def distribute(items, day_windows, start: date, end: date, *, pause_minutes=10,
                 if not eligible:
                     break
                 selected = max(eligible, key=lambda item: _candidate_score(item, weekly_needs))
+                content, topic_reason = _topic_choice(selected, cursor)
                 available = window_end - point
                 desired = max(selected["to_allocate"], weekly_needs.get(selected["id"], 0))
                 if selected.get("required_study_minutes"):
                     desired = min(desired, selected["to_allocate"])
+                if content and content.get("planning_remaining_minutes") is not None and not selected.get("review_mode"):
+                    desired = min(desired, int(content["planning_remaining_minutes"]))
                 duration = _allocation_duration(selected, available, desired, minimum_duration, maximum_duration, default_duration)
                 if duration < minimum_duration:
                     # Não deixa uma sobra minúscula impedir os demais itens:
@@ -225,20 +296,20 @@ def distribute(items, day_windows, start: date, end: date, *, pause_minutes=10,
                     if not alternate:
                         break
                     selected = alternate
+                    content, topic_reason = _topic_choice(selected, cursor)
                     desired = max(selected["to_allocate"], weekly_needs.get(selected["id"], 0))
                     if selected.get("required_study_minutes"):
                         desired = min(desired, selected["to_allocate"])
+                    if content and content.get("planning_remaining_minutes") is not None and not selected.get("review_mode"):
+                        desired = min(desired, int(content["planning_remaining_minutes"]))
                     duration = _allocation_duration(selected, available, desired, minimum_duration, maximum_duration, default_duration)
 
-                content = None
-                for candidate in selected.get("contents", []):
-                    if (candidate.get("status") != "completed" or selected.get("review_mode")) and not candidate.get("archived_at"):
-                        content = candidate
-                        break
                 reason_bits = [
                     f"prioridade efetiva {effective_priority(selected)}/10",
                     selected.get("risk_label") or "No ritmo",
                 ]
+                if topic_reason:
+                    reason_bits.append(topic_reason)
                 monday = (cursor - timedelta(days=cursor.weekday())).isoformat()
                 if int((selected.get("minimum_by_week") or {}).get(monday, 0)) > 0 and weekly_needs.get(selected["id"], 0) > 0:
                     reason_bits.append("mínimo semanal garantido")
@@ -266,9 +337,13 @@ def distribute(items, day_windows, start: date, end: date, *, pause_minutes=10,
                     "deadline_date": selected.get("deadline_date"), "risk_label": selected.get("risk_label"),
                     "automatic_urgency": int(selected.get("automatic_urgency") or 0),
                     "remaining_before_minutes": int(remaining_before), "remaining_after_minutes": int(remaining_after),
+                    "topic_progress_percent": content.get("effort_progress_percent") if content else None,
+                    "topic_remaining_minutes": content.get("planning_remaining_minutes") if content else None,
                 })
                 selected["allocated"] += duration
                 selected["to_allocate"] = max(0, selected["to_allocate"] - duration)
+                if content and content.get("planning_remaining_minutes") is not None and not selected.get("review_mode"):
+                    content["planning_remaining_minutes"] = max(0, int(content["planning_remaining_minutes"]) - duration)
                 weekly_needs[selected["id"]] = max(0, weekly_needs.get(selected["id"], 0) - duration)
                 point += duration + pause_minutes
         cursor += timedelta(days=1)

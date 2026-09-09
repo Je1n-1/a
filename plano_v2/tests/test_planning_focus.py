@@ -74,16 +74,17 @@ class PlanningAndFocusTest(unittest.TestCase):
         _, _, first = self.create_planned(start_time="06:00")
         _, _, second = self.create_planned(start_time="08:00")
         _, _, cancelled = self.create_planned(start_time="10:00")
-        _, _, completed = self.create_planned(start_time="12:00")
+        completed_study, completed_topic, completed = self.create_planned(start_time="12:00")
         _, _, following_day = self.create_planned(date="2026-09-05", start_time="06:00")
         self.assertEqual(
             self.client.patch(f"/api/planned/{cancelled['id']}", json={"status": "cancelled"}).status_code,
             200,
         )
-        self.assertEqual(
-            self.client.patch(f"/api/planned/{completed['id']}", json={"status": "completed"}).status_code,
-            200,
-        )
+        completed_session = self.client.post("/api/sessions", json={
+            "study_subject_id": completed_study["id"], "topic_id": completed_topic["id"],
+            "planned_session_id": completed["id"], "date": "2026-09-04", "duration_seconds": 50 * 60,
+        })
+        self.assertEqual(completed_session.status_code, 200, completed_session.get_json())
 
         deleted = self.client.delete("/api/planned/day/2026-09-04")
         self.assertEqual(deleted.status_code, 200, deleted.get_json())

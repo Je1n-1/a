@@ -13,11 +13,11 @@ ROOT = Path(__file__).resolve().parents[1]
 MIGRATIONS = ROOT / "migrations"
 PATTERN = re.compile(r"^(\d{4})_([a-z0-9_]+)\.sql$")
 
-# A migration 0007 reconstrói duas tabelas SQLite para relaxar uma restrição
-# NOT NULL antiga sem perder chaves, sessões ou anotações. O SQLite não permite
-# desligar foreign_keys dentro de uma transação, portanto a troca é feita antes
-# do BEGIN e sempre seguida da mesma verificação que protege exclusões.
-REBUILD_WITH_FOREIGN_KEYS_DISABLED = {7}
+# As migrations 0007 e 0008 recriam tabelas SQLite preservando IDs, chaves,
+# sessões e anotações. O SQLite não permite desligar foreign_keys dentro de uma
+# transação, portanto a troca é feita antes do BEGIN e sempre seguida da mesma
+# verificação que protege exclusões.
+REBUILD_WITH_FOREIGN_KEYS_DISABLED = {7, 8}
 
 
 def available(directory: Path = MIGRATIONS):
