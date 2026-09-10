@@ -2633,3 +2633,310 @@ textarea[aria-invalid="true"],
 @media (max-width: 480px) {
   .planning-preview-summary { grid-template-columns: 1fr; }
 }
+
+/* Planejamento por data, arrastar/soltar e início de disciplina ----------- */
+
+.calendar-day-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.2rem;
+  min-width: 0;
+}
+
+.calendar-day-actions .icon-button {
+  min-width: 1.55rem;
+  min-height: 1.55rem;
+  padding: 0.15rem;
+  border-color: transparent;
+  background: rgb(89 105 165 / 12%);
+  color: #bbc9ec;
+  font-size: 0.78rem;
+}
+
+.calendar-day-actions .icon-button:hover {
+  border-color: rgb(130 151 220 / 55%);
+  background: rgb(101 124 198 / 24%);
+  color: #fff;
+}
+
+.calendar-day-exception {
+  display: inline-flex;
+  max-width: 5.5rem;
+  align-items: center;
+  overflow: hidden;
+  padding: 0.12rem 0.3rem;
+  border: 1px solid rgb(239 184 105 / 40%);
+  border-radius: 999px;
+  color: #f0ca91;
+  font-size: 0.56rem;
+  font-weight: 700;
+  line-height: 1.1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.calendar-day.is-drag-over {
+  position: relative;
+  background:
+    radial-gradient(15rem 10rem at 50% 15%, rgb(111 225 172 / 24%), transparent 72%),
+    linear-gradient(155deg, #23395d, #14233f);
+  box-shadow: inset 0 0 0 2px rgb(100 220 160 / 90%);
+}
+
+.session-block[draggable="true"] { cursor: grab; }
+.session-block.is-dragging { opacity: 0.46; cursor: grabbing; }
+
+.calendar-free {
+  width: 100%;
+  min-height: 2rem;
+  border: 1px dashed rgb(99 118 174 / 36%);
+  border-radius: 0.42rem;
+  background: rgb(24 35 67 / 28%);
+  color: #9aa9cf;
+  font-size: 0.67rem;
+  text-align: left;
+}
+
+.calendar-free:hover {
+  border-color: rgb(142 129 247 / 70%);
+  background: rgb(101 83 204 / 13%);
+  color: #e5e2ff;
+}
+
+.date-availability-existing {
+  display: grid;
+  gap: 0.5rem;
+  padding: 0.7rem;
+  border: 1px solid var(--ui-border-subtle);
+  border-radius: var(--ui-radius-xs);
+  background: rgb(7 14 32 / 45%);
+}
+
+.date-availability-existing > strong { color: var(--ui-text-soft); font-size: 0.78rem; }
+.date-availability-existing .muted { margin: 0; font-size: 0.75rem; }
+
+.date-availability-current {
+  display: grid;
+  gap: 0.38rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.date-availability-current li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  color: var(--ui-text-soft);
+  font-size: 0.75rem;
+}
+
+.planning-readiness {
+  display: grid;
+  gap: 0.7rem;
+  border-color: rgb(129 116 228 / 32%);
+}
+
+.planning-readiness-heading h2 { margin: 0.22rem 0; font-size: 1rem; }
+.planning-readiness-heading p { margin: 0; font-size: 0.76rem; line-height: 1.45; }
+
+.planning-readiness-list {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.planning-readiness-list li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.65rem;
+  padding: 0.58rem;
+  border: 1px solid rgb(96 116 177 / 28%);
+  border-radius: var(--ui-radius-xs);
+  background: rgb(8 15 34 / 36%);
+}
+
+.planning-readiness-list li > div { display: grid; gap: 0.14rem; min-width: 0; }
+.planning-readiness-list strong { color: var(--ui-text); font-size: 0.76rem; }
+.planning-readiness-list span { color: var(--ui-muted); font-size: 0.7rem; line-height: 1.35; }
+
+.preview-session { align-items: flex-start; }
+.preview-reason { margin-top: 0.34rem; color: #cbc5ff; font-size: 0.74rem; line-height: 1.35; }
+
+.start-discipline-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.55rem;
+  margin-bottom: 0.8rem;
+}
+
+.start-discipline-summary > div {
+  display: grid;
+  gap: 0.23rem;
+  min-width: 0;
+  padding: 0.65rem;
+  border: 1px solid rgb(101 122 188 / 38%);
+  border-radius: var(--ui-radius-xs);
+  background: rgb(31 42 83 / 35%);
+}
+
+.start-discipline-summary strong,
+.start-discipline-summary span:last-child { overflow-wrap: anywhere; }
+.start-discipline-summary strong { color: var(--ui-text); font-size: 0.8rem; }
+.start-discipline-summary > div > span:last-child { color: var(--ui-muted); font-size: 0.7rem; }
+.start-discipline-effort label { align-items: start; }
+
+.diagnostic-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  margin: 0.8rem 0;
+}
+
+.diagnostic-summary span {
+  padding: 0.34rem 0.5rem;
+  border: 1px solid rgb(99 119 183 / 36%);
+  border-radius: 999px;
+  color: var(--ui-muted);
+  background: rgb(12 20 45 / 45%);
+  font-size: 0.7rem;
+}
+
+.diagnostic-summary strong { color: var(--ui-text); }
+
+.study-diagnostic-list {
+  display: grid;
+  gap: 0.65rem;
+  max-height: min(50vh, 35rem);
+  overflow-y: auto;
+}
+
+.study-diagnostic-row {
+  display: grid;
+  gap: 0.55rem;
+  padding: 0.7rem;
+  border: 1px solid rgb(109 126 190 / 32%);
+  border-radius: var(--ui-radius-xs);
+  background: rgb(9 17 39 / 48%);
+}
+
+.study-diagnostic-row.is-information { grid-template-columns: minmax(0, 1fr) auto; align-items: center; }
+.study-diagnostic-row p { margin: 0.22rem 0 0; color: var(--ui-muted); font-size: 0.75rem; line-height: 1.4; }
+.diagnostic-select { color: var(--ui-text-soft); font-size: 0.76rem; font-weight: 700; }
+.diagnostic-fields { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.diagnostic-fields .toggle-row { align-self: end; }
+
+.shared-study-overview,
+.shared-study-preview,
+.shared-study-unlink {
+  display: grid;
+  gap: 0.85rem;
+}
+
+.shared-study-current,
+.shared-study-preview-card,
+.shared-study-candidate {
+  display: grid;
+  gap: 0.48rem;
+  padding: 0.78rem;
+  border: 1px solid rgb(105 124 190 / 34%);
+  border-radius: var(--ui-radius-xs);
+  background: rgb(9 17 39 / 48%);
+}
+
+.shared-study-current.linked {
+  border-color: rgb(108 219 165 / 48%);
+  background: linear-gradient(135deg, rgb(20 82 67 / 34%), rgb(12 24 51 / 56%));
+}
+
+.shared-study-current > strong,
+.shared-study-preview-card > strong { color: var(--ui-text); }
+.shared-study-current p,
+.shared-study-preview-card p { margin: 0; }
+
+.shared-study-candidates {
+  display: grid;
+  gap: 0.62rem;
+}
+
+.shared-study-candidate {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+}
+
+.shared-study-candidate.is-selected {
+  border-color: rgb(146 118 255 / 86%);
+  box-shadow: inset 0 0 0 1px rgb(146 118 255 / 26%);
+}
+
+.shared-study-candidate .row { align-items: flex-start; }
+.shared-study-candidate .row p,
+.shared-study-evidence { margin: 0.2rem 0 0; }
+.shared-study-candidate-actions { display: flex; align-items: center; }
+
+.shared-study-counts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.32rem;
+}
+
+.shared-study-counts span,
+.shared-study-notice {
+  padding: 0.26rem 0.42rem;
+  border: 1px solid rgb(99 119 183 / 34%);
+  border-radius: 999px;
+  color: var(--ui-muted);
+  background: rgb(20 31 63 / 50%);
+  font-size: 0.7rem;
+}
+
+.shared-study-notice {
+  margin: 0;
+  border-color: rgb(102 216 163 / 40%);
+  color: #9be4bf;
+}
+
+.shared-study-effects {
+  display: grid;
+  gap: 0.42rem;
+  margin: 0;
+  padding-left: 1.15rem;
+  color: var(--ui-text-soft);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.shared-study-source-study {
+  display: grid;
+  gap: 0.38rem;
+  margin-top: 0.58rem;
+  padding-top: 0.58rem;
+  border-top: 1px solid rgb(99 119 183 / 25%);
+}
+
+.shared-study-consent {
+  padding: 0.64rem;
+  border: 1px solid rgb(144 116 255 / 38%);
+  border-radius: var(--ui-radius-xs);
+  background: rgb(84 64 173 / 14%);
+}
+
+@media (max-width: 1080px) {
+  .planning-layout > aside > .planning-readiness { grid-column: auto; }
+}
+
+@media (max-width: 760px) {
+  .calendar-day-actions .calendar-day-delete { display: none; }
+  .calendar-day-exception { max-width: 7rem; }
+  .planning-readiness-list li { align-items: flex-start; flex-direction: column; }
+  .start-discipline-summary { grid-template-columns: 1fr; }
+  .study-diagnostic-row.is-information { grid-template-columns: 1fr; }
+  .diagnostic-fields { grid-template-columns: 1fr; }
+  .shared-study-candidate { grid-template-columns: 1fr; }
+  .shared-study-candidate-actions { justify-content: flex-start; }
+}

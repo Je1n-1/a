@@ -153,7 +153,11 @@ class TopicsAndFocusPersistenceApiTest(unittest.TestCase):
         finally:
             conn.close()
 
-        with patch.object(migrations, "available", return_value=available):
+        # A prova desta migration isola a evolução 0008. Migrations posteriores
+        # (perfil/links canônicos) possuem testes próprios e não devem mudar o
+        # contrato de atualização legado v7 → v8.
+        until_v8 = [item for item in available if item[0] <= 8]
+        with patch.object(migrations, "available", return_value=until_v8):
             self.assertEqual(migrations.migrate(legacy), [8])
 
         conn = sqlite3.connect(legacy)

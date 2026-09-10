@@ -215,6 +215,47 @@ def _can_allocate_item(item, current):
     return topic is not None
 
 
+def _ceil_div(value, divisor):
+    return (max(0, int(value)) + max(1, int(divisor)) - 1) // max(1, int(divisor))
+
+
+def _required_day_target(item, minimum, default):
+    """Cota de hoje para esforço com prazo, sem concentrar tudo no começo.
+
+    Quando a necessidade diária cabe em uma sessão, ela é distribuída de forma
+    proporcional entre os dias restantes. Se a média ficar menor que uma sessão
+    mínima, blocos preferidos são espaçados; uma matéria de 60 min em 42 dias
+    não vira 25 min nos três primeiros dias por acidente.
+    """
+    remaining = max(0, int(item.get("to_allocate") or 0))
+    if not remaining:
+        return 0
+    total_days = max(1, int(item.get("_pace_days_total") or item.get("available_days_until_deadline") or 1))
+    seen_days = max(0, int(item.get("_pace_days_seen") or 0))
+    remaining_days = max(1, total_days - seen_days)
+    daily = _ceil_div(remaining, remaining_days)
+    if daily >= minimum:
+        return daily
+    preferred = max(minimum, int(item.get("preferred_block_minutes") or default))
+    # Se tudo o que resta cabe em uma sessão preferida, não fragmentamos a
+    # demanda em uma parte mínima e um resto impossível de planejar depois.
+    # Ex.: 60 min em uma disciplina de longo prazo continuam sendo uma sessão
+    # de 60 min, ainda que a média diária seja menor que o mínimo configurado.
+    if remaining <= preferred:
+        return remaining if seen_days == 0 else 0
+    block = min(preferred, remaining)
+    blocks = _ceil_div(remaining, block)
+    # No primeiro dia uma sessão pequena já cria impulso; os próximos blocos
+    # são espaçados conforme a quantidade que ainda precisa ocorrer.
+    spacing = max(1, remaining_days // max(1, blocks))
+    return block if seen_days % spacing == 0 else 0
+
+
+def _has_usable_window(day_windows, current, minimum):
+    values = day_windows.get(current, day_windows.get(current.isoformat(), []))
+    return any(end - start >= minimum for start, end in values)
+
+
 def distribute(items, day_windows, start: date, end: date, *, pause_minutes=10,
                default_duration=50, minimum_duration=25, maximum_duration=120):
     """Distribui itens nas janelas livres recebidas.
@@ -229,6 +270,8 @@ def distribute(items, day_windows, start: date, end: date, *, pause_minutes=10,
         # 14 ou 30 dias não consuma toda a meta logo nos primeiros dias.
         item["to_allocate"] = max(0, int(item.get("unallocated_minutes") or 0)) if item.get("is_schedulable", True) and item.get("required_study_minutes") else 0
         item["allocated"] = 0
+        item["_pace_days_total"] = max(1, int(item.get("available_days_until_deadline") or item.get("available_days_in_period") or 1))
+        item["_pace_days_seen"] = 0
 
     proposals = []
     weekly_unmet = defaultdict(int)
@@ -263,16 +306,28 @@ def distribute(items, day_windows, start: date, end: date, *, pause_minutes=10,
                 keep_unmet(weekly_needs)
             active_week = week_key
             weekly_needs = weekly_needs_for(cursor)
-        windows = [tuple(value) for value in day_windows.get(cursor, [])]
+        # ``services.core`` usa chaves ISO para que a prévia seja JSON-safe;
+        # aceitar também ``date`` mantém a função determinística útil em
+        # chamadas diretas e testes unitários legados.
+        windows = [tuple(value) for value in day_windows.get(cursor, day_windows.get(cursor.isoformat(), []))]
+        daily_allocated = defaultdict(int)
         for window_start, window_end in windows:
             point = window_start
             while point + minimum_duration <= window_end:
+                required_targets = {
+                    item["id"]: _required_day_target(item, minimum_duration, default_duration)
+                    for item in mutable
+                }
                 eligible = [
                     item for item in mutable
                     if item.get("is_schedulable", True)
                     and _fits_day(item, cursor)
                     and _can_allocate_item(item, cursor)
-                    and (item["to_allocate"] > 0 or weekly_needs.get(item["id"], 0) > 0)
+                    and (
+                        (item.get("required_study_minutes") and required_targets.get(item["id"], 0) > daily_allocated.get(item["id"], 0))
+                        or (not item.get("required_study_minutes") and weekly_needs.get(item["id"], 0) > 0)
+                        or (item.get("required_study_minutes") and weekly_needs.get(item["id"], 0) > 0)
+                    )
                     and (not item.get("effective_start_date") or cursor.isoformat() >= item["effective_start_date"])
                     and (not item.get("deadline_date") or cursor.isoformat() <= item["deadline_date"])
                 ]
@@ -281,7 +336,8 @@ def distribute(items, day_windows, start: date, end: date, *, pause_minutes=10,
                 selected = max(eligible, key=lambda item: _candidate_score(item, weekly_needs))
                 content, topic_reason = _topic_choice(selected, cursor)
                 available = window_end - point
-                desired = max(selected["to_allocate"], weekly_needs.get(selected["id"], 0))
+                pace_need = max(0, required_targets.get(selected["id"], 0) - daily_allocated.get(selected["id"], 0))
+                desired = max(pace_need, weekly_needs.get(selected["id"], 0))
                 if selected.get("required_study_minutes"):
                     desired = min(desired, selected["to_allocate"])
                 if content and content.get("planning_remaining_minutes") is not None and not selected.get("review_mode"):
@@ -292,12 +348,20 @@ def distribute(items, day_windows, start: date, end: date, *, pause_minutes=10,
                     # testa o próximo candidato antes de abandonar a janela.
                     eligible = [item for item in eligible if item["id"] != selected["id"]]
                     alternate = next((item for item in sorted(eligible, key=lambda item: _candidate_score(item, weekly_needs), reverse=True)
-                                      if _allocation_duration(item, available, max(item["to_allocate"], weekly_needs.get(item["id"], 0)), minimum_duration, maximum_duration, default_duration) >= minimum_duration), None)
+                                      if _allocation_duration(
+                                          item, available,
+                                          max(
+                                              max(0, required_targets.get(item["id"], 0) - daily_allocated.get(item["id"], 0)),
+                                              weekly_needs.get(item["id"], 0),
+                                          ),
+                                          minimum_duration, maximum_duration, default_duration,
+                                      ) >= minimum_duration), None)
                     if not alternate:
                         break
                     selected = alternate
                     content, topic_reason = _topic_choice(selected, cursor)
-                    desired = max(selected["to_allocate"], weekly_needs.get(selected["id"], 0))
+                    pace_need = max(0, required_targets.get(selected["id"], 0) - daily_allocated.get(selected["id"], 0))
+                    desired = max(pace_need, weekly_needs.get(selected["id"], 0))
                     if selected.get("required_study_minutes"):
                         desired = min(desired, selected["to_allocate"])
                     if content and content.get("planning_remaining_minutes") is not None and not selected.get("review_mode"):
@@ -341,11 +405,21 @@ def distribute(items, day_windows, start: date, end: date, *, pause_minutes=10,
                     "topic_remaining_minutes": content.get("planning_remaining_minutes") if content else None,
                 })
                 selected["allocated"] += duration
+                daily_allocated[selected["id"]] += duration
                 selected["to_allocate"] = max(0, selected["to_allocate"] - duration)
                 if content and content.get("planning_remaining_minutes") is not None and not selected.get("review_mode"):
                     content["planning_remaining_minutes"] = max(0, int(content["planning_remaining_minutes"]) - duration)
                 weekly_needs[selected["id"]] = max(0, weekly_needs.get(selected["id"], 0) - duration)
                 point += duration + pause_minutes
+        for item in mutable:
+            if (
+                item.get("required_study_minutes")
+                and _fits_day(item, cursor)
+                and _has_usable_window(day_windows, cursor, minimum_duration)
+                and (not item.get("effective_start_date") or cursor.isoformat() >= item["effective_start_date"])
+                and (not item.get("deadline_date") or cursor.isoformat() <= item["deadline_date"])
+            ):
+                item["_pace_days_seen"] += 1
         cursor += timedelta(days=1)
 
     if active_week is not None:

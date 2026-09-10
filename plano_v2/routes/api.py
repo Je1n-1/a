@@ -6,7 +6,9 @@ from zipfile import ZIP_DEFLATED, ZipFile
 from flask import Blueprint, Response, jsonify, request, send_file
 
 from config import CURRICULUM_TEMPLATE_PATH
-from database.connection import connect
+from database.connection import connect, database_health
+from database.migrations import migration_status
+from database.study_diagnostics import diagnose_studies, reconcile_studies
 from services import core
 from services.grade_import import preview, preview_paste
 
@@ -48,6 +50,23 @@ def bootstrap():
         today=core._local_now().date(); end=today+timedelta(days=6)
         return {"formations":core.formations(conn),"studies":core.studies(conn),"recommendation":core.recommendation(conn),"reviews":core.reviews(conn),"analytics":core.analytics(conn),"planned":core.planned(conn,today.isoformat(),end.isoformat())}
     return run(operation)
+
+
+@api.get("/diagnostics")
+def diagnostics():
+    """Status seguro do banco e das migrations para suporte local."""
+    return run(lambda conn: {
+        "database": database_health(),
+        "migrations": migration_status(),
+        "legacy_studies": diagnose_studies(conn),
+    })
+
+
+@api.route("/diagnostics/studies", methods=["GET", "POST"])
+def study_diagnostics():
+    if request.method == "GET":
+        return run(lambda conn: diagnose_studies(conn, request.args.get("date")))
+    return run(lambda conn: reconcile_studies(conn, body(), body().get("date")))
 
 
 @api.route("/formations",methods=["GET","POST"])
@@ -151,6 +170,19 @@ def curriculum_evaluations(ident):
     return run(lambda conn: core.evaluation_summary(conn, ident) if request.method == "GET" else core.create_evaluation(conn, {**body(), "curriculum_subject_id": ident}))
 @api.get("/curriculum/<int:ident>/dependencies")
 def curriculum_dependencies(ident): return run(lambda conn: core.curriculum_dependencies(conn, ident))
+@api.route("/curriculum/<int:ident>/shared-study", methods=["GET", "POST", "DELETE"])
+def curriculum_shared_study(ident):
+    """Prévia e confirmação explícita para equivalências entre formações.
+
+    A rota é propositalmente separada das alterações acadêmicas da grade: o
+    vínculo compartilha só o estudo pessoal canônico, nunca estado, nota ou
+    prazo institucional da ocorrência curricular.
+    """
+    if request.method == "GET":
+        return run(lambda conn: core.curriculum_shared_study(conn, ident))
+    if request.method == "POST":
+        return run(lambda conn: core.link_curriculum_shared_study(conn, ident, body()))
+    return run(lambda conn: core.unlink_curriculum_shared_study(conn, ident, body()))
 @api.get("/curriculum/<int:ident>/history")
 def curriculum_history(ident): return run(lambda conn: core.curriculum_status_history(conn, ident))
 @api.get("/curriculum/<int:ident>/timeline")
@@ -161,6 +193,7 @@ def curriculum_status(ident): return run(lambda conn: core.change_curriculum_sta
 def curriculum_review(ident): return run(lambda conn: core.set_curriculum_review(conn, ident, body()))
 @api.post("/curriculum/<int:ident>/<action>")
 def curriculum_action(ident,action):
+    if action == "start": return run(lambda conn: core.start_curriculum_study(conn, ident, body()))
     if action == "archive": return run(lambda conn: core.archive_curriculum(conn,ident))
     if action == "restore": return run(lambda conn: core.archive_curriculum(conn,ident,True))
     if action == "destroy": return run(lambda conn: core.destroy(conn,"curriculum",ident,body().get("confirmation"),body().get("include_dependencies")))
@@ -324,6 +357,16 @@ def availability_item(ident): return run(lambda conn: core.update_availability(c
 def availability_exceptions(): return run(lambda conn:core.availability_exceptions(conn,request.args.get("start"),request.args.get("end")) if request.method=="GET" else core.set_availability_exception(conn,body()))
 @api.route("/availability-exceptions/<int:ident>",methods=["PATCH","DELETE"])
 def availability_exception_item(ident): return run(lambda conn:core.update_availability_exception(conn,ident,body()) if request.method=="PATCH" else core.remove(conn,"excecoes_disponibilidade",ident) or {"deleted":True})
+@api.route("/availability/intervals", methods=["GET", "POST"])
+def availability_intervals():
+    return run(lambda conn: core.availability_intervals(conn, request.args.get("start"), request.args.get("end")) if request.method == "GET" else core.set_availability_interval(conn, body()))
+@api.route("/availability/intervals/<int:ident>", methods=["PATCH", "DELETE"])
+def availability_interval_item(ident):
+    return run(lambda conn: core.update_availability_interval(conn, ident, body()) if request.method == "PATCH" else core.remove(conn, "disponibilidades_intervalos", ident) or {"deleted": True})
+@api.get("/availability/days/<selected_date>")
+def availability_day(selected_date): return run(lambda conn: core.availability_day(conn, selected_date))
+@api.post("/availability/days/<selected_date>/reset")
+def availability_day_reset(selected_date): return run(lambda conn: core.reset_availability_date(conn, selected_date))
 @api.route("/planned",methods=["GET","POST"])
 def planned_collection():
     today = core._today()
@@ -346,6 +389,13 @@ def planning_apply():
     return run(lambda conn: core.apply_smart_plan(conn, body()))
 @api.get("/planning/capacity")
 def planning_capacity(): return run(lambda conn: core.planning_capacity(conn, request.args.get("start", core._today()), request.args.get("end", (core._local_now().date()+timedelta(days=6)).isoformat())))
+@api.get("/planning/items")
+def planning_items():
+    return run(lambda conn: core.planning_items(
+        conn, request.args.get("start", core._today()),
+        request.args.get("end", (core._local_now().date()+timedelta(days=6)).isoformat()),
+        request.args.get("formation_id"), request.args.get("item_id"), request.args.get("kind"),
+    ))
 @api.get("/planning/ideal")
 def planning_ideal(): return run(lambda conn: core.planning_ideal(conn, request.args.get("start", core._today()), request.args.get("end", (core._local_now().date()+timedelta(days=6)).isoformat())))
 @api.get("/today")
