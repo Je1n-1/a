@@ -86,6 +86,13 @@ def _optional_minutes(value, label):
     return minutes
 
 
+def _optional_block_minutes(value):
+    minutes = _optional_minutes(value, "Duração preferida do bloco")
+    if minutes is not None and not 15 <= minutes <= 240:
+        raise DomainError("Duração preferida do bloco deve ficar entre 15 e 240 minutos.")
+    return minutes
+
+
 def _optional_number(value, label):
     if value in (None, ""):
         return None
@@ -890,12 +897,11 @@ def _curriculum_data(values, current=None):
         data["name"] = _need(data["name"], "Nome da disciplina")
     if "workload_minutes" in data and data["workload_minutes"] is not None:
         data["workload_minutes"] = _optional_minutes(data["workload_minutes"], "Carga horária")
-    for key, label in (
-        ("required_study_minutes", "Esforço pessoal necessário"),
-        ("preferred_block_minutes", "Duração preferida do bloco"),
-    ):
+    for key, label in (("required_study_minutes", "Esforço pessoal necessário"),):
         if key in data:
             data[key] = _optional_minutes(data[key], label)
+    if "preferred_block_minutes" in data:
+        data["preferred_block_minutes"] = _optional_block_minutes(data["preferred_block_minutes"])
     if "allowed_weekdays" in data:
         data["allowed_weekdays"] = _weekdays_json(data["allowed_weekdays"]) if data["allowed_weekdays"] is not None else None
     if "minimum_grade" in data:
@@ -1862,9 +1868,11 @@ def _study_data(values, current=None, include_identity=False):
         if data.get(key) == "":
             data[key] = None
     candidate = {**(current or {}), **data}
-    for key, label in (("required_study_minutes", "Esforço total"), ("minimum_weekly_minutes", "Mínimo semanal"), ("preferred_block_minutes", "Duração preferida do bloco"), ("weekly_goal_minutes", "Meta semanal")):
+    for key, label in (("required_study_minutes", "Esforço total"), ("minimum_weekly_minutes", "Mínimo semanal"), ("weekly_goal_minutes", "Meta semanal")):
         if key in data:
             data[key] = _optional_minutes(data[key], label)
+    if "preferred_block_minutes" in data:
+        data["preferred_block_minutes"] = _optional_block_minutes(data["preferred_block_minutes"])
     if "allowed_weekdays" in data:
         data["allowed_weekdays"] = _weekdays_json(data["allowed_weekdays"]) if data["allowed_weekdays"] is not None else None
     for key, label in (("priority", "Prioridade"), ("difficulty", "Dificuldade")):
@@ -4272,6 +4280,17 @@ def _planning_blockers(item):
     return [] if state == "ready" else [{"code": state, "message": messages.get(state, "Este item ainda não está elegível para planejamento.")}]
 
 
+def _effective_block_preference(row, curriculum_id, default_minutes):
+    """Resolve a duração na ordem estudo atual → grade → preferência global."""
+    study_value = row.get("preferred_block_minutes")
+    if study_value not in (None, ""):
+        return int(study_value), "current_study"
+    curriculum_value = row.get("curriculum_preferred_block_minutes") if curriculum_id else None
+    if curriculum_value not in (None, ""):
+        return int(curriculum_value), "curriculum"
+    return int(default_minutes), "global_default"
+
+
 def _normalise_planning_item(item, row, evaluations):
     """Contrato único para qualquer consumidor de itens planejáveis.
 
@@ -4322,6 +4341,12 @@ def _normalise_planning_item(item, row, evaluations):
         "priority_base": item.get("priority_base"),
         "priority_effective": item.get("priority_effective"),
         "preferred_block_minutes": item.get("preferred_block_minutes"),
+        "effective_block_minutes": item.get("effective_block_minutes"),
+        "block_duration_source": item.get("block_duration_source"),
+        "demand_mode": item.get("demand_mode"),
+        "scheduled_in_preview_minutes": item.get("scheduled_in_preview_minutes", 0),
+        "deferred_beyond_preview_minutes": item.get("deferred_beyond_preview_minutes", 0),
+        "unallocated_due_to_capacity_minutes": item.get("unallocated_due_to_capacity_minutes", 0),
         "allowed_weekdays": item.get("allowed_weekdays") or [],
         "topics": topic_values,
         "evaluations": evaluations,
@@ -4359,6 +4384,16 @@ def _item_net_capacity(capacity_rows, start, end, allowed_weekdays=None):
     return total, available_days
 
 
+def _eligible_calendar_days(start, end, allowed_weekdays=None):
+    """Dias permitidos para ritmo quando ainda não há janela cadastrada."""
+    if _date(end) < _date(start):
+        return 0
+    return sum(
+        1 for current in _range_dates(start, end)
+        if not allowed_weekdays or current.weekday() in allowed_weekdays
+    )
+
+
 def _collective_planning_risk(items, capacity_rows, start_day, end_day):
     """Avalia demandas concorrentes contra a mesma capacidade livre.
 
@@ -4367,7 +4402,14 @@ def _collective_planning_risk(items, capacity_rows, start_day, end_day):
     de capacidade é contado uma vez no calendário cumulativo.
     """
     ready = [item for item in items if item.get("is_schedulable") and int(item.get("demand_in_period_minutes") or 0) > 0]
-    capacity_by_day = {row["date"]: int(row.get("net_free_minutes") or 0) for row in capacity_rows}
+    # ``capacity_rows`` pode ter sido calculada para um horizonte maior, pois
+    # cada prazo individual precisa dessa projeção. O risco coletivo, porém,
+    # responde estritamente ao intervalo solicitado pela prévia.
+    capacity_by_day = {
+        row["date"]: int(row.get("net_free_minutes") or 0)
+        for row in capacity_rows
+        if start_day <= _date(row["date"]) <= end_day
+    }
     due_by_day = defaultdict(int)
     contributors = defaultdict(list)
     for item in ready:
@@ -4462,6 +4504,7 @@ def planning_items(conn, start=None, end=None, formation_id=None, item_id=None, 
     evaluation_studies, evaluation_curricula = _evaluation_due_sets(conn, study_ids, curriculum_ids)
     evaluations_by_study, evaluations_by_curriculum = _planning_evaluations_by_owner(conn, study_ids, curriculum_ids)
     horizon = _planning_windows(conn, start_day.isoformat(), farthest_day.isoformat())
+    preferences = planning_preferences(conn)
     plan_index = _planned_minutes_index(conn, study_ids, min(start_day, week_start).isoformat(), farthest_day.isoformat())
     items = []
     today_day = _local_now().date()
@@ -4496,6 +4539,9 @@ def planning_items(conn, start=None, end=None, formation_id=None, item_id=None, 
         # disciplina precisam olhar até o prazo completo — não só sete dias.
         capacity_end = deadline_day if deadline_day else end_day
         allowed = _stored_weekdays(row.get("curriculum_allowed_weekdays") if curriculum_id else row.get("allowed_weekdays"))
+        effective_block_minutes, block_duration_source = _effective_block_preference(
+            row, curriculum_id, preferences["default_session_minutes"],
+        )
         planned_by_week = defaultdict(int)
         for planned_row in plan_index.get(row["id"], []):
             planned_day = _date(planned_row["scheduled_date"])
@@ -4569,7 +4615,9 @@ def planning_items(conn, start=None, end=None, formation_id=None, item_id=None, 
             "remaining_minutes": remaining, "future_planned_minutes": planned_future,
             "unallocated_minutes": unallocated, "capacity_until_deadline_minutes": capacity,
             "available_days_until_deadline": available_days, "priority_base": int(row.get("priority_base") or row.get("priority") or 3),
-            "preferred_block_minutes": row.get("curriculum_preferred_block_minutes") if curriculum_id else row.get("preferred_block_minutes"),
+            "preferred_block_minutes": effective_block_minutes,
+            "effective_block_minutes": effective_block_minutes,
+            "block_duration_source": block_duration_source,
             "allowed_weekdays": allowed, "minimum_weekly_minutes": minimum_weekly,
             "weekly_goal_minutes": int(weekly_goal), "week_real_minutes": week_real,
             "week_planned_minutes": int(planned_by_week.get(current_monday, 0)),
@@ -4606,22 +4654,32 @@ def planning_items(conn, start=None, end=None, formation_id=None, item_id=None, 
         else:
             planning_state = "ready"
         if required:
-            if deadline_day and deadline_day > end_day:
-                # Cota do período: o restante é diluído conforme a capacidade
-                # real até o prazo, em vez de ser despejado nos primeiros dias.
-                if capacity > 0:
-                    demand_in_period = min(unallocated, max(0, round(unallocated * period_capacity / capacity)))
-                else:
-                    demand_in_period = unallocated
+            # A demanda da prévia é a parcela do esforço que pertence ao
+            # período visível. Ela não é um "erro de capacidade" só porque o
+            # prazo continua depois da prévia. Usamos dias disponíveis para
+            # preservar ritmo estável e caímos para dias permitidos quando a
+            # disponibilidade ainda não foi configurada.
+            pace_days_total = available_days or _eligible_calendar_days(effective_start.isoformat(), capacity_end.isoformat(), allowed)
+            pace_days_period = period_available_days or _eligible_calendar_days(effective_start.isoformat(), allocation_end.isoformat(), allowed)
+            if deadline_day and deadline_day > end_day and pace_days_total > 0:
+                demand_in_period = min(unallocated, max(0, round(unallocated * pace_days_period / pace_days_total)))
             else:
                 demand_in_period = unallocated
+            deferred_beyond_preview = max(0, unallocated - demand_in_period)
+            demand_mode = "review" if review_mode else "deadline_total"
         else:
             demand_in_period = remaining
+            deferred_beyond_preview = 0
+            demand_mode = "recurring_weekly" if weekly_goal else ("weekly_minimum" if minimum_weekly else "none")
         raw["planning_state"] = planning_state
         raw["is_schedulable"] = planning_state == "ready"
         raw["demand_in_period_minutes"] = int(demand_in_period)
         raw["capacity_in_period_minutes"] = int(period_capacity)
         raw["available_days_in_period"] = int(period_available_days)
+        raw["demand_mode"] = demand_mode
+        raw["scheduled_in_preview_minutes"] = 0
+        raw["deferred_beyond_preview_minutes"] = int(deferred_beyond_preview)
+        raw["unallocated_due_to_capacity_minutes"] = max(0, int(demand_in_period) - int(period_capacity))
         # A ausência de esforço pessoal não vira silenciosamente carga da grade.
         # Sem esforço total, a meta semanal ainda mantém o item planejável.
         ideal_day = (unallocated / available_days) if available_days else None
@@ -4886,14 +4944,29 @@ def generate_plan(conn, start, days=7):
         pause_minutes=preferences["planning_break_minutes"], default_duration=preferences["default_session_minutes"],
         minimum_duration=preferences["minimum_session_minutes"], maximum_duration=preferences["maximum_session_minutes"],
     )
+    allocation_by_id = {item["id"]: item for item in allocation["items"]}
+    preview_items = [{**item, **allocation_by_id.get(item["id"], {})} for item in calculated["items"]]
     skipped = [item["name"] for item in calculated["items"] if item.get("planning_state") == "missing_effort_or_goal"]
     capacity = planning_capacity(conn, first.isoformat(), end.isoformat())
+    scheduled_minutes = sum(int(item.get("planned_duration_minutes") or 0) for item in allocation["sessions"])
+    deferred_minutes = sum(int(item.get("deferred_beyond_preview_minutes") or 0) for item in preview_items if item.get("is_schedulable"))
+    shortage_minutes = sum(int(item.get("unallocated_due_to_capacity_minutes") or 0) for item in preview_items if item.get("is_schedulable"))
+    capacity.update({
+        "scheduled_in_preview_minutes": scheduled_minutes,
+        "deferred_beyond_preview_minutes": deferred_minutes,
+        "unallocated_due_to_capacity_minutes": shortage_minutes,
+    })
     return {
         "start": first.isoformat(), "end": end.isoformat(), "sessions": allocation["sessions"],
-        "items": calculated["items"], "unscheduled": allocation["unscheduled"],
+        "items": preview_items, "unscheduled": allocation["unscheduled"],
         "preferences": preferences, "skipped_without_goal": skipped,
         "capacity": capacity,
-        "diagnostics": _planning_diagnostics(conn, first.isoformat(), end.isoformat(), calculated, capacity, allocation),
+        "allocation": {
+            "scheduled_in_preview_minutes": scheduled_minutes,
+            "deferred_beyond_preview_minutes": deferred_minutes,
+            "unallocated_due_to_capacity_minutes": shortage_minutes,
+        },
+        "diagnostics": _planning_diagnostics(conn, first.isoformat(), end.isoformat(), {**calculated, "items": preview_items}, capacity, allocation),
     }
 
 
@@ -4989,7 +5062,7 @@ def today_overview(conn):
         for item in forecast["items"]
         if item.get("is_schedulable", True) and item.get("required_study_minutes")
     )
-    weekly_deficit = max(0, current_week_open - int(week_window["free_minutes"] or 0))
+    weekly_deficit = max(0, current_week_open - int(week_window["net_free_minutes"] or 0))
     mandatory_unallocated = deadline_deficit + weekly_deficit
     on_track = mandatory_unallocated <= 0
     recommendation_value = recommendation(conn) if suggest_during_free_time and free_time_preference != "preserve" else None
@@ -5012,12 +5085,21 @@ def today_overview(conn):
             recommendation_value["slot"] = suggestion_slot
     required = sum(int(item["planned_duration_minutes"] or 0) for item in agenda)
     return {
-        "date": today, "capacity_minutes": capacity["capacity_minutes"], "planned_minutes": capacity["planned_minutes"],
-        "studied_minutes": int(studied["minutes"] or 0), "free_minutes": capacity["free_minutes"],
+        "date": today,
+        # Os aliases históricos permanecem brutos para não quebrar a API;
+        # interfaces novas devem preferir explicitamente os campos ``net_*``.
+        "capacity_minutes": capacity["capacity_minutes"],
+        "planned_minutes": capacity["planned_minutes"],
+        "studied_minutes": int(studied["minutes"] or 0),
+        "free_minutes": capacity["free_minutes"],
+        "gross_capacity_minutes": capacity["capacity_minutes"],
+        "gross_free_minutes": capacity["free_minutes"],
+        "net_capacity_minutes": capacity["net_capacity_minutes"],
+        "net_free_minutes": capacity["net_free_minutes"],
         "required_minutes": required, "agenda": agenda,
         "suggestion": recommendation_value if suggestion_slot else None,
         "suggestion_unavailable": bool(recommendation_value and not suggestion_slot),
-        "day_is_full": capacity["free_minutes"] < preferences["minimum_session_minutes"],
+        "day_is_full": capacity["net_free_minutes"] < preferences["minimum_session_minutes"],
         "mandatory_unallocated_minutes": mandatory_unallocated,
         "current_week_open_minutes": current_week_open,
         "forecast_end": forecast_end.isoformat(),

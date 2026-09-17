@@ -85,6 +85,7 @@ const planningView = (() => {
   const proposalDays = Math.max(1, Math.min(93, Number(params.get("plan_days")) || 7));
   return {mode, tab, cursor: mode === "month" ? calendarMonthStart(initial) : initial, proposalStart, proposalDays};
 })();
+let visiblePlanningRows = [];
 
 const analyticsView = (() => {
   const params = new URLSearchParams(window.location.search);
@@ -671,7 +672,7 @@ async function openStartCurriculumStudy(row, formation = null, opener = null) {
   const firstMode = currentEffort ? "manual" : canUseWorkload ? "workload" : "automatic";
   const allowed = parseWeekdays(row.allowed_weekdays || row.curriculum_allowed_weekdays);
   const formationName = formation?.name || row.formation_name || "Formação atual";
-  const form = modal(`Iniciar disciplina · ${esc(row.name)}`, `<section class="start-discipline-summary"><div><span class="tag">FORMAÇÃO</span><strong>${esc(formationName)}</strong></div><div><span class="tag">DISCIPLINA</span><strong>${esc(row.name)}</strong>${row.code ? `<span>${esc(row.code)}</span>` : ""}</div></section><p class="muted">Ao confirmar, a disciplina entra em Estudos atuais, fica em andamento e recebe um perfil de planejamento. Você poderá ajustar qualquer campo depois.</p><div class="settings-grid"><label>Data de início<input name="start_date" type="date" value="${esc(row.start_date || today)}" required></label><label>Prazo <span class="field-help">Opcional: sem prazo, a prioridade fica provisória.</span><input name="target_date" type="date" value="${esc(row.deadline_date || row.end_date || "")}"></label><label>Carga da instituição<input value="${workload || ""}" readonly placeholder="Não informada"><span class="field-help">${workload ? minutesLabel(workload) : "Sem carga cadastrada"}</span></label><label>Duração preferida do bloco (min)<input name="preferred_block_minutes" type="number" min="1" value="${esc(row.preferred_block_minutes || row.curriculum_preferred_block_minutes || 50)}"></label></div><fieldset class="choice-list start-discipline-effort"><legend>Esforço pessoal estimado</legend><label><input type="radio" name="effort_mode" value="workload" ${firstMode === "workload" ? "checked" : ""} ${canUseWorkload ? "" : "disabled"}> <strong>Usar a carga da grade</strong><span>${canUseWorkload ? `${minutesLabel(workload)} como ponto de partida` : "Indisponível porque a carga curricular não foi cadastrada"}</span></label><label><input type="radio" name="effort_mode" value="manual" ${firstMode === "manual" ? "checked" : ""}> <strong>Informar esforço pessoal</strong><span>Use a estimativa que faz sentido para a sua rotina.</span></label><label><input type="radio" name="effort_mode" value="automatic" ${firstMode === "automatic" ? "checked" : ""}> <strong>Estimar automaticamente</strong><span>${canUseWorkload ? `Usará ${minutesLabel(Math.max(60, workload))} como estimativa provisória.` : "Usará uma estimativa provisória de 10 h; ajuste quando quiser."}</span></label></fieldset><label data-start-manual-effort>Esforço pessoal (min)<input name="required_study_minutes" type="number" min="1" value="${currentEffort || (firstMode === "manual" ? startStudyEstimate(row, "manual") : "")}" placeholder="Ex.: 720"></label><label>Prioridade-base (1 a 5)<input name="priority_base" type="number" min="1" max="5" value="${esc(row.priority_base || 3)}"></label>${weekdaysInputs(allowed)}<label>Primeiro tópico <span class="field-help">Opcional; você poderá acrescentar outros depois.</span><select name="first_topic_id"><option value="">Escolher depois</option>${existingTopics.map(topic => `<option value="${topic.id}">${esc(topic.name)}${topic.unit ? ` · ${esc(topic.unit)}` : ""}</option>`).join("")}</select></label><label class="toggle-row"><input name="planning_enabled" type="checkbox" value="true" checked> Incluir no planejamento assim que houver disponibilidade</label>`, async (values, node) => {
+  const form = modal(`Iniciar disciplina · ${esc(row.name)}`, `<section class="start-discipline-summary"><div><span class="tag">FORMAÇÃO</span><strong>${esc(formationName)}</strong></div><div><span class="tag">DISCIPLINA</span><strong>${esc(row.name)}</strong>${row.code ? `<span>${esc(row.code)}</span>` : ""}</div></section><p class="muted">Ao confirmar, a disciplina entra em Estudos atuais, fica em andamento e recebe um perfil de planejamento. Você poderá ajustar qualquer campo depois.</p><div class="settings-grid"><label>Data de início<input name="start_date" type="date" value="${esc(row.start_date || today)}" required></label><label>Prazo <span class="field-help">Opcional: sem prazo, a prioridade fica provisória.</span><input name="target_date" type="date" value="${esc(row.deadline_date || row.end_date || "")}"></label><label>Carga da instituição<input value="${workload || ""}" readonly placeholder="Não informada"><span class="field-help">${workload ? minutesLabel(workload) : "Sem carga cadastrada"}</span></label><label>Duração preferida do bloco (min)<input name="preferred_block_minutes" type="number" min="15" max="240" value="${esc(row.preferred_block_minutes || row.curriculum_preferred_block_minutes || 50)}"><span class="field-help">Entre 15 e 240 min; os limites globais continuam protegendo o calendário.</span></label></div><fieldset class="choice-list start-discipline-effort"><legend>Esforço pessoal estimado</legend><label><input type="radio" name="effort_mode" value="workload" ${firstMode === "workload" ? "checked" : ""} ${canUseWorkload ? "" : "disabled"}> <strong>Usar a carga da grade</strong><span>${canUseWorkload ? `${minutesLabel(workload)} como ponto de partida` : "Indisponível porque a carga curricular não foi cadastrada"}</span></label><label><input type="radio" name="effort_mode" value="manual" ${firstMode === "manual" ? "checked" : ""}> <strong>Informar esforço pessoal</strong><span>Use a estimativa que faz sentido para a sua rotina.</span></label><label><input type="radio" name="effort_mode" value="automatic" ${firstMode === "automatic" ? "checked" : ""}> <strong>Estimar automaticamente</strong><span>${canUseWorkload ? `Usará ${minutesLabel(Math.max(60, workload))} como estimativa provisória.` : "Usará uma estimativa provisória de 10 h; ajuste quando quiser."}</span></label></fieldset><label data-start-manual-effort>Esforço pessoal (min)<input name="required_study_minutes" type="number" min="1" value="${currentEffort || (firstMode === "manual" ? startStudyEstimate(row, "manual") : "")}" placeholder="Ex.: 720"></label><label>Prioridade-base (1 a 5)<input name="priority_base" type="number" min="1" max="5" value="${esc(row.priority_base || 3)}"></label>${weekdaysInputs(allowed)}<label>Primeiro tópico <span class="field-help">Opcional; você poderá acrescentar outros depois.</span><select name="first_topic_id"><option value="">Escolher depois</option>${existingTopics.map(topic => `<option value="${topic.id}">${esc(topic.name)}${topic.unit ? ` · ${esc(topic.unit)}` : ""}</option>`).join("")}</select></label><label class="toggle-row"><input name="planning_enabled" type="checkbox" value="true" checked> Incluir no planejamento assim que houver disponibilidade</label>`, async (values, node) => {
     const effortMode = node.querySelector('[name="effort_mode"]:checked')?.value || "automatic";
     const required = effortMode === "manual"
       ? Number(values.required_study_minutes || 0)
@@ -775,7 +776,7 @@ async function renderToday() {
     const context = planningBlockContext(item);
     return `<article class="agenda-item ${isNext ? "is-next" : ""}"><div class="agenda-time">${esc(item.start_time || "Livre")}</div><div class="agenda-marker" aria-hidden="true"></div><div class="agenda-item-main"><strong>${esc(item.subject_name)}</strong><span>${esc(item.topic_name || "Sessão sem conteúdo")}</span>${context ? `<small class="agenda-item-context">${esc(context)}</small>` : ""}</div><div class="agenda-item-meta"><span class="status">${esc(state)}</span><span>${minutesLabel(item.planned_duration_minutes)}</span></div><button type="button" class="button ${isNext ? "primary" : "ghost"}" data-start-plan="${item.id}">${isNext ? "Começar" : "Abrir"}</button></article>`;
   }).join("")}</div>` : empty("Nenhum bloco agendado", "Use Planejamento para criar blocos ou aproveite a sugestão abaixo.", '<a href="/planning" class="button ghost">Abrir planejamento</a>');
-  app.innerHTML = `<section class="today-dashboard"><div class="grid kpis today-kpis">${statCard("Capacidade hoje", minutesLabel(data.capacity_minutes), "janelas disponíveis", "ϟ", "blue")}${statCard("Planejado", minutesLabel(data.planned_minutes), `${agenda.length} bloco(s) na agenda`, "▣", "violet")}${statCard("Estudado", minutesLabel(data.studied_minutes), "sessões reais", "▥", "amber")}${statCard("Livre restante", minutesLabel(data.free_minutes), data.day_is_full ? "dia cheio" : "após os blocos atuais", "◷", "green")}${statCard("Demanda obrigatória hoje", minutesLabel(data.required_minutes), "agenda salva", "◎", "violet")}</div><div class="grid split today-layout"><section class="stack"><section class="card agenda-card">${panelTitle("AGENDA ÚNICA DO DIA", `Agenda de hoje · ${dateLabel}`, "A agenda salva é a prioridade do dia.", '<a href="/planning" class="button ghost">Abrir planejamento</a>')}${agendaMarkup}</section>${freeTime}${suggestion}</section><aside class="stack"><section class="card reviews-today-card">${panelTitle("REVISÕES", "Revisões pendentes", reviews.length ? `${reviews.length} item(ns) aguardando revisão.` : "Nenhuma revisão exige atenção agora.", '<a href="/reviews" class="button ghost">Ver revisões</a>')}${reviews.length ? `<div class="compact-list">${reviews.slice(0, 4).map(item => `<div class="list-item"><strong>${esc(item.topic_name)}</strong><div class="muted">${esc(item.subject_name)} · ${formatLocalDate(item.due_date, {day:"2-digit", month:"2-digit"})}</div></div>`).join("")}</div>` : empty("Sem revisões pendentes", "Uma sessão com conteúdo inicia a sequência D+1, D+7 e D+30.")}</section><section class="card how-to-use-card">${panelTitle("COMO USAR O TEMPO", "Planejar e estudar são coisas diferentes")}<div class="guidance-row"><span aria-hidden="true">☼</span><p>A agenda salva vem primeiro. A sugestão ocupa somente uma faixa livre e não repete uma matéria já agendada hoje.</p></div><div class="guidance-row"><span aria-hidden="true">↗</span><p>O indicador Estudado aumenta somente ao registrar uma sessão real.</p></div></section></aside></div></section>`;
+  app.innerHTML = `<section class="today-dashboard"><div class="grid kpis today-kpis">${statCard("Capacidade líquida hoje", minutesLabel(data.net_capacity_minutes ?? data.capacity_minutes), "considera pausas", "ϟ", "blue")}${statCard("Planejado", minutesLabel(data.planned_minutes), `${agenda.length} bloco(s) na agenda`, "▣", "violet")}${statCard("Estudado", minutesLabel(data.studied_minutes), "sessões reais", "▥", "amber")}${statCard("Livre líquido", minutesLabel(data.net_free_minutes ?? data.free_minutes), data.day_is_full ? "dia cheio" : "após os blocos atuais", "◷", "green")}${statCard("Demanda obrigatória hoje", minutesLabel(data.required_minutes), "agenda salva", "◎", "violet")}</div><div class="grid split today-layout"><section class="stack"><section class="card agenda-card">${panelTitle("AGENDA ÚNICA DO DIA", `Agenda de hoje · ${dateLabel}`, "A agenda salva é a prioridade do dia.", '<a href="/planning" class="button ghost">Abrir planejamento</a>')}${agendaMarkup}</section>${freeTime}${suggestion}</section><aside class="stack"><section class="card reviews-today-card">${panelTitle("REVISÕES", "Revisões pendentes", reviews.length ? `${reviews.length} item(ns) aguardando revisão.` : "Nenhuma revisão exige atenção agora.", '<a href="/reviews" class="button ghost">Ver revisões</a>')}${reviews.length ? `<div class="compact-list">${reviews.slice(0, 4).map(item => `<div class="list-item"><strong>${esc(item.topic_name)}</strong><div class="muted">${esc(item.subject_name)} · ${formatLocalDate(item.due_date, {day:"2-digit", month:"2-digit"})}</div></div>`).join("")}</div>` : empty("Sem revisões pendentes", "Uma sessão com conteúdo inicia a sequência D+1, D+7 e D+30.")}</section><section class="card how-to-use-card">${panelTitle("COMO USAR O TEMPO", "Planejar e estudar são coisas diferentes")}<div class="guidance-row"><span aria-hidden="true">☼</span><p>A agenda salva vem primeiro. A sugestão ocupa somente uma faixa livre e não repete uma matéria já agendada hoje.</p></div><div class="guidance-row"><span aria-hidden="true">↗</span><p>O indicador Estudado aumenta somente ao registrar uma sessão real.</p></div></section></aside></div></section>`;
 }
 
 async function openAvailability() {
@@ -1180,7 +1181,11 @@ function planningPreviewSummary(proposal, sessions) {
     ...(proposal.skipped_without_goal || []).map(item => typeof item === "string" ? `${item}: sem esforço ou meta semanal` : `${item.name || "Matéria"}: sem esforço ou meta semanal`),
   ];
   const automaticMinutes = sessions.reduce((total, item) => total + Number(item.planned_duration_minutes || 0), 0);
-  return `<section class="planning-preview-summary"><div><strong>${sessions.length} bloco(s) na prévia</strong><span>${esc(proposal.start || "—")} a ${esc(proposal.end || "—")}</span></div><div><strong>${minutesLabel(automaticMinutes)}</strong><span>tempo que será reservado</span></div><div><strong>${minutesLabel(capacity.free_minutes)}</strong><span>livre antes da prévia</span></div><div><strong>${minutesLabel(capacity.demand_minutes)}</strong><span>demanda considerada</span></div></section>${planningDiagnosticMarkup(proposal)}${warnings.length ? `<section class="planning-preview-warning" role="status"><strong>Itens que não entraram por completo</strong><ul>${warnings.map(item => `<li>${esc(item)}</li>`).join("")}</ul></section>` : ""}`;
+  const allocation = proposal.allocation || {};
+  const scheduled = Number(allocation.scheduled_in_preview_minutes ?? automaticMinutes);
+  const deferred = Number(allocation.deferred_beyond_preview_minutes || 0);
+  const shortage = Number(allocation.unallocated_due_to_capacity_minutes || 0);
+  return `<section class="planning-preview-summary"><div><strong>${sessions.length} bloco(s) na prévia</strong><span>${esc(proposal.start || "—")} a ${esc(proposal.end || "—")}</span></div><div><strong>${minutesLabel(scheduled)}</strong><span>agendado neste período</span></div><div><strong>${minutesLabel(deferred)}</strong><span>fica para depois do período</span></div><div><strong>${minutesLabel(shortage)}</strong><span>${shortage ? "sem capacidade no período" : "sem falta de capacidade"}</span></div><div><strong>${minutesLabel(capacity.net_free_minutes ?? capacity.free_minutes)}</strong><span>capacidade líquida antes da prévia</span></div></section>${planningDiagnosticMarkup(proposal)}${warnings.length ? `<section class="planning-preview-warning" role="status"><strong>Itens que não entraram por completo</strong><ul>${warnings.map(item => `<li>${esc(item)}</li>`).join("")}</ul></section>` : ""}`;
 }
 
 function planningDiagnosticMarkup(proposal) {
@@ -1459,6 +1464,115 @@ function planningDaySummary(day) {
   return new Intl.DateTimeFormat("pt-BR", {timeZone:"UTC", weekday:"long", day:"numeric", month:"long", year:"numeric"}).format(calendarDateFromISO(day));
 }
 
+function calendarBlockStatus(item) {
+  const status = String(item?.status || "planned").toLowerCase();
+  const labels = {
+    planned: "Planejado", completed: "Concluído", cancelled: "Cancelado",
+    rescheduled: "Reagendado", skipped: "Não realizado",
+  };
+  return {key: labels[status] ? status : "planned", label: labels[status] || "Planejado"};
+}
+
+function compactCalendarBlockMarkup(item) {
+  const source = item?.source === "manual" ? "manual" : "automatic";
+  const status = calendarBlockStatus(item);
+  const subject = item?.subject_name || "Matéria";
+  const topic = item?.topic_name || "Sem conteúdo específico";
+  const duration = minutesLabel(item?.planned_duration_minutes);
+  const summary = `${subject} · ${topic} · ${item?.start_time || "horário livre"} · ${duration} · ${source === "manual" ? "manual" : "automático"} · ${status.label}`;
+  return `<button type="button" class="session session-block is-${source} is-${status.key}" draggable="true" data-plan="${item.id}" hidden title="${esc(summary)}" aria-label="Abrir ${esc(summary)}. Arraste para mover ou use Alt mais seta para mover um dia."><span class="calendar-block-time">${esc(item?.start_time || "Livre")}</span><span class="calendar-block-main"><strong>${esc(subject)}</strong><span class="calendar-block-meta"><span>${esc(duration)}</span><i class="calendar-block-origin" title="${source === "manual" ? "Bloco manual" : "Bloco automático"}" aria-hidden="true"></i><span class="calendar-block-status">${esc(status.label)}</span></span></span></button>`;
+}
+
+let calendarSessionResizeObserver = null;
+let calendarSessionVisibilityFrame = null;
+
+function calendarHiddenElementHeight(element) {
+  const wasHidden = element.hidden;
+  if (wasHidden) element.hidden = false;
+  const height = element.getBoundingClientRect().height;
+  element.hidden = wasHidden;
+  return height;
+}
+
+function updateCalendarSessionVisibility(sessionList) {
+  const blocks = Array.from(sessionList.querySelectorAll(".session-block[data-plan]"));
+  const more = sessionList.querySelector(".calendar-more");
+  if (!blocks.length || !more) return;
+  const activeElement = document.activeElement;
+  const focusedCalendarControl = activeElement instanceof HTMLElement
+    && sessionList.contains(activeElement)
+    && activeElement.matches(".session-block[data-plan], .calendar-more")
+    ? activeElement
+    : null;
+  const style = getComputedStyle(sessionList);
+  const constrained = style.getPropertyValue("--calendar-sessions-constrained").trim() === "1";
+  if (!constrained) {
+    blocks.forEach(block => { block.hidden = false; });
+    more.hidden = true;
+    if (focusedCalendarControl === more) blocks[0]?.focus({preventScroll: true});
+    return;
+  }
+
+  const availableHeight = sessionList.clientHeight;
+  const blockHeight = calendarHiddenElementHeight(blocks[0]);
+  const gap = Number.parseFloat(style.rowGap) || 0;
+  const moreHeight = calendarHiddenElementHeight(more);
+  if (!availableHeight || !blockHeight || !moreHeight) return;
+
+  const visibleWithoutCounter = Math.max(0, Math.floor((availableHeight + gap) / (blockHeight + gap)));
+  const hasOverflow = blocks.length > visibleWithoutCounter;
+  const visibleCount = hasOverflow
+    ? Math.max(0, Math.min(blocks.length, Math.floor((availableHeight - moreHeight) / (blockHeight + gap))))
+    : blocks.length;
+  const hiddenCount = blocks.length - visibleCount;
+
+  blocks.forEach((block, index) => { block.hidden = index >= visibleCount; });
+  more.hidden = hiddenCount === 0;
+  if (hiddenCount > 0) {
+    more.textContent = visibleCount > 0
+      ? `+ ${hiddenCount} ${hiddenCount === 1 ? "bloco" : "blocos"}`
+      : `Ver os ${blocks.length} ${blocks.length === 1 ? "bloco" : "blocos"}`;
+  }
+  if (focusedCalendarControl?.hidden && !more.hidden) {
+    more.focus({preventScroll: true});
+  }
+}
+
+function syncCalendarSessionVisibility() {
+  app.querySelectorAll(".calendar-sessions[data-calendar-session-list]").forEach(updateCalendarSessionVisibility);
+}
+
+function installCalendarSessionVisibility() {
+  calendarSessionResizeObserver?.disconnect();
+  if (calendarSessionVisibilityFrame !== null) cancelAnimationFrame(calendarSessionVisibilityFrame);
+  calendarSessionVisibilityFrame = null;
+  const lists = Array.from(app.querySelectorAll(".calendar-sessions[data-calendar-session-list]"));
+  syncCalendarSessionVisibility();
+  if (!("ResizeObserver" in window)) return;
+  calendarSessionResizeObserver = new ResizeObserver(() => {
+    if (calendarSessionVisibilityFrame !== null) return;
+    calendarSessionVisibilityFrame = requestAnimationFrame(() => {
+      calendarSessionVisibilityFrame = null;
+      syncCalendarSessionVisibility();
+    });
+  });
+  lists.forEach(list => calendarSessionResizeObserver.observe(list));
+}
+
+function openPlanningDayAgenda(day, opener = null) {
+  const sessions = visiblePlanningRows
+    .filter(item => item.scheduled_date === day)
+    .sort((left, right) => `${left.start_time || ""}:${left.id}`.localeCompare(`${right.start_time || ""}:${right.id}`));
+  if (!sessions.length) return openPlanEditor(null, {date:day});
+  const content = `<p class="muted">${sessions.length} ${sessions.length === 1 ? "bloco planejado" : "blocos planejados"}. Selecione um bloco para ver os detalhes ou executar uma ação.</p><div class="calendar-day-agenda-list">${sessions.map(item => {
+    const status = calendarBlockStatus(item);
+    return `<button type="button" class="calendar-day-agenda-item is-${item.source === "manual" ? "manual" : "automatic"}" data-plan="${item.id}"><span>${esc(item.start_time || "Livre")}</span><strong>${esc(item.subject_name || "Matéria")}</strong><small>${esc(item.topic_name || "Sem conteúdo específico")} · ${esc(minutesLabel(item.planned_duration_minutes))} · ${esc(status.label)}</small></button>`;
+  }).join("")}</div>`;
+  const form = modal(`Agenda · ${planningDaySummary(day)}`, content, null);
+  $(".form-actions", form).innerHTML = `<button class="button" type="button" data-close>Fechar</button>`;
+  if (opener) window.setTimeout(() => form.querySelector("[data-plan]")?.focus(), 0);
+}
+
 let planningDayDeleteDialogOpen = false;
 
 function openPlanningDayDelete(day, count, opener) {
@@ -1568,6 +1682,7 @@ async function renderPlanning() {
   ]);
   const exceptions = asRows(dateExceptions);
   const intervals = asRows(availabilityIntervals);
+  visiblePlanningRows = plannedRows;
   const plannedByDate = plannedRows.reduce((all, item) => {
     const current = all.get(item.scheduled_date) || [];
     current.push(item);
@@ -1585,7 +1700,7 @@ async function renderPlanning() {
     all.set(item.date, entries);
     return all;
   }, new Map());
-  const calendarMarkup = `<section class="card planning-calendar-card"><div class="calendar-weekdays" aria-hidden="true">${["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"].map(day => `<span>${day}</span>`).join("")}</div><div class="planning-calendar" role="grid" aria-label="Calendário de ${esc(periodLabel)}">${range.dates.map(date => {
+  const calendarMarkup = `<section class="card planning-calendar-card"><div class="planning-calendar-scroll" tabindex="0" aria-label="Role horizontalmente para ver os dias do calendário"><div class="planning-calendar-frame"><div class="calendar-weekdays" aria-hidden="true">${["Seg", "Ter", "Qua", "Qui", "Sex", "Sáb", "Dom"].map(day => `<span>${day}</span>`).join("")}</div><div class="planning-calendar" role="grid" aria-label="Calendário de ${esc(periodLabel)}">${range.dates.map(date => {
     const day = calendarISO(date);
     const sessions = plannedByDate.get(day) || [];
     const dayExceptions = exceptionsByDate.get(day) || [];
@@ -1599,13 +1714,14 @@ async function renderPlanning() {
       ...dayIntervals.map(availabilityIntervalLabel),
     ];
     const exceptionNote = availabilityNoteItems.length ? `<span class="calendar-day-exception" title="${esc(availabilityNoteItems.join(" · "))}">${dayExceptions.some(item => item.kind === "unavailable") || dayIntervals.some(item => item.kind === "unavailable") ? "Exceção" : dayIntervals.some(item => item.kind === "replace") ? "Rotina temporária" : "Faixa extra"}</span>` : "";
-    return `<article class="calendar-day ${outsideMonth ? "outside-month" : ""} ${day === today ? "today" : ""}" data-calendar-date="${day}" role="gridcell" aria-label="${esc(dayLabel)}${day === today ? ", hoje" : ""}"><header><div class="calendar-day-date"><time datetime="${day}">${date.getUTCDate()}</time><span>${esc(dayLabel.replace(/^\S+\s*/, ""))}</span>${exceptionNote}</div><div class="calendar-day-actions"><button type="button" class="icon-button" data-date-availability="${day}" aria-label="Ajustar disponibilidade de ${esc(planningDaySummary(day))}" title="Ajustar disponibilidade">◷</button>${deleteDay}</div></header><div class="calendar-sessions">${sessions.map(item => { const context = planningBlockContext(item); return `<button type="button" class="session session-block" draggable="true" data-plan="${item.id}" aria-label="Abrir ações para ${esc(planningBlockSummary(item))}. Arraste para mover ou use Alt mais seta para mover um dia."><span class="session-time">${esc(item.start_time || "Livre")}</span><strong>${esc(item.subject_name)}</strong><span class="session-topic">${esc(item.topic_name || "Sessão sem conteúdo")}</span><span class="session-duration">${minutesLabel(item.planned_duration_minutes)}</span>${context ? `<span class="session-context">${esc(context)}</span>` : ""}</button>`; }).join("") || `<button type="button" class="calendar-free" data-new-plan-date="${day}">+ Adicionar bloco</button>`}</div></article>`;
-  }).join("")}</div></section>`;
+    const sessionsMarkup = sessions.length ? `${sessions.map(compactCalendarBlockMarkup).join("")}<button type="button" class="calendar-more" data-calendar-day-details="${day}" hidden aria-label="Ver os ${sessions.length} blocos de ${esc(planningDaySummary(day))}"></button>` : `<button type="button" class="calendar-free" data-new-plan-date="${day}">+ Adicionar bloco</button>`;
+    return `<article class="calendar-day ${outsideMonth ? "outside-month" : ""} ${day === today ? "today" : ""}" data-calendar-date="${day}" role="gridcell" aria-label="${esc(dayLabel)}${day === today ? ", hoje" : ""}"><header><div class="calendar-day-date"><time datetime="${day}">${date.getUTCDate()}</time><span>${esc(dayLabel.replace(/^\S+\s*/, ""))}</span>${exceptionNote}</div><div class="calendar-day-actions"><button type="button" class="icon-button" data-date-availability="${day}" aria-label="Ajustar disponibilidade de ${esc(planningDaySummary(day))}" title="Ajustar disponibilidade">◷</button>${deleteDay}</div></header><div class="calendar-sessions" data-calendar-session-list>${sessionsMarkup}</div></article>`;
+  }).join("")}</div></div></div></section>`;
   const idealMarkup = `<section class="stack ideal-list"><section class="card"><div class="bar"><div><span class="tag">MUNDO IDEAL</span><h2>Esforço e risco por item</h2><p class="muted">O esforço realizado vem somente de sessões reais. Blocos futuros reduzem apenas o que ainda falta alocar.</p></div><button class="button primary" data-generate>Gerar prévia</button></div>${ideal.items?.length ? ideal.items.map(planningRiskMarkup).join("") : empty("Nenhum item planejável", "Ative uma disciplina disponível ou configure um estudo paralelo com esforço ou meta semanal.")}</section><section class="card"><span class="tag">PRÓXIMAS DISCIPLINAS</span><h2>Futuras, fora da demanda atual</h2>${ideal.future_subjects?.length ? ideal.future_subjects.map(item => `<div class="list-item"><strong>${esc(item.name)}</strong><div class="muted">${esc(item.formation_name)} · ${esc(item.start_date || item.end_date || item.deadline_date || "sem data prevista")}</div></div>`).join("") : empty("Nenhuma disciplina futura", "Disciplinas não disponíveis aparecerão aqui, sem ocupar nenhum horário.")}</section></section>`;
   const groupedAvailability = weekdays.map((day, weekday) => ({day, weekday, ranges:availability.filter(item => Number(item.weekday) === weekday)})).filter(group => group.ranges.length);
   const availabilityMarkup = groupedAvailability.length ? `<div class="availability-groups">${groupedAvailability.map(group => `<section class="availability-day-group"><strong>${esc(group.day)}</strong><div class="availability-ranges">${group.ranges.map(item => `<div class="availability-range ${item.enabled === 0 || item.enabled === false ? "is-disabled" : ""}"><span>${esc(item.start_time)}–${esc(item.end_time)}</span><div class="range-actions"><button type="button" class="icon-button" data-edit-availability="${item.id}" aria-label="Editar faixa de ${esc(group.day)} ${esc(item.start_time)} até ${esc(item.end_time)}" title="Editar faixa">✎</button><button type="button" class="icon-button danger" data-delete-availability="${item.id}" aria-label="Excluir faixa de ${esc(group.day)} ${esc(item.start_time)} até ${esc(item.end_time)}" title="Excluir faixa">×</button></div></div>`).join("")}</div></section>`).join("")}</div>` : empty("Nenhuma faixa", "Adicione os horários em que você pode estudar.");
   const sideMarkup = `<aside class="stack planning-side"><section class="card availability-panel">${panelTitle("DISPONIBILIDADE", "Disponibilidade semanal", "Você pode cadastrar mais de uma faixa por dia; os intervalos ficam livres. Use ◷ no calendário para uma exceção por data.", '<span class="action-group"><button type="button" class="button ghost compact" data-availability>+ Faixa</button><button type="button" class="button ghost compact" data-availability-interval>Intervalo</button></span>')}${availabilityMarkup}${intervals.length ? `<p class="field-help">${intervals.length} regra(s) de disponibilidade temporária no período visível.</p>` : ""}</section>${planningReadinessMarkup(asRows(allStudies), ideal)}<section class="card planning-preferences">${panelTitle("DURAÇÃO E PAUSA", "Preferências do plano", "Limites e descanso restringem apenas novas sugestões e blocos automáticos.", '<button type="button" class="button ghost" data-edit-planning-settings>Editar preferências</button>')}<dl><div><dt>Bloco padrão</dt><dd>${minutesLabel(preferences.default_session_minutes || 50)}</dd></div><div><dt>Pausa</dt><dd>${minutesLabel(preferences.planning_break_minutes || 10)}</dd></div><div><dt>Limites</dt><dd>${preferences.minimum_session_minutes || 25}–${preferences.maximum_session_minutes || 120} min</dd></div><div><dt>Máximo diário</dt><dd>${preferences.daily_max_study_minutes ? minutesLabel(preferences.daily_max_study_minutes) : "Sem limite"}</dd></div><div><dt>Descanso reservado</dt><dd>${preferences.minimum_rest_minutes ? minutesLabel(preferences.minimum_rest_minutes) : "Não definido"}</dd></div><div><dt>Folga</dt><dd>${preferences.free_time_preference === "preserve" ? "Preservar horário" : "Mostrar opções"}</dd></div></dl></section></aside>`;
-  app.innerHTML = `<section class="planning-workspace"><div class="planning-toolbar"><div class="planning-toolbar-group" role="group" aria-label="Área do planejamento"><button type="button" class="button ${planningView.tab === "calendar" ? "primary" : "ghost"}" data-planning-tab="calendar" aria-pressed="${planningView.tab === "calendar"}">Calendário</button><button type="button" class="button ${planningView.tab === "ideal" ? "primary" : "ghost"}" data-planning-tab="ideal" aria-pressed="${planningView.tab === "ideal"}">Mundo ideal</button></div><div class="planning-toolbar-group" role="group" aria-label="Visualização do calendário"><button type="button" class="button ${planningView.mode === "month" ? "primary" : "ghost"}" data-planning-mode="month" aria-pressed="${planningView.mode === "month"}">Mês</button><button type="button" class="button ${planningView.mode === "week" ? "primary" : "ghost"}" data-planning-mode="week" aria-pressed="${planningView.mode === "week"}">Semana</button></div><div class="planning-actions"><a class="button ghost" href="/api/calendar.ics?start=${encodeURIComponent(range.start)}&end=${encodeURIComponent(range.end)}">Exportar calendário</a><button type="button" class="button ghost" data-availability>Disponibilidade</button><button type="button" class="button" data-new-plan>+ Nova sessão</button><button type="button" class="button primary" data-generate>✦ Gerar plano</button></div></div><p class="planning-range-note"><strong>${esc(periodLabel)}</strong><span>Capacidade no intervalo visível: ${formatLocalDate(range.start, {day:"2-digit", month:"2-digit"})} a ${formatLocalDate(range.end, {day:"2-digit", month:"2-digit", year:"numeric"})}. Arraste um bloco para outro dia; Alt + ←/→ também move um dia. O replanejamento preserva blocos manuais.</span></p><div class="planning-navigation" aria-label="Navegação do calendário"><button type="button" class="button ghost" data-planning-nav="previous">← ${previousLabel}</button><button type="button" class="button" data-planning-nav="today">Hoje</button><button type="button" class="button ghost" data-planning-nav="next">${nextLabel} →</button></div><div class="grid kpis planning-kpis">${statCard("Capacidade", minutesLabel(ideal.capacity_minutes), `livre: ${minutesLabel(ideal.free_minutes)}`, "ϟ", "blue")}${statCard("Planejado", minutesLabel(ideal.planned_minutes), `${plannedRows.length} bloco(s) ativos`, "▣", "violet")}${statCard("Demanda", minutesLabel(ideal.demand_minutes), "ainda não alocada", "▥", "amber")}${statCard(balance >= 0 ? "Folga" : "Déficit", minutesLabel(Math.abs(balance)), balance >= 0 ? "capacidade após a demanda" : "faltam horas na capacidade", balance >= 0 ? "◷" : "!", balance >= 0 ? "green" : "red")}</div><div class="grid split planning-layout">${planningView.tab === "calendar" ? calendarMarkup : idealMarkup}${sideMarkup}</div></section>`;
+  app.innerHTML = `<section class="planning-workspace"><div class="planning-toolbar"><div class="planning-toolbar-group" role="group" aria-label="Área do planejamento"><button type="button" class="button ${planningView.tab === "calendar" ? "primary" : "ghost"}" data-planning-tab="calendar" aria-pressed="${planningView.tab === "calendar"}">Calendário</button><button type="button" class="button ${planningView.tab === "ideal" ? "primary" : "ghost"}" data-planning-tab="ideal" aria-pressed="${planningView.tab === "ideal"}">Mundo ideal</button></div><div class="planning-toolbar-group" role="group" aria-label="Visualização do calendário"><button type="button" class="button ${planningView.mode === "month" ? "primary" : "ghost"}" data-planning-mode="month" aria-pressed="${planningView.mode === "month"}">Mês</button><button type="button" class="button ${planningView.mode === "week" ? "primary" : "ghost"}" data-planning-mode="week" aria-pressed="${planningView.mode === "week"}">Semana</button></div><div class="planning-actions"><a class="button ghost" href="/api/calendar.ics?start=${encodeURIComponent(range.start)}&end=${encodeURIComponent(range.end)}">Exportar calendário</a><button type="button" class="button ghost" data-availability>Disponibilidade</button><button type="button" class="button" data-new-plan>+ Nova sessão</button><button type="button" class="button primary" data-generate>✦ Gerar plano</button></div></div><p class="planning-range-note"><strong>${esc(periodLabel)}</strong><span>Capacidade no intervalo visível: ${formatLocalDate(range.start, {day:"2-digit", month:"2-digit"})} a ${formatLocalDate(range.end, {day:"2-digit", month:"2-digit", year:"numeric"})}. Arraste um bloco para outro dia; Alt + ←/→ também move um dia. O replanejamento preserva blocos manuais.</span></p><div class="planning-navigation" aria-label="Navegação do calendário"><button type="button" class="button ghost" data-planning-nav="previous">← ${previousLabel}</button><button type="button" class="button" data-planning-nav="today">Hoje</button><button type="button" class="button ghost" data-planning-nav="next">${nextLabel} →</button></div><div class="grid kpis planning-kpis">${statCard("Capacidade líquida", minutesLabel(ideal.net_capacity_minutes ?? ideal.capacity_minutes), `livre: ${minutesLabel(ideal.net_free_minutes ?? ideal.free_minutes)}`, "ϟ", "blue")}${statCard("Planejado", minutesLabel(ideal.planned_minutes), `${plannedRows.length} bloco(s) ativos`, "▣", "violet")}${statCard("Demanda", minutesLabel(ideal.demand_minutes), "ainda não alocada", "▥", "amber")}${statCard(balance >= 0 ? "Folga" : "Déficit", minutesLabel(Math.abs(balance)), balance >= 0 ? "capacidade após a demanda" : "faltam horas na capacidade", balance >= 0 ? "◷" : "!", balance >= 0 ? "green" : "red")}</div><div class="grid split planning-layout">${planningView.tab === "calendar" ? calendarMarkup : idealMarkup}${sideMarkup}</div></section>`;
   syncPlanningLocation();
   app.querySelectorAll("[data-planning-nav]").forEach(button => {
     button.onclick = () => {
@@ -1627,7 +1743,10 @@ async function renderPlanning() {
     planningView.tab = button.dataset.planningTab;
     syncPlanningLocation(); render();
   });
-  if (planningView.tab === "calendar") installPlanningCalendarInteractions(plannedRows, availability, exceptions, intervals);
+  if (planningView.tab === "calendar") {
+    installCalendarSessionVisibility();
+    installPlanningCalendarInteractions(plannedRows, availability, exceptions, intervals);
+  }
   const goals = document.createElement("section");
   goals.className = "card weekly-goals-panel";
   goals.innerHTML = `${panelTitle("METAS SEMANAIS", "Metas e mínimos garantidos", "A meta semanal se repete no período. Para estudos paralelos, o mínimo é protegido quando há capacidade, sem adiar disciplinas urgentes.")}<p class="field-help">Para planejar uma disciplina em um mês sem criar uma meta recorrente, informe o esforço e o prazo dela em Formações e escolha “Mês · 30 dias” ao gerar a prévia.</p>${studies.length ? studies.map(study => `<form class="goal-form list-item row" data-study="${study.id}"><div><strong>${esc(study.name)}</strong><div class="muted">Meta ${study.weekly_goal_minutes ? `${minutesLabel(study.weekly_goal_minutes)}/semana` : "não definida"}${study.origin === "personal" && study.minimum_weekly_minutes ? ` · mínimo garantido ${minutesLabel(study.minimum_weekly_minutes)}` : ""}</div></div><label class="goal-input">Meta semanal (min)<input name="weekly_goal_minutes" type="number" min="1" value="${study.weekly_goal_minutes || ""}" placeholder="ex.: 180" required></label><button class="button" type="submit">Salvar</button></form>`).join("") : empty("Sem matérias", "Crie ou adicione uma matéria antes de definir a meta.")}`;
@@ -2156,7 +2275,7 @@ function curriculumEditor(formationId, current = null) {
     <fieldset class="choice-list"><legend>Esforço pessoal necessário</legend><label><input type="radio" name="effort_mode" value="manual" ${existingEffort || !current ? "checked" : ""}> Definir manualmente</label><label><input type="radio" name="effort_mode" value="workload" ${!existingEffort && current?.workload_minutes ? "checked" : ""}> Usar a carga da grade como estimativa inicial</label></fieldset>
     <label>Esforço pessoal (min)<input name="required_study_minutes" type="number" min="1" value="${existingEffort}"></label>
     <label>Prioridade-base (1 a 5)<input name="priority_base" type="number" min="1" max="5" value="${current?.priority_base || 3}"></label>
-    <label>Duração preferida do bloco (min)<input name="preferred_block_minutes" type="number" min="1" value="${current?.preferred_block_minutes || ""}"></label>
+    <label>Duração preferida do bloco (min)<input name="preferred_block_minutes" type="number" min="15" max="240" value="${current?.preferred_block_minutes || ""}"><span class="field-help">15 a 240 min</span></label>
     <label class="toggle-row"><input name="planning_enabled" type="checkbox" ${planningIncluded ? "checked" : ""}> Incluir no planejamento quando estiver disponível <span class="field-help">A disciplina precisa continuar nos Estudos atuais para receber blocos.</span></label>
     ${weekdaysInputs(current?.allowed_weekdays)}
     <label>Nota mínima para aprovação<input name="minimum_grade" type="number" min="0" step="0.01" value="${current?.minimum_grade ?? ""}"></label>
@@ -3010,7 +3129,7 @@ function analyticsDates() {
 
 function analyticsCapacityMarkup(capacity, days) {
   const balance = Number(capacity?.surplus_minutes || 0);
-  return `<article class="capacity-card"><span class="tag">${days} DIAS</span><strong>${minutesLabel(capacity?.capacity_minutes)}</strong><span class="muted">capacidade · ${minutesLabel(capacity?.free_minutes)} livre</span><span class="${balance < 0 ? "planning-deficit" : "field-help"}">${balance < 0 ? `déficit ${minutesLabel(Math.abs(balance))}` : `folga ${minutesLabel(balance)}`}</span></article>`;
+  return `<article class="capacity-card"><span class="tag">${days} DIAS</span><strong>${minutesLabel(capacity?.net_capacity_minutes ?? capacity?.capacity_minutes)}</strong><span class="muted">capacidade líquida · ${minutesLabel(capacity?.net_free_minutes ?? capacity?.free_minutes)} livre</span><span class="${balance < 0 ? "planning-deficit" : "field-help"}">${balance < 0 ? `déficit ${minutesLabel(Math.abs(balance))}` : `folga ${minutesLabel(balance)}`}</span></article>`;
 }
 
 async function renderAnalytics() {
@@ -3086,7 +3205,7 @@ function studyPlanningPayload(values, form) {
 
 function studyPlanningFields(study = {}) {
   const parallel = study.origin !== "curriculum";
-  return `<label>Prioridade-base (1–5)<input name="priority" type="number" min="1" max="5" value="${study.priority || 3}" required></label><label>Dificuldade (1–5)<input name="difficulty" type="number" min="1" max="5" value="${study.difficulty || 3}" required></label><label>Objetivo total <span class="field-help">Minutos que você pretende dedicar pessoalmente.</span><input name="required_study_minutes" type="number" min="1" value="${study.required_study_minutes || ""}" placeholder="ex.: 2520 para 42 h"></label><label>Meta semanal <span class="field-help">Minutos por semana; mantém o item planejável mesmo sem objetivo total.</span><input name="weekly_goal_minutes" type="number" min="1" value="${study.weekly_goal_minutes || ""}"></label>${parallel ? `<label>Mínimo semanal garantido <span class="field-help">O planejador reserva esse tempo antes de preencher matérias urgentes.</span><input name="minimum_weekly_minutes" type="number" min="1" value="${study.minimum_weekly_minutes || ""}"></label>` : ""}<label>Prazo<input name="target_date" type="date" value="${study.target_date || ""}"></label><label>Duração preferida do bloco (min)<input name="preferred_block_minutes" type="number" min="1" value="${study.preferred_block_minutes || ""}" placeholder="usa a duração padrão"></label>${weekdaysInputs(study.allowed_weekdays)}`;
+  return `<label>Prioridade-base (1–5)<input name="priority" type="number" min="1" max="5" value="${study.priority || 3}" required></label><label>Dificuldade (1–5)<input name="difficulty" type="number" min="1" max="5" value="${study.difficulty || 3}" required></label><label>Objetivo total <span class="field-help">Minutos que você pretende dedicar pessoalmente.</span><input name="required_study_minutes" type="number" min="1" value="${study.required_study_minutes || ""}" placeholder="ex.: 2520 para 42 h"></label><label>Meta semanal <span class="field-help">Minutos por semana; mantém o item planejável mesmo sem objetivo total.</span><input name="weekly_goal_minutes" type="number" min="1" value="${study.weekly_goal_minutes || ""}"></label>${parallel ? `<label>Mínimo semanal garantido <span class="field-help">O planejador reserva esse tempo antes de preencher matérias urgentes.</span><input name="minimum_weekly_minutes" type="number" min="1" value="${study.minimum_weekly_minutes || ""}"></label>` : ""}<label>Prazo<input name="target_date" type="date" value="${study.target_date || ""}"></label><label>Duração preferida do bloco (min)<input name="preferred_block_minutes" type="number" min="15" max="240" value="${study.preferred_block_minutes || ""}" placeholder="usa a duração padrão"><span class="field-help">15 a 240 min</span></label>${weekdaysInputs(study.allowed_weekdays)}`;
 }
 
 function newStudy() {
@@ -3156,6 +3275,7 @@ document.addEventListener("click", async event => { const target = event.target.
   if (target.dataset.dateAvailability) return openDateAvailability(target.dataset.dateAvailability, target);
   if (target.dataset.studyDiagnostics !== undefined) return openStudyDiagnostics(target);
   if (target.dataset.editPlanningSettings !== undefined) return openPlanningSettings(await api("/settings"));
+  if (target.dataset.calendarDayDetails) return openPlanningDayAgenda(target.dataset.calendarDayDetails, target);
   if (target.dataset.newPlanDate) return openPlanEditor(null, {date:target.dataset.newPlanDate});
   if (target.dataset.newPlan !== undefined) return openPlanEditor();
   if (target.dataset.plan) return openPlanActions(Number(target.dataset.plan), target);
