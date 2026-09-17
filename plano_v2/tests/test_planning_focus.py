@@ -151,7 +151,7 @@ class PlanningAndFocusTest(unittest.TestCase):
         response = self.client.get("/planning")
         self.assertEqual(response.status_code, 200)
         page = response.get_data(as_text=True)
-        self.assertRegex(page, r"/static/css/app\.css\?v=\d+")
+        self.assertRegex(page, r"/static/css/ui_refinement\.css\?v=\d+")
         self.assertRegex(page, r"/static/js/app\.js\?v=\d+")
 
     def test_focus_entrypoints_open_the_dedicated_page(self):

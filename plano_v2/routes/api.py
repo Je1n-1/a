@@ -408,6 +408,8 @@ def search(): return run(lambda conn: core.search(conn, request.args.get("q")))
 def analytics(): return run(core.analytics)
 @api.get("/analytics/workload")
 def analytics_workload(): return run(lambda conn: core.analytics_workload(conn, request.args.get("start"), request.args.get("end"), request.args.get("formation_id"), request.args.get("item_id"), request.args.get("kind")))
+@api.get("/analytics/summary")
+def analytics_summary(): return run(lambda conn: core.analytics_summary(conn, request.args.get("date")))
 
 @api.route("/projects",methods=["GET","POST"])
 def project_collection(): return run(lambda conn: core.projects(conn,request.args.get("archived")=="1") if request.method=="GET" else core.create_project(conn,body()))

@@ -453,6 +453,85 @@ class SmartPlanningApiTest(unittest.TestCase):
         self.assertFalse(any(item["name"] == "Futura" for item in data["ideal"]["items"]))
         self.assertEqual(data["grade_by_subject"][0]["simple_average_percent"], 80.0)
 
+    def test_workload_daily_series_covers_the_period_and_respects_filters(self):
+        formation = self.formation()
+        curriculum = self.curriculum(formation, "Cálculo")
+        curricular_study = self.activate(curriculum)
+        personal_study = self.client.post("/api/studies", json={"personal_name": "Python"})
+        self.assertEqual(personal_study.status_code, 200, personal_study.get_json())
+        personal_study = personal_study.get_json()
+
+        curricular_session = self.client.post("/api/sessions", json={
+            "study_subject_id": curricular_study["id"], "date": "2026-08-04",
+            "duration_seconds": 5400, "entry_method": "manual",
+        })
+        self.assertEqual(curricular_session.status_code, 200, curricular_session.get_json())
+        personal_session = self.client.post("/api/sessions", json={
+            "study_subject_id": personal_study["id"], "date": "2026-08-05",
+            "duration_seconds": 3600, "entry_method": "manual",
+        })
+        self.assertEqual(personal_session.status_code, 200, personal_session.get_json())
+        curricular_plan = self.client.post("/api/planned", json={
+            "study_subject_id": curricular_study["id"], "scheduled_date": "2026-09-01",
+            "start_time": "07:00", "planned_duration_minutes": 180,
+        })
+        self.assertEqual(curricular_plan.status_code, 200, curricular_plan.get_json())
+        personal_plan = self.client.post("/api/planned", json={
+            "study_subject_id": personal_study["id"], "scheduled_date": "2026-09-01",
+            "start_time": "10:00", "planned_duration_minutes": 90,
+        })
+        self.assertEqual(personal_plan.status_code, 200, personal_plan.get_json())
+
+        start, end = "2026-08-03", "2026-09-01"
+        filtered = self.client.get(
+            f"/api/analytics/workload?start={start}&end={end}&formation_id={formation['id']}"
+        )
+        self.assertEqual(filtered.status_code, 200, filtered.get_json())
+        data = filtered.get_json()
+        self.assertEqual(len(data["by_day"]), 30)
+        self.assertEqual([row["date"] for row in data["by_day"]], [
+            (date(2026, 8, 3) + timedelta(days=offset)).isoformat() for offset in range(30)
+        ])
+        self.assertEqual(sum(row["real_seconds"] for row in data["by_day"]), data["total_seconds"])
+        self.assertEqual(data["total_seconds"], 5400)
+        self.assertEqual(next(row for row in data["by_day"] if row["date"] == "2026-09-01")["planned_minutes"], 180)
+        self.assertEqual(next(row for row in data["by_day"] if row["date"] == "2026-08-03")["sessions"], 0)
+
+        by_item = self.client.get(
+            f"/api/analytics/workload?start={start}&end={end}&item_id={curricular_study['id']}"
+        ).get_json()
+        self.assertEqual(by_item["total_seconds"], 5400)
+        self.assertEqual(sum(row["planned_minutes"] for row in by_item["by_day"]), 180)
+
+        personal = self.client.get(
+            f"/api/analytics/workload?start={start}&end={end}&kind=personal"
+        ).get_json()
+        self.assertEqual(personal["total_seconds"], 3600)
+        self.assertEqual(sum(row["planned_minutes"] for row in personal["by_day"]), 90)
+
+    def test_analytics_summary_returns_global_today_week_and_month_without_planning(self):
+        study = self.client.post("/api/studies", json={"personal_name": "Python"})
+        self.assertEqual(study.status_code, 200, study.get_json())
+        study_id = study.get_json()["id"]
+        for session_date, seconds in (
+            ("2026-08-31", 2400), ("2026-09-01", 1800),
+            ("2026-09-07", 1200), ("2026-09-09", 900),
+        ):
+            saved = self.client.post("/api/sessions", json={
+                "study_subject_id": study_id, "date": session_date,
+                "duration_seconds": seconds, "entry_method": "manual",
+            })
+            self.assertEqual(saved.status_code, 200, saved.get_json())
+
+        with patch("services.core.planning_capacity", side_effect=AssertionError("O resumo não deve calcular capacidade")), \
+             patch("services.core.planning_ideal", side_effect=AssertionError("O resumo não deve calcular planejamento")):
+            summary = self.client.get("/api/analytics/summary?date=2026-09-09")
+        self.assertEqual(summary.status_code, 200, summary.get_json())
+        self.assertEqual(summary.get_json(), {
+            "date": "2026-09-09", "week_start": "2026-09-07", "month_start": "2026-09-01",
+            "today_seconds": 900, "week_seconds": 2100, "month_seconds": 3900,
+        })
+
     def test_archived_content_can_be_restored_without_losing_its_identity(self):
         subject = self.curriculum(self.formation())
         content = self.client.post(f"/api/curriculum/{subject['id']}/contents", json={"name": "Matrizes"}).get_json()

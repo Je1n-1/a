@@ -221,6 +221,13 @@ class PlanningCoreContractsTest(unittest.TestCase):
         self.assertEqual(reversed_source.status_code, 400, reversed_source.get_json())
         self.assertEqual(reversed_source.get_json()["code"], "planned_source_invalid")
 
+        restored = self.client.patch(
+            f"/api/planned/{automatic['id']}",
+            json={"source": "automatic", "restore_automatic_source": True},
+        )
+        self.assertEqual(restored.status_code, 200, restored.get_json())
+        self.assertEqual(restored.get_json()["source"], "automatic")
+
 
 if __name__ == "__main__":
     unittest.main()

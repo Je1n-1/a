@@ -3926,9 +3926,16 @@ def update_planned(conn, ident, values):
     data = _fields(values,{"study_subject_id","topic_id","scheduled_date","start_time","planned_duration_minutes","status","selection_reason","selection_context"})
     requested_source = values.get("source")
     if requested_source is not None:
-        if requested_source != "manual":
+        restoring_automatic_source = requested_source == "automatic" and _confirmed(values.get("restore_automatic_source"))
+        # A restauração é usada exclusivamente pelo desfazer de uma mudança
+        # recém-feita. Ela também é idempotente: se o bloco permaneceu
+        # automático, desfazer sua posição não pode falhar por tentar manter
+        # a mesma origem.
+        if requested_source == "automatic" and restoring_automatic_source and current["source"] in ("automatic", "manual"):
+            data["source"] = "automatic"
+        elif requested_source != "manual":
             raise DomainError("Um bloco manual não pode voltar a ser automático.", 400, "planned_source_invalid")
-        if current["source"] == "automatic":
+        elif current["source"] == "automatic":
             data["source"] = "manual"
         elif current["source"] != "manual":
             raise DomainError("Origem do bloco inválida.", 409, "planned_source_invalid")
@@ -5198,6 +5205,11 @@ def analytics_workload(conn, start=None, end=None, formation_id=None, item_id=No
         FROM sessoes_estudo x JOIN materias_estudo s ON s.id=x.study_subject_id
         LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id
         WHERE """ + where + " GROUP BY s.id ORDER BY seconds DESC,name", params)
+    real_by_day = repo.many(conn, """
+        SELECT x.date,COALESCE(SUM(x.duration_seconds),0) real_seconds,COUNT(x.id) sessions
+        FROM sessoes_estudo x JOIN materias_estudo s ON s.id=x.study_subject_id
+        LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id
+        WHERE """ + where + " GROUP BY x.date ORDER BY x.date", params)
     planned = repo.one(conn, """
         SELECT COUNT(*) total,
           COUNT(*) FILTER(WHERE p.status='completed') completed,
@@ -5207,6 +5219,30 @@ def analytics_workload(conn, start=None, end=None, formation_id=None, item_id=No
         LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id
         WHERE p.scheduled_date BETWEEN ? AND ?
         """ + (" AND COALESCE(s.related_formation_id,d.formation_id)=" + "?" if formation_id not in (None, "") else "") + (" AND s.id=?" if item_id not in (None, "") else "") + (" AND s.origin=?" if kind else ""), (first.isoformat(), last.isoformat(), *((int(formation_id),) if formation_id not in (None, "") else ()), *((int(item_id),) if item_id not in (None, "") else ()), *((kind,) if kind else ())))
+    planned_clauses = ["p.scheduled_date BETWEEN ? AND ?", "p.status IN ('planned','completed','skipped')"]
+    planned_params = [first.isoformat(), last.isoformat()]
+    if formation_id not in (None, ""):
+        planned_clauses.append("COALESCE(s.related_formation_id,d.formation_id)=?"); planned_params.append(int(formation_id))
+    if item_id not in (None, ""):
+        planned_clauses.append("s.id=?"); planned_params.append(int(item_id))
+    if kind:
+        planned_clauses.append("s.origin=?"); planned_params.append(kind)
+    planned_by_day = repo.many(conn, """
+        SELECT p.scheduled_date date,COALESCE(SUM(p.planned_duration_minutes),0) planned_minutes
+        FROM sessoes_planejadas p JOIN materias_estudo s ON s.id=p.study_subject_id
+        LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id
+        WHERE """ + " AND ".join(planned_clauses) + " GROUP BY p.scheduled_date ORDER BY p.scheduled_date", planned_params)
+    real_by_date = {row["date"]: row for row in real_by_day}
+    planned_by_date = {row["date"]: row for row in planned_by_day}
+    by_day = [
+        {
+            "date": current.isoformat(),
+            "real_seconds": int(real_by_date.get(current.isoformat(), {}).get("real_seconds", 0) or 0),
+            "planned_minutes": int(planned_by_date.get(current.isoformat(), {}).get("planned_minutes", 0) or 0),
+            "sessions": int(real_by_date.get(current.isoformat(), {}).get("sessions", 0) or 0),
+        }
+        for current in _range_dates(first.isoformat(), last.isoformat())
+    ]
     orphan_completed = repo.one(conn, """
         SELECT COUNT(*) count FROM sessoes_planejadas p
         WHERE p.status='completed' AND p.scheduled_date BETWEEN ? AND ?
@@ -5271,7 +5307,7 @@ def analytics_workload(conn, start=None, end=None, formation_id=None, item_id=No
     return {
         "start": first.isoformat(), "end": last.isoformat(), "total_seconds": int(total["seconds"] or 0),
         "sessions": int(total["sessions"] or 0), "days_studied": int(total["days"] or 0),
-        "by_item": by_item, "by_subject": by_item, "planned": {key: int(value or 0) for key, value in planned.items()},
+        "by_item": by_item, "by_day": by_day, "planned": {key: int(value or 0) for key, value in planned.items()},
         "completion_rate_percent": round(int(planned["completed"] or 0) * 100 / int(planned["total"] or 1), 1) if planned["total"] else None,
         "completed_planned_without_real_session": int(orphan_completed["count"] or 0),
         "capacity": {key: planning_capacity(conn, _today(), (_local_now().date() + timedelta(days=offset)).isoformat(), formation_id, item_id, kind) for key, offset in (("7", 6), ("14", 13), ("30", 29))},
@@ -5283,6 +5319,37 @@ def analytics_workload(conn, start=None, end=None, formation_id=None, item_id=No
         "upcoming_evaluations": upcoming_evaluations, "grade_by_subject": grade_by_subject,
         "most_studied_contents": most_studied_contents,
         "inactive_contents": inactive_contents,
+    }
+
+
+def analytics_summary(conn, reference_date=None):
+    """Totais leves usados pelos cartões globais da tela de análises.
+
+    Eles não dependem de capacidade, risco ou planejamento. Mantê-los fora de
+    ``analytics_workload`` evita repetir todo o cálculo de planejamento para
+    cada horizonte de tempo exibido na interface.
+    """
+    reference = _date(reference_date, "Data de referência") if reference_date else _local_now().date()
+    week_start, _ = _week_bounds(reference.isoformat())
+    month_start = reference.replace(day=1)
+    totals = repo.one(conn, """
+        SELECT
+          COALESCE(SUM(CASE WHEN date=? THEN duration_seconds ELSE 0 END),0) today_seconds,
+          COALESCE(SUM(CASE WHEN date BETWEEN ? AND ? THEN duration_seconds ELSE 0 END),0) week_seconds,
+          COALESCE(SUM(duration_seconds),0) month_seconds
+        FROM sessoes_estudo
+        WHERE date BETWEEN ? AND ?
+    """, (
+        reference.isoformat(), week_start.isoformat(), reference.isoformat(),
+        month_start.isoformat(), reference.isoformat(),
+    ))
+    return {
+        "date": reference.isoformat(),
+        "week_start": week_start.isoformat(),
+        "month_start": month_start.isoformat(),
+        "today_seconds": int(totals["today_seconds"] or 0),
+        "week_seconds": int(totals["week_seconds"] or 0),
+        "month_seconds": int(totals["month_seconds"] or 0),
     }
 
 
@@ -5314,7 +5381,7 @@ def analytics(conn):
     return {
         "total_seconds": int(total["seconds"] or 0), "sessions": int(total["sessions"] or 0), "real_sessions": int(total["sessions"] or 0),
         "days_studied": int(total["days"] or 0), "today_seconds": int(today_total["seconds"] or 0), "week_seconds": int(week["seconds"] or 0),
-        "month_seconds": int(month["seconds"] or 0), "by_subject": workload["by_subject"],
+        "month_seconds": int(month["seconds"] or 0), "by_subject": workload["by_item"],
         "completed_planned_blocks": int(completed_blocks["count"] or 0),
         "completed_planned_without_real_session": workload["completed_planned_without_real_session"],
         "next_pending_subjects": next_pending, "future_subjects": future_subjects, "workload": workload,
