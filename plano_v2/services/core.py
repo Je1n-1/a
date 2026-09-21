@@ -1062,6 +1062,62 @@ def curriculum_management(conn, formation_id, filters=None):
     }
 
 
+def subject_catalog(conn, filters=None):
+    """Catálogo operacional único de disciplinas de todas as formações.
+
+    A grade continua sendo a dona do estado acadêmico. O estudo atual (próprio
+    ou canônico) é anexado apenas como contexto operacional, sem duplicar a
+    disciplina nem inferir equivalência pelo nome.
+    """
+    filters = filters or {}
+    clauses = ["d.item_type='subject'"]
+    params = []
+    visibility = str(filters.get("visibility") or "active")
+    if visibility not in {"active", "archived", "all"}:
+        raise DomainError("Filtro de arquivamento das disciplinas inválido.")
+    if visibility == "active":
+        clauses.extend(["d.archived_at IS NULL", "f.archived_at IS NULL"])
+    elif visibility == "archived":
+        clauses.append("(d.archived_at IS NOT NULL OR f.archived_at IS NOT NULL)")
+    formation_id = filters.get("formation_id")
+    if formation_id not in (None, ""):
+        clauses.append("d.formation_id=?")
+        params.append(int(formation_id))
+    academic_status = filters.get("academic_status")
+    if academic_status:
+        statuses = [value.strip() for value in str(academic_status).split(",") if value.strip()]
+        if not statuses or any(value not in ACADEMIC_STATUSES for value in statuses):
+            raise DomainError("Filtro de estado acadêmico inválido.")
+        clauses.append(f"d.academic_status IN ({','.join('?' for _ in statuses)})")
+        params.extend(statuses)
+    query = str(filters.get("q") or "").strip()
+    if query:
+        clauses.append("(d.name LIKE ? COLLATE NOCASE OR d.code LIKE ? COLLATE NOCASE OR f.name LIKE ? COLLATE NOCASE)")
+        params.extend([f"%{query}%", f"%{query}%", f"%{query}%"])
+    return repo.many(conn, """
+        SELECT d.*,f.name formation_name,f.institution formation_institution,
+          f.archived_at formation_archived_at,
+          COALESCE(l.canonical_study_id,own.id) study_subject_id,
+          COALESCE(canonical.status,own.status) study_status,
+          COALESCE(canonical.archived_at,own.archived_at) study_archived_at,
+          CASE WHEN l.canonical_study_id IS NOT NULL THEN 1 ELSE 0 END is_shared_study,
+          CASE WHEN d.academic_status='exempted' AND l.canonical_study_id IS NOT NULL THEN 1 ELSE 0 END fulfilled_by_equivalence
+        FROM disciplinas_grade d
+        JOIN formacoes f ON f.id=d.formation_id
+        LEFT JOIN curriculum_study_links l ON l.curriculum_subject_id=d.id
+        LEFT JOIN materias_estudo own ON own.id=(
+          SELECT s.id FROM materias_estudo s
+          WHERE s.curriculum_subject_id=d.id AND s.archived_at IS NULL
+            AND s.status IN ('active','paused','completed')
+          ORDER BY CASE s.status WHEN 'active' THEN 0 WHEN 'paused' THEN 1 ELSE 2 END,s.id DESC
+          LIMIT 1
+        )
+        LEFT JOIN materias_estudo canonical ON canonical.id=l.canonical_study_id
+        WHERE """ + " AND ".join(clauses) + """
+        ORDER BY f.name COLLATE NOCASE,COALESCE(d.period,''),d.sort_order,d.name COLLATE NOCASE,d.id
+    """, params)
+
+
 def _curriculum_data(values, current=None):
     data = _fields(values, CURRICULUM)
     for key in ("code", "period", "start_date", "end_date", "deadline_date", "notes", "review_notes", "allowed_weekdays", "minimum_grade"):
@@ -2493,7 +2549,33 @@ def finish_study(conn, ident, result, final_score=None):
     _assert_study_accessible(conn, ident)
     repo.update(conn, "materias_estudo", ident, {"status":"completed", "completed_at":_today(), "result":result, "final_score":final_score})
     change_curriculum_status(conn, study["curriculum_subject_id"], {"academic_status":statuses[result]}, "finish_study", result)
-    return _get(conn, "materias_estudo", ident)
+    equivalence_updates = []
+    if result == "approved":
+        # O vínculo canônico já foi confirmado pela pessoa usuária. Nesse
+        # caso, concluir a ocorrência de origem satisfaz as demais por
+        # equivalência, sem fingir que foram cursadas novamente.
+        for linked in canonical_links.linked_curriculum_subjects(conn, ident):
+            linked_id = int(linked["id"])
+            if linked_id == int(study["curriculum_subject_id"]):
+                continue
+            if linked.get("archived_at") or linked.get("formation_archived_at"):
+                continue
+            if linked.get("academic_status") in {"completed", "exempted"}:
+                continue
+            saved = change_curriculum_status(
+                conn,
+                linked_id,
+                {"academic_status": "exempted"},
+                "finish_study",
+                f"Atendida pela conclusão do estudo canônico #{ident}.",
+            )
+            equivalence_updates.append({
+                "curriculum_subject_id": linked_id,
+                "formation_id": saved["formation_id"],
+                "formation_name": linked.get("formation_name"),
+                "academic_status": "exempted",
+            })
+    return {**_get(conn, "materias_estudo", ident), "equivalence_updates": equivalence_updates}
 
 
 def pause_study(conn, ident, resume=False):
@@ -5247,8 +5329,9 @@ def _item_capacity(windows, start, end, allowed_weekdays=None):
     return total, available_days
 
 
-def _item_net_capacity(capacity_rows, start, end, allowed_weekdays=None):
+def _item_net_capacity(capacity_rows, start, end, allowed_weekdays=None, daily_cap_minutes=None):
     total, available_days = 0, 0
+    daily_cap = max(0, int(daily_cap_minutes or 0))
     for row in capacity_rows:
         current = _date(row["date"])
         if current < _date(start) or current > _date(end):
@@ -5256,6 +5339,8 @@ def _item_net_capacity(capacity_rows, start, end, allowed_weekdays=None):
         if allowed_weekdays and current.weekday() not in allowed_weekdays:
             continue
         amount = int(row.get("net_free_minutes") or 0)
+        if daily_cap:
+            amount = min(amount, daily_cap)
         if amount:
             total += amount
             available_days += 1
@@ -5447,6 +5532,10 @@ def planning_items(conn, start=None, end=None, formation_id=None, item_id=None, 
         weekly_goal = int(row.get("weekly_goal_minutes") or 0)
         minimum_weekly = int(row.get("minimum_weekly_minutes") or 0) if kind == "personal" else 0
         daily_goal = int(row.get("daily_goal_minutes") or 0)
+        manual_daily = (
+            int(row.get("manual_daily_minutes") or 0)
+            if row.get("rhythm_mode") == "manual" and not campaign else 0
+        )
         if campaign:
             # A campanha é um objetivo próprio: não soma esforço de conclusão
             # nem a antiga meta semanal da mesma disciplina.
@@ -5540,14 +5629,21 @@ def planning_items(conn, start=None, end=None, formation_id=None, item_id=None, 
         else:
             remaining = sum(weekly_demand_by_week.values())
             unallocated = remaining
+        effective_daily_cap = manual_daily or int(row.get("habitual_daily_max_minutes") or global_subject_daily_max or 0)
         if date_invalid or capacity_end < effective_start:
             capacity, available_days = 0, 0
         else:
-            capacity, available_days = _item_net_capacity(horizon["capacity_rows"], effective_start.isoformat(), capacity_end.isoformat(), allowed)
+            capacity, available_days = _item_net_capacity(
+                horizon["capacity_rows"], effective_start.isoformat(), capacity_end.isoformat(), allowed,
+                effective_daily_cap,
+            )
         if date_invalid or allocation_end < effective_start:
             period_capacity, period_available_days = 0, 0
         else:
-            period_capacity, period_available_days = _item_net_capacity(horizon["capacity_rows"], effective_start.isoformat(), allocation_end.isoformat(), allowed)
+            period_capacity, period_available_days = _item_net_capacity(
+                horizon["capacity_rows"], effective_start.isoformat(), allocation_end.isoformat(), allowed,
+                effective_daily_cap,
+            )
         days_remaining = (deadline_day - _local_now().date()).days if deadline_day else None
         raw = {
             "id": row["id"], "study_subject_id": row["id"], "curriculum_subject_id": curriculum_id,
@@ -5569,7 +5665,11 @@ def planning_items(conn, start=None, end=None, formation_id=None, item_id=None, 
             "block_duration_source": block_duration_source,
             "allowed_weekdays": allowed, "minimum_weekly_minutes": minimum_weekly,
             "weekly_goal_minutes": int(weekly_goal), "daily_goal_minutes": daily_goal or None,
-            "habitual_daily_max_minutes": int(row.get("habitual_daily_max_minutes") or global_subject_daily_max or 0) or None,
+            # Ritmo manual e teto são decisões do usuário. O motor pode apontar
+            # déficit, mas nunca ultrapassá-los para "fazer caber" o prazo.
+            "habitual_daily_max_minutes": effective_daily_cap or None,
+            "rhythm_mode": row.get("rhythm_mode") or "suggested",
+            "manual_daily_minutes": manual_daily or None,
             "planned_by_day": dict(planned_by_day),
             "daily_goal_mode": "campaign_total" if campaign else row.get("daily_goal_mode", "legacy_weekly"),
             "review_campaign_id": campaign.get("id") if campaign else None,
@@ -6502,6 +6602,81 @@ def today_overview(conn):
     weekly_deficit = max(0, current_week_open - int(week_window["net_free_minutes"] or 0))
     mandatory_unallocated = deadline_deficit + weekly_deficit
     on_track = mandatory_unallocated <= 0
+    active_items = [
+        item for item in forecast["items"]
+        if item.get("study_status") in {"active", "paused"}
+        and item.get("academic_status") not in {"completed", "exempted"}
+    ]
+    overdue_items = [
+        item for item in active_items
+        if item.get("deadline") and item["deadline"] < today
+    ]
+    incomplete_items = [
+        item for item in active_items
+        if item.get("planning_state") not in {None, "ready"}
+        or (
+            item.get("kind") == "curriculum"
+            and not item.get("deadline")
+            and not item.get("daily_goal_minutes")
+            and not item.get("weekly_goal_minutes")
+        )
+    ]
+    risk_items = [
+        item for item in active_items
+        if item.get("risk") in {"impossible", "at_risk"}
+        or item.get("joint_risk", {}).get("status") in {"impossible", "at_risk"}
+    ]
+    attention_items = [
+        item for item in active_items
+        if item not in overdue_items
+        and (
+            item.get("risk") == "attention"
+            or int(item.get("unallocated_minutes") or 0) > 0
+            or int(item.get("weekly_demand_by_week", {}).get(current_monday, 0) or 0) > 0
+        )
+    ]
+    if overdue_items:
+        day_status = "late"
+        day_status_label = "Há prazo vencido"
+        day_status_message = f"{len(overdue_items)} disciplina(s) continuam abertas depois do prazo."
+    elif incomplete_items:
+        day_status = "incomplete"
+        day_status_label = "Planejamento incompleto"
+        day_status_message = "Faltam dados de prazo, ritmo ou esforço para afirmar que você está em dia."
+    elif risk_items or mandatory_unallocated > 0:
+        day_status = "at_risk"
+        day_status_label = "Carga em risco"
+        day_status_message = "A carga conhecida não cabe com segurança na disponibilidade atual."
+    elif attention_items:
+        day_status = "attention"
+        day_status_label = "Há trabalho a distribuir"
+        day_status_message = "A capacidade pode ser suficiente, mas ainda existem horas ou metas sem blocos definidos."
+    else:
+        day_status = "on_track"
+        day_status_label = "Você está em dia"
+        day_status_message = "A demanda conhecida cabe na capacidade e não há pendência vencida."
+    commitment_items = sorted(
+        [*overdue_items, *risk_items, *attention_items],
+        key=lambda item: (item.get("deadline") or "9999-12-31", -int(item.get("priority_effective") or 0), item.get("name") or ""),
+    )
+    commitments = []
+    seen_commitments = set()
+    for item in commitment_items:
+        key = (item.get("study_subject_id"), item.get("deadline"))
+        if key in seen_commitments:
+            continue
+        seen_commitments.add(key)
+        commitments.append({
+            "study_subject_id": item.get("study_subject_id"),
+            "name": item.get("name"),
+            "deadline": item.get("deadline"),
+            "remaining_minutes": int(item.get("remaining_minutes") or 0),
+            "unallocated_minutes": int(item.get("unallocated_minutes") or 0),
+            "risk": "late" if item in overdue_items else item.get("risk"),
+            "risk_label": "Prazo vencido" if item in overdue_items else item.get("risk_label"),
+        })
+        if len(commitments) == 5:
+            break
     recommendation_value = recommendation(conn) if suggest_during_free_time and free_time_preference != "preserve" else None
     preferences = planning_preferences(conn)
     free_windows = _planning_windows(conn, today, today)["windows"].get(today, [])
@@ -6538,13 +6713,22 @@ def today_overview(conn):
         "active_review_campaigns": active_campaigns,
         "suggestion": recommendation_value if suggestion_slot else None,
         "suggestion_unavailable": bool(recommendation_value and not suggestion_slot),
-        "day_is_full": capacity["net_free_minutes"] < preferences["minimum_session_minutes"],
+        "day_is_full": capacity["net_capacity_minutes"] > 0 and capacity["net_free_minutes"] < preferences["minimum_session_minutes"],
+        "no_availability_today": capacity["net_capacity_minutes"] <= 0,
         "mandatory_unallocated_minutes": mandatory_unallocated,
         "current_week_open_minutes": current_week_open,
         "forecast_end": forecast_end.isoformat(),
         "on_track": on_track,
+        "day_status": day_status,
+        "day_status_label": day_status_label,
+        "day_status_message": day_status_message,
+        "overdue_count": len(overdue_items),
+        "incomplete_count": len(incomplete_items),
+        "risk_count": len(risk_items),
+        "attention_count": len(attention_items),
+        "commitments": commitments,
         "free_time_preference": free_time_preference,
-        "free_time_message": "Você está em dia. A demanda obrigatória de hoje já foi cumprida." if on_track else None,
+        "free_time_message": day_status_message if day_status == "on_track" else None,
         "free_time_options": [
             "Manter o horário livre", "Avançar o próximo tópico", "Adiantar outra disciplina ativa",
             "Estudar uma disciplina disponível futura", "Fazer uma revisão", "Estudar um assunto paralelo",

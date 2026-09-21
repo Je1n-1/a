@@ -526,6 +526,25 @@ class TopicsAndFocusPersistenceApiTest(unittest.TestCase):
         self.assertEqual(today.get_json()["suggestion"], None)
         self.assertIn("Manter o horário livre", today.get_json()["free_time_options"])
 
+    def test_today_never_calls_an_overdue_active_subject_on_track(self):
+        self.set_now(datetime(2026, 8, 30, 7, 0, 0))
+        formation = self.formation("Formação com prazo vencido")
+        subject = self.curriculum(
+            formation,
+            "Disciplina vencida",
+            deadline_date="2026-08-31",
+        )
+        self.activate(subject)
+        self.set_now(datetime(2026, 9, 1, 7, 0, 0))
+
+        response = self.client.get("/api/today")
+        self.assertEqual(response.status_code, 200, response.get_json())
+        payload = response.get_json()
+        self.assertEqual(payload["day_status"], "late")
+        self.assertEqual(payload["overdue_count"], 1)
+        self.assertNotEqual(payload["day_status_label"], "Você está em dia")
+        self.assertEqual(payload["commitments"][0]["name"], "Disciplina vencida")
+
     def test_disallowed_curriculum_states_reject_manual_and_focus_access(self):
         """Estados acadêmicos não elegíveis não podem ser contornados por APIs manuais."""
         rejected_states = {

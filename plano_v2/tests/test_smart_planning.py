@@ -150,6 +150,43 @@ class SmartPlanningApiTest(unittest.TestCase):
         self.assertEqual(sessions[0]["scheduled_date"], "2026-09-01")
         self.assertNotEqual(sessions[-1]["scheduled_date"], "2026-09-01")
 
+    def test_manual_daily_rhythm_is_a_hard_cap_even_when_deadline_needs_more(self):
+        study = self.client.post("/api/studies", json={
+            "personal_name": "Química",
+            "required_study_minutes": 300,
+            "target_date": "2026-09-07",
+            "preferred_block_minutes": 50,
+            "allowed_weekdays": list(range(7)),
+            "rhythm_mode": "manual",
+            "manual_daily_minutes": 30,
+        })
+        self.assertEqual(study.status_code, 200, study.get_json())
+        for weekday in range(7):
+            self.availability(weekday, "07:00", "09:00")
+
+        preview = self.client.post(
+            "/api/planning/generate-smart",
+            json={"start": "2026-09-01", "days": 7},
+        )
+        self.assertEqual(preview.status_code, 200, preview.get_json())
+        sessions = [
+            item for item in preview.get_json()["sessions"]
+            if item["study_subject_id"] == study.get_json()["id"]
+        ]
+        per_day = {}
+        for item in sessions:
+            per_day[item["scheduled_date"]] = per_day.get(item["scheduled_date"], 0) + item["planned_duration_minutes"]
+        self.assertEqual(len(per_day), 7)
+        self.assertEqual(set(per_day.values()), {30})
+        self.assertEqual(sum(per_day.values()), 210)
+        planned_item = next(
+            item for item in preview.get_json()["items"]
+            if item["study_subject_id"] == study.get_json()["id"]
+        )
+        self.assertEqual(planned_item["habitual_daily_max_minutes"], 30)
+        self.assertEqual(planned_item["capacity_until_deadline_minutes"], 210)
+        self.assertGreater(planned_item["deficit_minutes"], 0)
+
     def test_multiple_windows_never_place_a_block_in_the_interval(self):
         subject = self.curriculum(self.formation(), required_study_minutes=360, deadline_date="2026-09-01", preferred_block_minutes=50)
         self.activate(subject)

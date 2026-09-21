@@ -2310,6 +2310,18 @@ textarea[aria-invalid="true"],
 
 .formation-tab-panel[hidden] { display: none !important; }
 
+/* A formação selecionada usa a largura inteira; a troca fica no seletor do topo. */
+.formation-layout { grid-template-columns: minmax(0, 1fr) !important; }
+.formation-layout > aside[hidden] { display: none !important; }
+
+.today-state { border-left: 4px solid var(--line, #d7dce5); }
+.today-state-success { border-left-color: #2f9e66; }
+.today-state-warning { border-left-color: #d99021; }
+.today-state-danger { border-left-color: #c94a4a; }
+.today-review-count { display: block; font-size: clamp(2rem, 5vw, 3.5rem); line-height: 1; margin: .75rem 0; }
+.today-commitments .compact-list { margin-top: 1rem; }
+.available-curriculum-row > .action-group { justify-content: flex-end; flex-wrap: wrap; }
+
 .formation-settings-card {
   display: grid;
   gap: 0.85rem;

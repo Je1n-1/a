@@ -4,7 +4,7 @@ from pathlib import Path
 
 from database.connection import connect
 from database.migrations import migrate
-from services import canonical_links
+from services import canonical_links, core
 
 
 class CanonicalStudyLinkTest(unittest.TestCase):
@@ -90,6 +90,40 @@ class CanonicalStudyLinkTest(unittest.TestCase):
             self.assertIsNone(conn.execute("SELECT 1 FROM curriculum_study_links WHERE curriculum_subject_id=?", (self.d2,)).fetchone())
             actions = [row[0] for row in conn.execute("SELECT action FROM curriculum_study_link_audit WHERE curriculum_subject_id=? ORDER BY id DESC", (self.d2,))]
             self.assertEqual(actions, ["unlinked", "merged_existing_study"])
+
+    def test_approved_canonical_study_satisfies_confirmed_equivalence(self):
+        with connect(self.database) as conn:
+            canonical_links.link_curriculum_subject(
+                conn, self.d2, self.s1, {"confirm": True, "merge_existing_study": True},
+            )
+            result = core.finish_study(conn, self.s1, "approved")
+            states = {
+                row["id"]: row["academic_status"]
+                for row in conn.execute(
+                    "SELECT id,academic_status FROM disciplinas_grade WHERE id IN (?,?)",
+                    (self.d1, self.d2),
+                )
+            }
+            self.assertEqual(states[self.d1], "completed")
+            self.assertEqual(states[self.d2], "exempted")
+            self.assertEqual(result["equivalence_updates"][0]["curriculum_subject_id"], self.d2)
+            audit = conn.execute(
+                "SELECT origin FROM curriculum_status_history WHERE curriculum_subject_id=? ORDER BY id DESC LIMIT 1",
+                (self.d2,),
+            ).fetchone()
+            self.assertEqual(audit["origin"], "finish_study")
+
+    def test_global_catalog_exposes_each_formation_occurrence_and_shared_study(self):
+        with connect(self.database) as conn:
+            canonical_links.link_curriculum_subject(
+                conn, self.d2, self.s1, {"confirm": True, "merge_existing_study": True},
+            )
+            rows = core.subject_catalog(conn, {"visibility": "all"})
+            by_id = {row["id"]: row for row in rows}
+            self.assertEqual({self.d1, self.d2}, set(by_id))
+            self.assertEqual(by_id[self.d1]["study_subject_id"], self.s1)
+            self.assertEqual(by_id[self.d2]["study_subject_id"], self.s1)
+            self.assertEqual(by_id[self.d2]["is_shared_study"], 1)
 
 
 if __name__ == "__main__":

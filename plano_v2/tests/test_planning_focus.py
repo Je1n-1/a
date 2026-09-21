@@ -160,6 +160,18 @@ class PlanningAndFocusTest(unittest.TestCase):
         self.assertIn('if (target.dataset.focus !== undefined) return openPlanningFocus(null, target);', source)
         self.assertIn('if (target.dataset.startPlan) return openPlanningFocus(Number(target.dataset.startPlan), target);', source)
         self.assertNotIn('target.dataset.startPlan) return startTimer(', source)
+        self.assertIn('window.location.assign(url.href);', source)
+        self.assertNotIn('window.open(url.href, "_blank", "noopener")', source)
+
+    def test_interface_consolidates_settings_today_and_analytics(self):
+        source = (PROJECT_ROOT / "static" / "js" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("Máximo total por dia (h:min)", source)
+        self.assertNotIn("Máximo total por dia (min)", source)
+        self.assertIn("SITUAÇÃO REAL", source)
+        self.assertNotIn("COMO USAR O TEMPO", source)
+        self.assertIn("PLANEJADO, REALIZADO E COMPOSIÇÃO", source)
+        self.assertNotIn("COMPOSIÇÃO DO TEMPO", source)
+        self.assertIn('href="/settings/availability">Configurar rotina</a>', source)
 
 
 if __name__ == "__main__":

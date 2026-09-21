@@ -100,6 +100,10 @@ def curriculum(formation_id): return run(lambda conn: core.curriculum(conn,forma
 def curriculum_management(formation_id):
     filters = {key: request.args.get(key) for key in ("q", "period", "academic_status", "review_status", "visibility", "quick", "sort", "item_type") if request.args.get(key) is not None}
     return run(lambda conn: core.curriculum_management(conn, formation_id, filters))
+@api.get("/subjects/catalog")
+def subject_catalog():
+    filters = {key: request.args.get(key) for key in ("q", "formation_id", "academic_status", "visibility") if request.args.get(key) is not None}
+    return run(lambda conn: core.subject_catalog(conn, filters))
 @api.post("/formations/<int:formation_id>/curriculum")
 def curriculum_create(formation_id): return run(lambda conn: core.create_curriculum(conn,formation_id,body()))
 @api.post("/formations/<int:formation_id>/curriculum/batch/preview")
@@ -175,8 +179,9 @@ def curriculum_shared_study(ident):
     """Prévia e confirmação explícita para equivalências entre formações.
 
     A rota é propositalmente separada das alterações acadêmicas da grade: o
-    vínculo compartilha só o estudo pessoal canônico, nunca estado, nota ou
-    prazo institucional da ocorrência curricular.
+    vínculo compartilha o estudo canônico, mas não ativa nem copia prazos ou
+    notas. Uma conclusão aprovada pode satisfazer as ocorrências já vinculadas
+    como equivalência, mantendo a origem auditável.
     """
     if request.method == "GET":
         return run(lambda conn: core.curriculum_shared_study(conn, ident))
