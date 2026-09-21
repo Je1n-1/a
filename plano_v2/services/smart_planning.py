@@ -330,13 +330,20 @@ def distribute(items, day_windows, start: date, end: date, *, pause_minutes=10,
     mutable = [{**item, "contents": [dict(topic) for topic in item.get("contents", [])]} for item in items]
     by_id = {item["id"]: item for item in mutable}
     pause_minutes = max(0, int(pause_minutes or 0))
+    allocated_by_subject_day = defaultdict(int)
+    for item in mutable:
+        for selected_date, minutes in (item.get("planned_by_day") or {}).items():
+            allocated_by_subject_day[(item["id"], selected_date)] += int(minutes or 0)
 
     def windows_for(current):
         return [tuple(value) for value in day_windows.get(current, day_windows.get(current.isoformat(), []))]
 
     def eligible_on(item, current):
+        subject_cap = int(item.get("habitual_daily_max_minutes") or 0)
+        below_subject_cap = not subject_cap or allocated_by_subject_day[(item["id"], current.isoformat())] < subject_cap
         return (
             item.get("is_schedulable", True)
+            and below_subject_cap
             and _fits_day(item, current)
             and _can_allocate_item(item, current)
             and (not item.get("effective_start_date") or current.isoformat() >= item["effective_start_date"])
@@ -478,6 +485,9 @@ def distribute(items, day_windows, start: date, end: date, *, pause_minutes=10,
                 deadline_need = deadline_need_for(selected, cursor)
                 weekly_need = weekly_need_for(selected, cursor)
                 desired = max(deadline_need, weekly_need)
+                subject_cap = int(selected.get("habitual_daily_max_minutes") or 0)
+                if subject_cap:
+                    desired = min(desired, max(0, subject_cap - allocated_by_subject_day[(selected["id"], cursor.isoformat())]))
                 if selected.get("required_study_minutes"):
                     desired = min(desired, selected["to_allocate"])
                 if content and content.get("planning_remaining_minutes") is not None and not selected.get("review_mode"):
@@ -492,6 +502,9 @@ def distribute(items, day_windows, start: date, end: date, *, pause_minutes=10,
                         if item["id"] == selected["id"]:
                             continue
                         alternative_desired = max(deadline_need_for(item, cursor), weekly_need_for(item, cursor))
+                        alternative_cap = int(item.get("habitual_daily_max_minutes") or 0)
+                        if alternative_cap:
+                            alternative_desired = min(alternative_desired, max(0, alternative_cap - allocated_by_subject_day[(item["id"], cursor.isoformat())]))
                         alternative_duration = _allocation_duration(
                             item, available, alternative_desired, minimum_duration,
                             maximum_duration, default_duration, pause_minutes,
@@ -503,6 +516,9 @@ def distribute(items, day_windows, start: date, end: date, *, pause_minutes=10,
                     selected = max(alternatives, key=lambda item: _candidate_score(item, weekly_needs))
                     content, topic_reason = _topic_choice(selected, cursor)
                     desired = max(deadline_need_for(selected, cursor), weekly_need_for(selected, cursor))
+                    subject_cap = int(selected.get("habitual_daily_max_minutes") or 0)
+                    if subject_cap:
+                        desired = min(desired, max(0, subject_cap - allocated_by_subject_day[(selected["id"], cursor.isoformat())]))
                     if selected.get("required_study_minutes"):
                         desired = min(desired, selected["to_allocate"])
                     if content and content.get("planning_remaining_minutes") is not None and not selected.get("review_mode"):
@@ -522,7 +538,10 @@ def distribute(items, day_windows, start: date, end: date, *, pause_minutes=10,
                 if int((selected.get("minimum_by_week") or {}).get(monday, 0)) > 0 and weekly_need_for(selected, cursor) > 0:
                     reason_bits.append("mínimo semanal garantido")
                 elif weekly_need_for(selected, cursor) > 0:
-                    reason_bits.append("meta semanal distribuída")
+                    reason_bits.append(
+                        "meta diária distribuída" if selected.get("daily_goal_minutes")
+                        else "meta semanal distribuída"
+                    )
                 elif selected.get("urgency_reasons"):
                     reason_bits.append(selected["urgency_reasons"][0])
                 remaining_before = max(selected["to_allocate"], weekly_needs.get(selected["id"], 0))
@@ -540,11 +559,13 @@ def distribute(items, day_windows, start: date, end: date, *, pause_minutes=10,
                     "source": "automatic", "formation_name": selected.get("formation_name"),
                     "deadline_date": selected.get("deadline_date"), "risk_label": selected.get("risk_label"),
                     "automatic_urgency": int(selected.get("automatic_urgency") or 0),
+                    "review_campaign_id": selected.get("review_campaign_id"),
                     "remaining_before_minutes": int(remaining_before),
                     "topic_progress_percent": content.get("effort_progress_percent") if content else None,
                     "topic_remaining_minutes": content.get("planning_remaining_minutes") if content else None,
                 }
                 selected["allocated"] += duration
+                allocated_by_subject_day[(selected["id"], cursor.isoformat())] += duration
                 selected["_deadline_allocated"] += min(duration, selected["to_allocate"])
                 selected["to_allocate"] = max(0, selected["to_allocate"] - duration)
                 allocated_by_week[(selected["id"], monday)] += duration
@@ -573,7 +594,9 @@ def distribute(items, day_windows, start: date, end: date, *, pause_minutes=10,
             0,
             int(item.get("deferred_beyond_preview_minutes") or 0),
             int(item.get("unallocated_minutes") or 0) - int(item["_period_demand_minutes"]),
-        ) if item.get("required_study_minutes") else 0
+        ) if item.get("required_study_minutes") else max(
+            0, int(item.get("deferred_beyond_preview_minutes") or 0)
+        )
         item["unallocated_due_to_capacity_minutes"] = int(shortage)
         item["allocation_state"] = "capacity_insufficient" if shortage else "scheduled"
         if shortage:

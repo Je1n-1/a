@@ -126,6 +126,39 @@ function elapsedSeconds() {
     : base;
 }
 
+function pauseSeconds() {
+  if (!state.focus) return 0;
+  const stored = seconds(state.focus.pause_seconds);
+  return state.focus.status === "paused"
+    ? stored + Math.max(0, Math.floor((Date.now() - state.receivedAt) / 1000))
+    : stored;
+}
+
+function clockCycle(secondsValue) {
+  const total = Math.max(0, seconds(secondsValue));
+  const completeHours = Math.floor(total / 3600);
+  const remainder = total % 3600;
+  return {
+    completeHours,
+    cycleSeconds:total > 0 && remainder === 0 ? 3600 : remainder,
+  };
+}
+
+function clockStrokeOffset(secondsValue) {
+  const circumference = 2 * Math.PI * 88;
+  return circumference * (1 - clockCycle(secondsValue).cycleSeconds / 3600);
+}
+
+function clockMarkup(elapsed, plannedMinutes) {
+  const circumference = (2 * Math.PI * 88).toFixed(3);
+  const elapsedCycle = clockCycle(elapsed);
+  const goalSeconds = Math.max(60, Number(plannedMinutes || 0) * 60);
+  const goalCycle = clockCycle(goalSeconds);
+  const complete = elapsedCycle.completeHours ? `${elapsedCycle.completeHours} volta(s) completa(s)` : "primeira hora";
+  const goalComplete = goalCycle.completeHours ? `Objetivo: ${goalCycle.completeHours} h completa(s)${goalCycle.cycleSeconds < 3600 ? " e ciclo atual" : ""}` : "Objetivo dentro da primeira hora";
+  return `<div class="focus-clock" aria-label="Relógio circular de sessenta minutos. ${esc(complete)}."><svg viewBox="0 0 220 220" aria-hidden="true"><circle class="focus-clock-track" cx="110" cy="110" r="88"></circle><circle class="focus-clock-goal" cx="110" cy="110" r="88" stroke-dasharray="${circumference}" stroke-dashoffset="${clockStrokeOffset(goalSeconds)}"></circle><circle class="focus-clock-progress" cx="110" cy="110" r="88" stroke-dasharray="${circumference}" stroke-dashoffset="${clockStrokeOffset(elapsed)}" data-clock-progress></circle>${[0,90,180,270].map(angle => `<line class="focus-clock-mark" x1="110" y1="13" x2="110" y2="23" transform="rotate(${angle} 110 110)"></line>`).join("")}</svg><div class="focus-clock-center"><strong data-focus-elapsed>${formatDuration(elapsed)}</strong><span data-clock-laps>${esc(complete)}</span><small>${esc(goalComplete)}</small></div></div>`;
+}
+
 function plannedDurationMinutes() {
   return Math.max(1, Number(
     state.focus?.planned_duration_minutes ||
@@ -318,12 +351,13 @@ function renderActive() {
   const elapsed = elapsedSeconds();
   const duration = plannedDurationMinutes();
   const remaining = Math.max(0, duration * 60 - elapsed);
+  const pauses = pauseSeconds();
   const running = focus.status === "running";
   const canFinish = (running || focus.status === "paused") && elapsed >= 1 && !finalizing;
   const primary = running
     ? '<button class="button" type="button" data-pause>Pausar</button>'
     : '<button class="button primary" type="button" data-resume>Continuar</button>';
-  app.innerHTML = `<div class="focus-grid"><section class="focus-card focus-timer-card"><div class="focus-session-meta"><span class="tag">${focus.planned_session_id ? "BLOCO PLANEJADO" : "SESSÃO LIVRE"}</span><span class="focus-phase">${running ? "Em foco" : "Pausada"}</span></div><h1>${esc(focus.subject_name || "Matéria")}</h1><p class="focus-topic">${esc(focus.topic_name || "Sem tópico definido")}</p><div class="focus-timer" aria-label="Tempo decorrido" data-focus-elapsed>${formatDuration(elapsed)}</div><div class="focus-timer-details"><div><span>Tempo decorrido</span><strong data-focus-elapsed-small>${formatDuration(elapsed)}</strong></div><div><span>Tempo restante</span><strong data-focus-remaining>${formatDuration(remaining)}</strong></div><div><span>Planejado</span><strong>${minutesLabel(duration)}</strong></div></div><p class="focus-overtime ${remaining === 0 && elapsed ? "visible" : ""}" data-focus-overtime>${remaining === 0 && elapsed ? "Você concluiu o tempo planejado. Pode encerrar quando quiser." : ""}</p><div class="focus-controls">${primary}<button class="button" type="button" data-finish ${canFinish ? "" : "disabled"}>${finalizing ? "Finalizando…" : "Encerrar por hoje"}</button><button class="button danger" type="button" data-cancel ${finalizing ? "disabled" : ""}>Cancelar</button></div></section><aside class="focus-card focus-notes-card"><div class="focus-notes-heading"><div><span class="tag">ANOTAÇÕES</span><h2>Seu caderno da sessão</h2></div><span class="note-status ${state.noteStatus}" data-note-status title="${esc(state.noteError)}">${noteStatusText()}</span></div><div class="focus-note-tabs" role="tablist" aria-label="Anotações"><button class="note-tab ${state.noteView === "editor" ? "active" : ""}" type="button" data-note-view="editor" role="tab" aria-selected="${state.noteView === "editor"}">Escrever</button><button class="note-tab ${state.noteView === "preview" ? "active" : ""}" type="button" data-note-view="preview" role="tab" aria-selected="${state.noteView === "preview"}">Prévia</button><button class="button ghost focus-save-note" type="button" data-save-note>Salvar agora</button></div>${state.noteView === "preview" ? `<article class="markdown-preview" aria-label="Prévia segura do Markdown">${markdown(state.note.content)}</article>` : `<div class="focus-note-editor"><label>Título<input id="note-title" value="${esc(state.note.title)}" placeholder="Ex.: Ideias-chave da sessão"></label><label>Tags<input id="note-tags" value="${esc(state.note.tags)}" placeholder="ex.: estudos, revisão"></label><label class="focus-note-content">Markdown<textarea id="note-content" placeholder="Escreva suas anotações em Markdown…">${esc(state.note.content)}</textarea></label></div>`}</aside></div>`;
+  app.innerHTML = `<div class="focus-grid"><section class="focus-card focus-timer-card"><div class="focus-session-meta"><span class="tag">${focus.planned_session_id ? "BLOCO PLANEJADO" : "SESSÃO LIVRE"}</span><span class="focus-phase">${running ? "Em foco" : "Pausada"}</span></div><h1>${esc(focus.subject_name || "Matéria")}</h1><p class="focus-topic">${esc(focus.topic_name || "Sem tópico definido")}</p>${clockMarkup(elapsed, duration)}<div class="focus-timer-details"><div><span>Foco</span><strong data-focus-elapsed-small>${formatDuration(elapsed)}</strong></div><div><span>Restante</span><strong data-focus-remaining>${formatDuration(remaining)}</strong></div><div><span>Pausas</span><strong data-focus-pauses>${formatDuration(pauses)}</strong></div><div><span>Total</span><strong data-focus-total>${formatDuration(elapsed + pauses)}</strong></div></div><p class="focus-overtime ${remaining === 0 && elapsed ? "visible" : ""}" data-focus-overtime>${remaining === 0 && elapsed ? "Você concluiu o tempo planejado. Pode encerrar quando quiser." : ""}</p><div class="focus-controls">${primary}${!running ? '<button class="button ghost" type="button" data-break-reason>Motivo da pausa</button>' : ""}<button class="button" type="button" data-finish ${canFinish ? "" : "disabled"}>${finalizing ? "Finalizando…" : "Encerrar por hoje"}</button><button class="button danger" type="button" data-cancel ${finalizing ? "disabled" : ""}>Cancelar</button></div></section><aside class="focus-card focus-notes-card"><div class="focus-notes-heading"><div><span class="tag">ANOTAÇÕES</span><h2>Seu caderno da sessão</h2></div><span class="note-status ${state.noteStatus}" data-note-status title="${esc(state.noteError)}">${noteStatusText()}</span></div><div class="focus-note-tabs" role="tablist" aria-label="Anotações"><button class="note-tab ${state.noteView === "editor" ? "active" : ""}" type="button" data-note-view="editor" role="tab" aria-selected="${state.noteView === "editor"}">Escrever</button><button class="note-tab ${state.noteView === "preview" ? "active" : ""}" type="button" data-note-view="preview" role="tab" aria-selected="${state.noteView === "preview"}">Prévia</button><button class="button ghost focus-save-note" type="button" data-save-note>Salvar agora</button></div>${state.noteView === "preview" ? `<article class="markdown-preview" aria-label="Prévia segura do Markdown">${markdown(state.note.content)}</article>` : `<div class="focus-note-editor"><label>Título<input id="note-title" value="${esc(state.note.title)}" placeholder="Ex.: Ideias-chave da sessão"></label><label>Tags<input id="note-tags" value="${esc(state.note.tags)}" placeholder="ex.: estudos, revisão"></label><label class="focus-note-content">Markdown<textarea id="note-content" placeholder="Escreva suas anotações em Markdown…">${esc(state.note.content)}</textarea></label></div>`}</aside></div>`;
   bindActiveActions();
   updateClock();
   syncClock();
@@ -345,9 +379,14 @@ function updateClock() {
   if (!state.focus) return;
   const elapsed = elapsedSeconds();
   const remaining = Math.max(0, plannedDurationMinutes() * 60 - elapsed);
+  const pauses = pauseSeconds();
   app.querySelectorAll("[data-focus-elapsed]").forEach(element => { element.textContent = formatDuration(elapsed); });
   app.querySelectorAll("[data-focus-elapsed-small]").forEach(element => { element.textContent = formatDuration(elapsed); });
   app.querySelectorAll("[data-focus-remaining]").forEach(element => { element.textContent = formatDuration(remaining); });
+  app.querySelectorAll("[data-focus-pauses]").forEach(element => { element.textContent = formatDuration(pauses); });
+  app.querySelectorAll("[data-focus-total]").forEach(element => { element.textContent = formatDuration(elapsed + pauses); });
+  app.querySelectorAll("[data-clock-progress]").forEach(element => { element.style.strokeDashoffset = String(clockStrokeOffset(elapsed)); });
+  app.querySelectorAll("[data-clock-laps]").forEach(element => { const laps = clockCycle(elapsed).completeHours; element.textContent = laps ? `${laps} volta(s) completa(s)` : "primeira hora"; });
   const overtime = app.querySelector("[data-focus-overtime]");
   if (overtime) {
     overtime.classList.toggle("visible", remaining === 0 && elapsed > 0);
@@ -380,6 +419,7 @@ function syncPolling() {
 function bindActiveActions() {
   app.querySelector("[data-pause]")?.addEventListener("click", pauseFocus);
   app.querySelector("[data-resume]")?.addEventListener("click", resumeFocus);
+  app.querySelector("[data-break-reason]")?.addEventListener("click", openBreakReasonDialog);
   app.querySelector("[data-finish]")?.addEventListener("click", openFinishDialog);
   app.querySelector("[data-cancel]")?.addEventListener("click", confirmCancel);
   app.querySelector("[data-save-note]")?.addEventListener("click", async () => {
@@ -399,6 +439,29 @@ function bindActiveActions() {
       state.note[field] = event.target.value;
       markNoteDirty();
     });
+  });
+}
+
+function openBreakReasonDialog() {
+  const current = [...(state.focus?.breaks || [])].reverse().find(item => item.started_at && !item.ended_at);
+  if (!current) return toast("A pausa atual ainda não foi encontrada no servidor.");
+  const options = [
+    ["rest", "Descanso"], ["water_food", "Água/alimentação"], ["bathroom", "Banheiro"],
+    ["external_interruption", "Interrupção externa"], ["difficulty", "Dificuldade"], ["other", "Outro"],
+  ];
+  showDialog({
+    title:"Motivo da pausa (opcional)",
+    message:"Escolha somente se quiser. Retomar nunca exige motivo.",
+    actions:[
+      ...options.map(([value, label]) => ({
+        label,
+        run:async () => {
+          await api(`/session-breaks/${current.id}`, {method:"PATCH", body:JSON.stringify({reason:value, version:current.version})});
+          await refreshFromServer(true);
+        },
+      })),
+      {label:"Deixar sem motivo"},
+    ],
   });
 }
 
@@ -632,7 +695,7 @@ function openFinishDialog() {
     ["advance", "Concluí e quero avançar ao próximo"],
     ["review", "Quero revisar depois"],
   ];
-  dialogRoot.innerHTML = `<div class="focus-dialog-backdrop"><section class="focus-dialog" role="dialog" aria-modal="true"><h2>Encerrar por hoje</h2><p>Serão registrados ${formatDuration(elapsedSeconds())} de foco real.</p><form id="finish-form" class="focus-form">${hasTopic ? `<fieldset><legend>Como ficou este tópico?</legend>${outcomes.map(([value, label], index) => `<label><input type="radio" name="topic_outcome" value="${value}" ${index === 0 ? "checked" : ""}> ${label}</label>`).join("")}</fieldset><label data-future-action hidden>Blocos automáticos futuros<select name="future_blocks_action"><option value="replan">Redistribuir no próximo planejamento</option><option value="next_topic">Converter para o próximo tópico elegível</option><option value="review">Manter como revisão</option></select></label>` : ""}<p class="form-error" data-finish-error></p><div class="focus-dialog-actions"><button class="button" type="button" data-finish-close>Continuar foco</button><button class="button primary" type="submit">Registrar sessão</button></div></form></section></div>`;
+  dialogRoot.innerHTML = `<div class="focus-dialog-backdrop"><section class="focus-dialog" role="dialog" aria-modal="true"><h2>Encerrar por hoje</h2><p>Serão registrados ${formatDuration(elapsedSeconds())} de foco real e ${formatDuration(pauseSeconds())} de pausas.</p><form id="finish-form" class="focus-form">${hasTopic ? `<fieldset><legend>Como ficou este tópico?</legend>${outcomes.map(([value, label], index) => `<label><input type="radio" name="topic_outcome" value="${value}" ${index === 0 ? "checked" : ""}> ${label}</label>`).join("")}</fieldset><label data-future-action hidden>Blocos automáticos futuros<select name="future_blocks_action"><option value="replan">Redistribuir no próximo planejamento</option><option value="next_topic">Converter para o próximo tópico elegível</option><option value="review">Manter como revisão</option></select></label>` : ""}<fieldset><legend>Avaliação rápida (opcional)</legend><label><input type="radio" name="assessment" value=""> Prefiro não responder</label><label><input type="radio" name="assessment" value="still_difficult"> Ainda tenho dificuldade</label><label><input type="radio" name="assessment" value="with_help"> Consigo com ajuda</label><label><input type="radio" name="assessment" value="independent"> Consigo sozinho</label><label><input type="radio" name="assessment" value="can_apply"> Consigo aplicar</label></fieldset><label><input type="checkbox" name="fatigue" value="true"> Senti cansaço</label><label><input type="checkbox" name="concentration_difficulty" value="true"> Tive dificuldade de concentração</label><label><input type="checkbox" name="new_content" value="true"> Encontrei conteúdo novo</label><p class="form-error" data-finish-error></p><div class="focus-dialog-actions"><button class="button" type="button" data-finish-close>Continuar foco</button><button class="button primary" type="submit">Registrar sessão</button></div></form></section></div>`;
   const backdrop = dialogRoot.firstElementChild;
   const form = backdrop.querySelector("#finish-form");
   const future = form.querySelector("[data-future-action]");
@@ -650,7 +713,14 @@ function openFinishDialog() {
     event.preventDefault();
     const values = new FormData(form);
     const outcome = values.get("topic_outcome") || "continue";
-    const payload = {version: state.focus.version, topic_outcome: outcome};
+    const payload = {
+      version:state.focus.version,
+      topic_outcome:outcome,
+      assessment:values.get("assessment") || null,
+      fatigue:values.get("fatigue") === "true",
+      concentration_difficulty:values.get("concentration_difficulty") === "true",
+      new_content:values.get("new_content") === "true",
+    };
     if (["completed", "advance"].includes(outcome)) payload.future_blocks_action = values.get("future_blocks_action");
     if (noteIsMeaningful()) payload.note = notePayload();
     finalizing = true;

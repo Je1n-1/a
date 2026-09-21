@@ -210,10 +210,25 @@ def study_collection():
         conn, request.args.get("archived")=="1", request.args.get("week_reference"), visibility,
         request.args.get("formation_id"), request.args.get("q"), request.args.get("review_status"),
     ))
+@api.post("/studies/preview")
+def study_registration_preview():
+    return run(lambda conn: core.study_registration_preview(conn, body()))
 @api.get("/studies/<int:ident>")
 def study_detail(ident): return run(lambda conn: core.subject_detail(conn,ident))
 @api.route("/studies/<int:ident>",methods=["PATCH","DELETE"])
 def study_item(ident): return run(lambda conn: core.update_study(conn,ident,body()) if request.method=="PATCH" else core.delete_study(conn,ident) or {"deleted":True})
+@api.patch("/studies/<int:ident>/daily-goal")
+def study_daily_goal(ident): return run(lambda conn: core.update_daily_goal(conn, ident, body()))
+@api.route("/studies/<int:ident>/recommendation", methods=["GET", "POST"])
+def study_recommendation(ident):
+    return run(lambda conn: core.adaptive_recommendation(conn, ident, request.method == "POST"))
+@api.get("/studies/<int:ident>/recommendations")
+def study_recommendation_history(ident): return run(lambda conn: core.adaptive_recommendation_history(conn, ident))
+@api.post("/studies/<int:ident>/observations")
+def study_observation(ident): return run(lambda conn: core.add_study_observation(conn, ident, body()))
+@api.post("/studies/<int:ident>/recommendations/<int:snapshot_id>/decision")
+def study_recommendation_decision(ident, snapshot_id):
+    return run(lambda conn: core.accept_study_recommendation(conn, ident, snapshot_id, body()))
 @api.get("/studies/<int:ident>/dependencies")
 def study_dependencies(ident): return run(lambda conn: core.study_dependencies(conn, ident))
 @api.post("/studies/<int:ident>/<action>")
@@ -254,8 +269,15 @@ def topic_dependencies(ident):
 
 @api.route("/sessions",methods=["GET","POST"])
 def session_collection(): return run(lambda conn: core.history(conn,request.args.get("start"),request.args.get("end")) if request.method=="GET" else core.create_session(conn,body()))
-@api.route("/sessions/<int:ident>",methods=["PATCH","DELETE"])
-def session_item(ident): return run(lambda conn: core.update_session(conn,ident,body()) if request.method=="PATCH" else core.delete_session(conn,ident) or {"deleted":True})
+@api.route("/sessions/<int:ident>",methods=["GET","PATCH","DELETE"])
+def session_item(ident):
+    if request.method == "GET": return run(lambda conn: core.session_detail(conn, ident))
+    if request.method == "PATCH": return run(lambda conn: core.update_session(conn,ident,body()))
+    return run(lambda conn: core.delete_session(conn,ident) or {"deleted":True})
+@api.post("/sessions/<int:ident>/breaks")
+def session_break_create(ident): return run(lambda conn: core.add_session_break_correction(conn, ident, body()))
+@api.patch("/session-breaks/<int:ident>")
+def session_break_update(ident): return run(lambda conn: core.update_session_break(conn, ident, body()))
 
 
 @api.get("/focus/active")
@@ -276,6 +298,8 @@ def focus_note(ident): return run(lambda conn: core.save_focus_note(conn, ident,
 def focus_finish(ident): return run(lambda conn: core.finish_focus_session(conn, ident, body()))
 @api.post("/focus/sessions/<int:ident>/cancel")
 def focus_cancel(ident): return run(lambda conn: core.cancel_focus_session(conn, ident, body()))
+@api.get("/focus/sessions/<int:ident>/breaks")
+def focus_breaks(ident): return run(lambda conn: core._focus_snapshot(conn, core._focus_row(conn, ident))["breaks"])
 
 
 @api.route("/notes", methods=["GET", "POST"])
@@ -345,6 +369,34 @@ def review_complete(ident):
     return run(lambda conn: core.complete_review(conn,ident,data.get("rating"),data.get("duration_seconds"),data.get("notes")))
 
 
+@api.route("/review-campaigns", methods=["GET", "POST"])
+def review_campaign_collection():
+    return run(lambda conn: core.review_campaigns(conn, request.args.get("status")) if request.method == "GET" else core.create_review_campaign(conn, body()))
+@api.post("/review-campaigns/preview")
+def review_campaign_preview():
+    def operation(conn):
+        conn.execute("SAVEPOINT preview_review_campaign")
+        try:
+            created = core.create_review_campaign(conn, body())
+            campaign = created["campaign"]
+            first = max(core._date(campaign["start_date"]), core._local_now().date())
+            days = (core._date(campaign["end_date"]) - first).days + 1
+            preview = core.generate_plan(conn, first.isoformat(), min(93, max(1, days)))
+            return {"campaign": created, "preview": preview, "persisted": False}
+        finally:
+            conn.execute("ROLLBACK TO SAVEPOINT preview_review_campaign")
+            conn.execute("RELEASE SAVEPOINT preview_review_campaign")
+    return run(operation)
+@api.route("/review-campaigns/<int:ident>", methods=["GET", "PATCH"])
+def review_campaign_item(ident):
+    return run(lambda conn: core.review_campaign_detail(conn, ident) if request.method == "GET" else core.update_review_campaign(conn, ident, body()))
+@api.post("/review-campaigns/<int:ident>/<action>")
+def review_campaign_action(ident, action):
+    statuses = {"pause": "paused", "resume": "active", "complete": "completed", "cancel": "cancelled"}
+    if action not in statuses: return respond({"error": "Ação de campanha inválida."}, 400)
+    return run(lambda conn: core.set_review_campaign_status(conn, ident, statuses[action]))
+
+
 @api.route("/availability",methods=["GET","POST"])
 def availability_collection(): return run(core.availability if request.method=="GET" else lambda conn:core.set_availability(conn,body()))
 @api.post("/availability/batch")
@@ -384,9 +436,17 @@ def planned_reschedule(ident): return run(lambda conn:core.reschedule_planned(co
 def planning_generate(): return run(lambda conn: core.generate_plan(conn,body().get("start",core._today()),int(body().get("days",7))))
 @api.post("/planning/generate-smart")
 def planning_generate_smart(): return run(lambda conn: core.generate_plan(conn,body().get("start",core._today()),int(body().get("days",7))))
+@api.post("/planning/preview")
+def planning_preview(): return run(lambda conn: core.create_planning_preview(conn, body()))
 @api.post("/planning/apply")
 def planning_apply():
     return run(lambda conn: core.apply_smart_plan(conn, body()))
+@api.post("/planning/apply-versioned")
+def planning_apply_versioned(): return run(lambda conn: core.apply_versioned_plan(conn, body()))
+@api.get("/planning/drafts/<token>")
+def planning_draft(token): return run(lambda conn: core.planning_draft(conn, token))
+@api.post("/planning/drafts/<token>/discard")
+def planning_draft_discard(token): return run(lambda conn: core.discard_planning_draft(conn, token))
 @api.get("/planning/capacity")
 def planning_capacity(): return run(lambda conn: core.planning_capacity(conn, request.args.get("start", core._today()), request.args.get("end", (core._local_now().date()+timedelta(days=6)).isoformat())))
 @api.get("/planning/items")
@@ -398,8 +458,21 @@ def planning_items():
     ))
 @api.get("/planning/ideal")
 def planning_ideal(): return run(lambda conn: core.planning_ideal(conn, request.args.get("start", core._today()), request.args.get("end", (core._local_now().date()+timedelta(days=6)).isoformat())))
+@api.get("/planning/calendar-events")
+def planning_calendar_events(): return run(lambda conn: core.planning_calendar_events(conn, request.args.get("start", core._today()), request.args.get("end", (core._local_now().date()+timedelta(days=6)).isoformat())))
 @api.get("/today")
 def today(): return run(core.today_overview)
+@api.route("/daily-results/<selected_date>", methods=["GET", "PUT"])
+def daily_result(selected_date):
+    return run(lambda conn: core.daily_result(conn, selected_date) if request.method == "GET" else core.save_daily_result(conn, selected_date, body()))
+@api.get("/studies/<int:ident>/objectives")
+def study_objectives(ident): return run(lambda conn: core.objectives_for_study(conn, ident))
+@api.post("/studies/<int:ident>/objectives")
+def study_objective_create(ident): return run(lambda conn: core.create_study_objective(conn, ident, body()))
+@api.post("/objectives/<int:ident>/close")
+def objective_close(ident): return run(lambda conn: core.close_study_objective(conn, ident, body()))
+@api.post("/objectives/<int:ident>/reopen")
+def objective_reopen(ident): return run(lambda conn: core.reopen_study_objective(conn, ident))
 @api.get("/recommendation")
 def recommendation(): return run(core.recommendation)
 @api.get("/search")
@@ -410,6 +483,14 @@ def analytics(): return run(core.analytics)
 def analytics_workload(): return run(lambda conn: core.analytics_workload(conn, request.args.get("start"), request.args.get("end"), request.args.get("formation_id"), request.args.get("item_id"), request.args.get("kind")))
 @api.get("/analytics/summary")
 def analytics_summary(): return run(lambda conn: core.analytics_summary(conn, request.args.get("date")))
+@api.get("/analytics/detailed")
+def analytics_detailed():
+    return run(lambda conn: core.analytics_detailed(
+        conn,
+        request.args.get("start"), request.args.get("end"),
+        request.args.get("formation_id"), request.args.get("item_id") or request.args.get("study_subject_id"),
+        request.args.get("campaign_id"), request.args.get("purpose"),
+    ))
 
 @api.route("/projects",methods=["GET","POST"])
 def project_collection(): return run(lambda conn: core.projects(conn,request.args.get("archived")=="1") if request.method=="GET" else core.create_project(conn,body()))

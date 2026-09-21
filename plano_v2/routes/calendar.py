@@ -1,11 +1,11 @@
 """Feed iCalendar local para os blocos planejados."""
 from datetime import timedelta
 
-from flask import Blueprint, Response, request
+from flask import Blueprint, Response, jsonify, redirect, request
 
 from config import TIMEZONE
 from database.connection import connect
-from services import core
+from services import core, google_calendar
 from services.calendar_export import calendar_ics
 
 
@@ -35,3 +35,55 @@ def calendar_feed():
         return response
     except core.DomainError as error:
         return {"error": str(error), "code": error.code}, error.status
+
+
+def _calendar_error(error):
+    return jsonify({"error": str(error), "code": error.code}), error.status
+
+
+@calendar_api.get("/calendar/google/status")
+def google_status():
+    with connect() as conn:
+        return jsonify(google_calendar.status(conn))
+
+
+@calendar_api.post("/calendar/google/authorize")
+def google_authorize():
+    try:
+        values = request.get_json(silent=True) or {}
+        with connect() as conn:
+            return jsonify(google_calendar.authorization_url(conn, values.get("calendar_id", "primary")))
+    except google_calendar.CalendarIntegrationError as error:
+        return _calendar_error(error)
+
+
+@calendar_api.get("/calendar/google/callback")
+def google_callback():
+    try:
+        if request.args.get("error"):
+            raise google_calendar.CalendarIntegrationError(
+                "A autorização do Google foi cancelada.", "google_oauth_cancelled", 409,
+            )
+        with connect() as conn:
+            google_calendar.complete_authorization(conn, request.args.get("code"), request.args.get("state"))
+        return redirect("/settings/integrations?google=connected", code=303)
+    except google_calendar.CalendarIntegrationError as error:
+        return redirect(f"/settings/integrations?google=error&code={error.code}", code=303)
+
+
+@calendar_api.post("/calendar/google/sync")
+def google_sync():
+    try:
+        with connect() as conn:
+            return jsonify(google_calendar.sync_pending(conn))
+    except google_calendar.CalendarIntegrationError as error:
+        return _calendar_error(error)
+
+
+@calendar_api.post("/calendar/google/disconnect")
+def google_disconnect():
+    try:
+        with connect() as conn:
+            return jsonify(google_calendar.disconnect(conn))
+    except google_calendar.CalendarIntegrationError as error:
+        return _calendar_error(error)

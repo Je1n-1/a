@@ -77,10 +77,11 @@ getStateChannel();
 installStorageFallbackListener();
 
 export async function api(path, options = {}) {
-  const headers = {...(options.body instanceof FormData ? {} : {"Content-Type": "application/json"}), ...(options.headers || {})};
+  const {notify = true, ...requestOptions} = options;
+  const headers = {...(requestOptions.body instanceof FormData ? {} : {"Content-Type": "application/json"}), ...(requestOptions.headers || {})};
   let response;
   try {
-    response = await fetch(`/api${path}`, {...options, headers});
+    response = await fetch(`/api${path}`, {...requestOptions, headers});
   } catch (_) {
     throw new Error("Não foi possível conectar ao servidor. Verifique se o plano está em execução.");
   }
@@ -97,8 +98,8 @@ export async function api(path, options = {}) {
     error.details = payload?.details;
     throw error;
   }
-  const method = String(options.method || "GET").toUpperCase();
-  if (MUTATION_METHODS.has(method)) notifyDataChanged(method, path);
+  const method = String(requestOptions.method || "GET").toUpperCase();
+  if (notify && MUTATION_METHODS.has(method)) notifyDataChanged(method, path);
   return payload;
 }
 

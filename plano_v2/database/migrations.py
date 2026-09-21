@@ -34,6 +34,23 @@ PRESERVED_TABLES = (
     "avaliacoes",
     "revisoes",
     "anotacoes_estudo",
+    "sessoes_foco",
+    "review_campaigns",
+    "review_campaign_items",
+    "study_plan_baselines",
+    "study_observations",
+    "recommendation_snapshots",
+    "session_breaks",
+    "study_session_corrections",
+    "calendar_integrations",
+    "external_calendar_events",
+    "calendar_sync_queue",
+    "study_objectives",
+    "study_budget_revisions",
+    "planning_drafts",
+    "plan_revisions",
+    "daily_study_results",
+    "daily_study_result_reasons",
 )
 LOGGER = logging.getLogger(__name__)
 

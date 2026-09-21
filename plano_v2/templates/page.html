@@ -6,7 +6,7 @@
   <title>{{ title }} · plano.</title>
   <link rel="stylesheet" href="{{ static_asset('css/ui_refinement.css') }}">
 </head>
-<body data-page="{{ page }}">
+<body data-page="{{ page }}"{% if page_section %} data-page-section="{{ page_section }}"{% endif %}{% if subject_id %} data-subject-id="{{ subject_id }}"{% endif %}{% if selected_id %} data-selected-id="{{ selected_id }}"{% endif %}>
   <a class="skip-link" href="#main-content">Pular para o conteúdo</a>
   <div class="app-shell">
     <aside class="sidebar" id="primary-navigation" aria-label="Navegação principal">
@@ -18,10 +18,11 @@
         <a href="/" data-nav="today">Hoje</a>
         <a href="/planning" data-nav="planning">Planejamento</a>
         <a href="/formations" data-nav="formations">Formações</a>
-        <a href="/studies" data-nav="studies">Estudos atuais</a>
+        <a href="/subjects" data-nav="studies">Minhas disciplinas</a>
         <a href="/reviews" data-nav="reviews">Revisões</a>
         <a href="/history" data-nav="history">Histórico</a>
         <a href="/analytics" data-nav="analytics">Análises</a>
+        <a href="/settings/study" data-nav="settings">Configurações</a>
         <small>Mais</small>
         <a href="/projects" data-nav="projects">Projetos</a>
       </nav>

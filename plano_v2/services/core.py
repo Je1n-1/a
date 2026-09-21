@@ -3,16 +3,23 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date, datetime, timedelta
+import hashlib
 import json
 from pathlib import Path
 import re
 import sqlite3
 import unicodedata
+import uuid
 from config import LOCAL_TIMEZONE
 from database.repositories import core as repo
 from services import canonical_links
 from services import grade_import
 from services import smart_planning
+from services import adaptive_planning
+from services import analytics_insights
+from services import focus_tracking
+from services import google_calendar
+from services import interactive_planning
 
 
 class DomainError(ValueError):
@@ -64,6 +71,139 @@ def _get(conn, table, ident):
     value = repo.one(conn, f"SELECT * FROM {table} WHERE id=?", (ident,))
     if not value: raise DomainError("Registro não encontrado.", 404)
     return value
+
+
+def _objective_seed(conn, study_id):
+    return repo.one(conn, """
+        SELECT s.id study_subject_id,s.objective,s.start_date,s.target_date,s.required_study_minutes,
+          s.personal_name,s.curriculum_subject_id,d.name curriculum_name,d.start_date curriculum_start_date,
+          d.deadline_date,d.end_date,d.required_study_minutes curriculum_required_minutes,
+          d.workload_minutes
+        FROM materias_estudo s
+        LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id
+        WHERE s.id=?
+    """, (study_id,))
+
+
+def ensure_active_objective(conn, study_id):
+    """Cria um ciclo somente durante uma operação de escrita explícita."""
+    current = repo.one(conn, "SELECT * FROM study_objectives WHERE study_subject_id=? AND status='active' ORDER BY id DESC LIMIT 1", (study_id,))
+    if current:
+        return current
+    seed = _objective_seed(conn, study_id)
+    if not seed:
+        raise DomainError("Estudo não encontrado.", 404)
+    explicit = seed.get("curriculum_required_minutes") if seed.get("curriculum_subject_id") else seed.get("required_study_minutes")
+    if explicit not in (None, ""):
+        budget, origin, provisional = int(explicit), "user", 0
+    elif seed.get("workload_minutes") not in (None, ""):
+        budget, origin, provisional = int(seed["workload_minutes"]), "institutional_seed", 1
+    else:
+        baseline = repo.one(conn, "SELECT current_budget_minutes FROM study_plan_baselines WHERE study_subject_id=? AND active=1 ORDER BY id DESC LIMIT 1", (study_id,))
+        budget = int(baseline["current_budget_minutes"]) if baseline else None
+        origin, provisional = "legacy_provisional", 1
+    maximum = repo.one(conn, "SELECT COALESCE(MAX(cycle_number),0) number FROM study_objectives WHERE study_subject_id=?", (study_id,))
+    objective_id = repo.insert(conn, "study_objectives", {
+        "study_subject_id": study_id, "cycle_number": int(maximum["number"] or 0) + 1,
+        "objective_type": seed.get("objective") or "study", "status": "active",
+        "title": seed.get("curriculum_name") or seed.get("personal_name"),
+        "start_date": seed.get("start_date") or seed.get("curriculum_start_date") or _today(),
+        "deadline_date": seed.get("target_date") or seed.get("deadline_date") or seed.get("end_date"),
+        "budget_minutes": budget, "budget_origin": origin, "budget_is_provisional": provisional,
+    })
+    objective = _get(conn, "study_objectives", objective_id)
+    if budget is not None:
+        repo.insert(conn, "study_budget_revisions", {
+            "objective_id": objective_id, "previous_budget_minutes": None,
+            "new_budget_minutes": budget, "origin": origin,
+            "reason": "Estimativa inicial baseada na grade; pode ser ajustada." if origin == "institutional_seed" else "Orçamento inicial do objetivo.",
+        })
+    return objective
+
+
+def objectives_for_study(conn, study_id):
+    _get(conn, "materias_estudo", study_id)
+    return repo.many(conn, "SELECT * FROM study_objectives WHERE study_subject_id=? ORDER BY cycle_number DESC,id DESC", (study_id,))
+
+
+def create_study_objective(conn, study_id, values=None):
+    """Inicia explicitamente um novo ciclo sem reaproveitar sessões antigas."""
+    values = values or {}
+    study = _get(conn, "materias_estudo", study_id)
+    if study.get("archived_at") or study.get("status") not in {"active", "paused"}:
+        raise DomainError("Restaure ou retome o estudo antes de iniciar um novo objetivo.", 409, "study_not_current")
+    active = repo.one(conn, "SELECT * FROM study_objectives WHERE study_subject_id=? AND status='active'", (study_id,))
+    if active:
+        raise DomainError("Este estudo já possui um objetivo ativo.", 409, "active_objective_exists", details={"objective": active})
+    seed = _objective_seed(conn, study_id)
+    start = _date(values.get("start_date") or _today(), "Data inicial").isoformat()
+    deadline_raw = values.get("deadline_date", seed.get("target_date") or seed.get("deadline_date") or seed.get("end_date"))
+    deadline = _date(deadline_raw, "Prazo").isoformat() if deadline_raw else None
+    if deadline and deadline < start:
+        raise DomainError("O prazo não pode ser anterior ao início.")
+    raw_budget = values.get("budget_minutes")
+    budget = None if raw_budget in (None, "") else int(raw_budget)
+    if budget is not None and budget < 0:
+        raise DomainError("O orçamento do objetivo não pode ser negativo.")
+    origin = values.get("budget_origin") or ("user" if budget is not None else "legacy_provisional")
+    if origin not in {"institutional_seed", "user", "accepted_recommendation", "legacy_provisional"}:
+        raise DomainError("A origem do orçamento é inválida.")
+    maximum = repo.one(conn, "SELECT COALESCE(MAX(cycle_number),0) number FROM study_objectives WHERE study_subject_id=?", (study_id,))
+    ident = repo.insert(conn, "study_objectives", {
+        "study_subject_id": study_id,
+        "cycle_number": int(maximum["number"] or 0) + 1,
+        "objective_type": values.get("objective_type") or study.get("objective") or "study",
+        "status": "active", "title": values.get("title") or seed.get("curriculum_name") or seed.get("personal_name"),
+        "start_date": start, "deadline_date": deadline, "budget_minutes": budget,
+        "budget_origin": origin, "budget_is_provisional": 1 if values.get("budget_is_provisional") else 0,
+    })
+    if budget is not None:
+        repo.insert(conn, "study_budget_revisions", {
+            "objective_id": ident, "previous_budget_minutes": None, "new_budget_minutes": budget,
+            "origin": origin, "reason": values.get("reason") or "Novo ciclo iniciado explicitamente.",
+        })
+    return _get(conn, "study_objectives", ident)
+
+
+def reopen_study_objective(conn, objective_id):
+    """Reabre o mesmo ciclo; seu histórico continua pertencendo a ele."""
+    objective = _get(conn, "study_objectives", objective_id)
+    if objective["status"] == "active":
+        return {"objective": objective, "idempotent": True}
+    active = repo.one(conn, "SELECT id FROM study_objectives WHERE study_subject_id=? AND status='active'", (objective["study_subject_id"],))
+    if active:
+        raise DomainError("Encerre o objetivo ativo antes de reabrir este ciclo.", 409, "active_objective_exists")
+    repo.update(conn, "study_objectives", objective_id, {
+        "status": "active", "closed_at": None, "version": int(objective.get("version") or 1) + 1,
+    })
+    return {"objective": _get(conn, "study_objectives", objective_id), "idempotent": False}
+
+
+def _sync_active_objective(conn, study_id, changed_values):
+    objective = ensure_active_objective(conn, study_id)
+    seed = _objective_seed(conn, study_id)
+    updates = {}
+    if "required_study_minutes" in changed_values:
+        next_budget = seed.get("curriculum_required_minutes") if seed.get("curriculum_subject_id") else seed.get("required_study_minutes")
+        next_budget = int(next_budget) if next_budget not in (None, "") else None
+        if next_budget != objective.get("budget_minutes"):
+            repo.insert(conn, "study_budget_revisions", {
+                "objective_id": objective["id"], "previous_budget_minutes": objective.get("budget_minutes"),
+                "new_budget_minutes": next_budget, "origin": "user",
+                "reason": "Orçamento alterado explicitamente pelo usuário.",
+            })
+            updates.update({"budget_minutes": next_budget, "budget_origin": "user", "budget_is_provisional": 0})
+    if "target_date" in changed_values or "deadline_date" in changed_values:
+        updates["deadline_date"] = seed.get("target_date") or seed.get("deadline_date") or seed.get("end_date")
+    if "start_date" in changed_values:
+        updates["start_date"] = seed.get("start_date") or seed.get("curriculum_start_date") or objective["start_date"]
+    if "objective" in changed_values:
+        updates["objective_type"] = seed.get("objective") or objective["objective_type"]
+    if updates:
+        updates["version"] = int(objective.get("version") or 1) + 1
+        repo.update(conn, "study_objectives", objective["id"], updates)
+        objective = _get(conn, "study_objectives", objective["id"])
+    return objective
 def _fields(values, allowed):
     """Seleciona campos explicitamente enviados, inclusive ``null``.
 
@@ -164,6 +304,9 @@ STUDY = {
     "favorite", "priority", "difficulty", "weekly_goal_minutes", "start_date", "target_date",
     "status", "academic_period", "result", "final_score", "required_study_minutes",
     "minimum_weekly_minutes", "preferred_block_minutes", "allowed_weekdays",
+    "daily_goal_minutes", "daily_goal_mode", "daily_goal_is_provisional",
+    "objective", "mastery_level", "mastery_is_provisional", "difficulty_is_provisional",
+    "rhythm_mode", "manual_daily_minutes", "habitual_daily_max_minutes", "idempotency_key",
 }
 
 ACADEMIC_STATUSES = tuple(grade_import.ACADEMIC_STATUSES)
@@ -576,6 +719,14 @@ def _dependency_scope(conn, curriculum_ids=(), study_ids=()):
     history_marks, history_params = _sql_ids(curriculum_ids)
     history_ids = _selected_ids(conn, f"SELECT id FROM curriculum_status_history WHERE curriculum_subject_id IN {history_marks}", history_params)
     timeline_ids = _selected_ids(conn, f"SELECT id FROM curriculum_timeline_events WHERE curriculum_subject_id IN {history_marks}", history_params)
+    baseline_ids = _selected_ids(conn, f"SELECT id FROM study_plan_baselines WHERE study_subject_id IN {marks}", params)
+    observation_ids = _selected_ids(conn, f"SELECT id FROM study_observations WHERE study_subject_id IN {marks}", params)
+    recommendation_ids = _selected_ids(conn, f"SELECT id FROM recommendation_snapshots WHERE study_subject_id IN {marks}", params)
+    focus_ids = _selected_ids(conn, f"SELECT id FROM sessoes_foco WHERE study_subject_id IN {marks}", params)
+    campaign_item_ids = _selected_ids(conn, f"SELECT id FROM review_campaign_items WHERE study_id IN {marks}", params)
+    objective_ids = _selected_ids(conn, f"SELECT id FROM study_objectives WHERE study_subject_id IN {marks}", params)
+    objective_marks, objective_params = _sql_ids(objective_ids)
+    budget_revision_ids = _selected_ids(conn, f"SELECT id FROM study_budget_revisions WHERE objective_id IN {objective_marks}", objective_params)
     by_status = {status: 0 for status in ("planned", "completed", "skipped", "rescheduled", "cancelled")}
     for row in planned_rows:
         by_status[row["status"]] = by_status.get(row["status"], 0) + 1
@@ -587,6 +738,11 @@ def _dependency_scope(conn, curriculum_ids=(), study_ids=()):
         "study_sessions": _count_ids(session_ids), "notes": _count_ids(note_ids),
         "reviews": _count_ids(review_ids), "evaluations": _count_ids(evaluation_ids),
         "evaluation_topic_links": _count_ids(link_ids), "status_history": _count_ids(history_ids), "timeline_events": _count_ids(timeline_ids),
+        "plan_baselines": _count_ids(baseline_ids), "observations": _count_ids(observation_ids),
+        "recommendations": _count_ids(recommendation_ids), "focus_sessions": _count_ids(focus_ids),
+        "campaign_items": _count_ids(campaign_item_ids),
+        "study_objectives": _count_ids(objective_ids),
+        "budget_revisions": _count_ids(budget_revision_ids),
     }
 
 
@@ -669,12 +825,33 @@ def _delete_study_graph(conn, study_ids):
     evaluation_marks, evaluation_params = _sql_ids(delete_evaluation_ids)
     # A ordem é deliberada: remove referências opcionais antes das entidades
     # referenciadas e nunca depende de uma cascata ampla para ocultar a lógica.
+    session_ids = _selected_ids(conn, f"SELECT id FROM sessoes_estudo WHERE study_subject_id IN {marks}", params)
+    session_marks, session_params = _sql_ids(session_ids)
+    focus_ids = _selected_ids(conn, f"SELECT id FROM sessoes_foco WHERE study_subject_id IN {marks}", params)
+    focus_marks, focus_params = _sql_ids(focus_ids)
+    recommendation_ids = _selected_ids(conn, f"SELECT id FROM recommendation_snapshots WHERE study_subject_id IN {marks}", params)
+    recommendation_marks, recommendation_params = _sql_ids(recommendation_ids)
+    conn.execute(f"DELETE FROM study_session_corrections WHERE study_session_id IN {session_marks}", session_params)
+    conn.execute(f"DELETE FROM session_breaks WHERE study_session_id IN {session_marks} OR focus_session_id IN {focus_marks}", (*session_params, *focus_params))
+    conn.execute(f"DELETE FROM sessoes_foco WHERE id IN {focus_marks}", focus_params)
+    conn.execute(f"DELETE FROM study_observations WHERE study_subject_id IN {marks}", params)
+    conn.execute(f"DELETE FROM recommendation_decisions WHERE recommendation_snapshot_id IN {recommendation_marks}", recommendation_params)
+    conn.execute(f"DELETE FROM recommendation_snapshots WHERE id IN {recommendation_marks}", recommendation_params)
+    conn.execute(f"DELETE FROM study_plan_baselines WHERE study_subject_id IN {marks}", params)
+    objective_ids = _selected_ids(conn, f"SELECT id FROM study_objectives WHERE study_subject_id IN {marks}", params)
+    objective_marks, objective_params = _sql_ids(objective_ids)
+    conn.execute(f"DELETE FROM review_campaign_items WHERE study_id IN {marks}", params)
+    conn.execute(f"DELETE FROM curriculum_study_link_audit WHERE canonical_study_id IN {marks} OR previous_study_id IN {marks}", (*params, *params))
+    conn.execute(f"DELETE FROM curriculum_study_links WHERE canonical_study_id IN {marks}", params)
     conn.execute(f"DELETE FROM anotacoes_estudo WHERE study_subject_id IN {marks}", params)
     conn.execute(f"DELETE FROM avaliacao_topicos WHERE evaluation_id IN {evaluation_marks} OR topic_id IN {topic_marks}", (*evaluation_params, *topic_params))
     all_topic_marks, all_topic_params = _sql_ids(topic_ids)
+    conn.execute(f"DELETE FROM topic_dependencies WHERE topic_id IN {all_topic_marks} OR prerequisite_topic_id IN {all_topic_marks}", (*all_topic_params, *all_topic_params))
     conn.execute(f"DELETE FROM revisoes WHERE topic_id IN {all_topic_marks}", all_topic_params)
     conn.execute(f"DELETE FROM sessoes_estudo WHERE study_subject_id IN {marks}", params)
     conn.execute(f"DELETE FROM sessoes_planejadas WHERE study_subject_id IN {marks}", params)
+    conn.execute(f"DELETE FROM study_budget_revisions WHERE objective_id IN {objective_marks}", objective_params)
+    conn.execute(f"DELETE FROM study_objectives WHERE id IN {objective_marks}", objective_params)
     conn.execute(f"DELETE FROM avaliacoes WHERE id IN {evaluation_marks}", evaluation_params)
     retained_eval_marks, retained_eval_params = _sql_ids(retained_evaluation_ids)
     conn.execute(f"UPDATE avaliacoes SET study_subject_id=NULL WHERE id IN {retained_eval_marks}", retained_eval_params)
@@ -1022,6 +1199,17 @@ def update_curriculum(conn, ident, values):
     changed = [key for key in schedule_keys if key in data and current.get(key) != saved.get(key)]
     if changed:
         _event(conn, ident, "schedule_settings", "Configurações de prazo/esforço atualizadas", ", ".join(sorted(changed)))
+        # A grade e o orçamento pessoal continuam sendo conceitos separados.
+        # Apenas uma edição explícita do esforço/prazo sincroniza o ciclo; uma
+        # reimportação de carga institucional não sobrescreve ajustes pessoais.
+        objective_keys = {"required_study_minutes", "deadline_date", "end_date", "start_date"}
+        if objective_keys.intersection(changed):
+            for linked_study in repo.many(conn, "SELECT id FROM materias_estudo WHERE curriculum_subject_id=? AND status IN ('active','paused') AND archived_at IS NULL", (ident,)):
+                translated = {}
+                if "required_study_minutes" in changed: translated["required_study_minutes"] = saved.get("required_study_minutes")
+                if {"deadline_date", "end_date"}.intersection(changed): translated["deadline_date"] = saved.get("deadline_date") or saved.get("end_date")
+                if "start_date" in changed: translated["start_date"] = saved.get("start_date")
+                _sync_active_objective(conn, linked_study["id"], translated)
     return saved
 
 
@@ -1521,8 +1709,8 @@ def studies(conn, include_archived=False, week_reference=None, visibility=None, 
             "WHERE sl.canonical_study_id=s.id AND sd.formation_id=?))"
         )
         params.extend((selected_formation, selected_formation))
-    if q and str(q).strip():
-        clauses.append("COALESCE(d.name,s.personal_name) LIKE ? COLLATE NOCASE"); params.append(f"%{str(q).strip()}%")
+    # A filtragem textual é concluída em Python para que "calculo" encontre
+    # "Cálculo". O NOCASE nativo do SQLite não remove acentos.
     if review:
         if review not in REVIEW_STATUSES: raise DomainError("Filtro de revisão inválido.")
         clauses.append("COALESCE(d.review_status,'none')=?"); params.append(review)
@@ -1544,11 +1732,17 @@ def studies(conn, include_archived=False, week_reference=None, visibility=None, 
           (SELECT COUNT(*) FROM topicos t WHERE (t.study_subject_id=s.id OR (d.id IS NOT NULL AND t.curriculum_subject_id=d.id)) AND t.archived_at IS NULL AND t.status='completed') completed_topics,
           COALESCE((SELECT SUM(x.duration_seconds) FROM sessoes_estudo x WHERE x.study_subject_id=s.id AND x.date BETWEEN ? AND ?),0) week_seconds,
           COALESCE((SELECT SUM(p.planned_duration_minutes) FROM sessoes_planejadas p WHERE p.study_subject_id=s.id AND p.status='planned' AND p.scheduled_date BETWEEN ? AND ?),0) planned_week_minutes
+          ,(SELECT r.recommended_daily_minutes FROM recommendation_snapshots r WHERE r.study_subject_id=s.id ORDER BY r.calculated_at DESC,r.id DESC LIMIT 1) recommended_daily_minutes
+          ,(SELECT r.recommended_block_minutes FROM recommendation_snapshots r WHERE r.study_subject_id=s.id ORDER BY r.calculated_at DESC,r.id DESC LIMIT 1) recommended_block_minutes
+          ,(SELECT r.recommended_days_per_week FROM recommendation_snapshots r WHERE r.study_subject_id=s.id ORDER BY r.calculated_at DESC,r.id DESC LIMIT 1) recommended_days_per_week
         FROM materias_estudo s
         LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id
         LEFT JOIN formacoes f ON f.id=COALESCE(s.related_formation_id,d.formation_id)
     """ + where + " ORDER BY s.favorite DESC,s.priority DESC,s.created_at DESC"
     values = repo.many(conn, sql, (week_start.isoformat(), week_end.isoformat(), week_start.isoformat(), week_end.isoformat(), *params))
+    if q and str(q).strip():
+        query_key = _comparison_key(q)
+        values = [value for value in values if query_key in _comparison_key(value.get("name"))]
     shared_contexts = _canonical(lambda: canonical_links.planning_contexts(conn, [value["id"] for value in values]))
     for value in values:
         context = shared_contexts.get(value["id"], {})
@@ -1637,11 +1831,16 @@ def _start_curriculum_profile(conn, curriculum_item, values):
         effort_provisional = bool(curriculum_item.get("effort_is_provisional"))
     elif effort_mode == "manual":
         raise DomainError("Informe o esforço pessoal para usar a estimativa manual.", 400, "manual_effort_required")
-    elif effort_mode == "workload" and int(candidate_data.get("workload_minutes") or curriculum_item.get("workload_minutes") or 0) > 0:
-        effort = int(candidate_data.get("workload_minutes") or curriculum_item.get("workload_minutes"))
-        effort_provisional, effort_note = True, "carga curricular"
+    elif effort_mode == "workload":
+        workload = int(candidate_data.get("workload_minutes") or curriculum_item.get("workload_minutes") or 0)
+        if not workload:
+            raise DomainError("A disciplina não possui carga curricular para usar como esforço.", 400, "workload_not_available")
+        effort = workload
+        effort_provisional, effort_note = True, "carga curricular escolhida pelo usuário"
     else:
-        effort, effort_note = _provisional_effort_minutes(conn, {**curriculum_item, **candidate_data})
+        # Desconhecido continua desconhecido. O motor usa um ciclo adaptativo
+        # interno, sem transformar 10 h inventadas em dado acadêmico do usuário.
+        effort, effort_note = None, "estimativa adaptativa por dificuldade e domínio"
         effort_provisional = True
 
     explicit_deadline = candidate_data.get("deadline_date") if "deadline_date" in candidate_data else None
@@ -1653,14 +1852,16 @@ def _start_curriculum_profile(conn, curriculum_item, values):
         deadline_day = _date(existing_deadline, "Prazo")
         deadline_provisional = bool(curriculum_item.get("deadline_is_provisional"))
     else:
-        deadline_day = _provisional_deadline(conn, start_day)
+        # O horizonte recorrente do algoritmo não é persistido como se fosse um
+        # prazo acadêmico confirmado.
+        deadline_day = None
         deadline_provisional = True
-    if deadline_day < start_day:
+    if deadline_day and deadline_day < start_day:
         raise DomainError("O prazo não pode ser anterior à data de início.")
 
     profile = {
         "start_date": start_day.isoformat(),
-        "deadline_date": deadline_day.isoformat(),
+        "deadline_date": deadline_day.isoformat() if deadline_day else None,
         "required_study_minutes": effort,
         "priority_base": int(candidate_data.get("priority_base", curriculum_item.get("priority_base") or 3)),
         "preferred_block_minutes": candidate_data.get("preferred_block_minutes", curriculum_item.get("preferred_block_minutes")) or planning_preferences(conn)["default_session_minutes"],
@@ -1681,7 +1882,7 @@ def _start_curriculum_profile(conn, curriculum_item, values):
         "effort_is_provisional": bool(profile["effort_is_provisional"]),
         "deadline_is_provisional": bool(profile["deadline_is_provisional"]),
         "effort_basis": effort_note or "valor já salvo",
-        "deadline_label": "Prazo ainda não definido — horizonte provisório aplicado" if deadline_provisional else "Prazo informado",
+        "deadline_label": "Prazo ainda não definido — ciclo adaptativo interno" if deadline_provisional else "Prazo informado",
     }
 
 
@@ -1695,6 +1896,21 @@ def start_curriculum_study(conn, curriculum_id, values=None):
     values = values or {}
     conn.execute("SAVEPOINT start_curriculum_study")
     try:
+        key = values.get("idempotency_key")
+        if key:
+            existing = repo.one(conn, "SELECT * FROM materias_estudo WHERE idempotency_key=?", (str(key),))
+            if existing:
+                if int(existing.get("curriculum_subject_id") or 0) != int(curriculum_id):
+                    raise DomainError("A chave desta confirmação já foi usada em outra disciplina.", 409, "idempotency_conflict")
+                curriculum_item = _get(conn, "disciplinas_grade", curriculum_id)
+                baseline = adaptive_planning.ensure_baseline(conn, existing["id"])
+                recommendation = adaptive_planning.calculate(conn, existing["id"])
+                conn.execute("RELEASE SAVEPOINT start_curriculum_study")
+                return {
+                    "curriculum": curriculum_item, "study": existing, "created": False,
+                    "reused": True, "idempotent": True, "baseline": baseline,
+                    "recommendation": recommendation, "notices": [],
+                }
         curriculum_item = _get(conn, "disciplinas_grade", curriculum_id)
         _active_formation(conn, curriculum_item["formation_id"])
         if curriculum_item["archived_at"]:
@@ -1732,12 +1948,32 @@ def start_curriculum_study(conn, curriculum_id, values=None):
                 "origin": "curriculum", "curriculum_subject_id": curriculum_id,
                 "priority": int(study_values.get("priority", saved_curriculum.get("priority_base") or 3)),
                 "difficulty": int(study_values.get("difficulty", 3)),
+                "difficulty_is_provisional": study_values.get("difficulty_is_provisional", 0),
+                "mastery_level": study_values.get("mastery_level"),
+                "mastery_is_provisional": study_values.get("mastery_is_provisional", 1),
+                "objective": study_values.get("objective", "study"),
+                "rhythm_mode": study_values.get("rhythm_mode", "suggested"),
+                "manual_daily_minutes": study_values.get("manual_daily_minutes"),
+                "habitual_daily_max_minutes": study_values.get("habitual_daily_max_minutes"),
+                "idempotency_key": study_values.get("idempotency_key"),
                 "weekly_goal_minutes": study_values.get("weekly_goal_minutes"),
                 "start_date": profile["start_date"], "target_date": profile["deadline_date"],
                 "status": "active", "academic_period": study_values.get("academic_period"),
             }
             study = _get(conn, "materias_estudo", repo.insert(conn, "materias_estudo", study_values))
             created = True
+
+        baseline = adaptive_planning.ensure_baseline(conn, study["id"])
+        objective = ensure_active_objective(conn, study["id"])
+        latest_recommendation = repo.one(
+            conn,
+            "SELECT id FROM recommendation_snapshots WHERE study_subject_id=? ORDER BY id DESC LIMIT 1",
+            (study["id"],),
+        )
+        if not latest_recommendation:
+            recommendation = adaptive_planning.calculate(conn, study["id"], persist=True)
+        else:
+            recommendation = adaptive_planning.calculate(conn, study["id"])
 
         first_topic_id = values.get("first_topic_id") or values.get("topic_id")
         if first_topic_id not in (None, ""):
@@ -1747,18 +1983,32 @@ def start_curriculum_study(conn, curriculum_id, values=None):
             if topic.get("status") == "not_started":
                 repo.update(conn, "topicos", topic["id"], {"status": "in_progress", "started_at": _today()})
 
-        planning = planning_items(conn, profile["start_date"], profile["deadline_date"], item_id=study["id"])["items"]
+        planning = planning_items(conn, recommendation["horizon_start"], recommendation["horizon_end"], item_id=study["id"])["items"]
         planning_item = next((item for item in planning if item["study_subject_id"] == study["id"]), None)
         notices = []
-        if profile_info["effort_is_provisional"]:
+        if profile_info["effort_is_provisional"] and profile["required_study_minutes"] is None:
+            notices.append("Esforço total ainda desconhecido; a sugestão usa dificuldade e domínio sem gravar horas fictícias.")
+        elif profile_info["effort_is_provisional"]:
             notices.append(f"Esforço provisório de {profile['required_study_minutes']} min criado a partir de {profile_info['effort_basis']}.")
         if profile_info["deadline_is_provisional"]:
-            notices.append(f"Prazo provisório aplicado até {profile['deadline_date']}; confirme a data acadêmica quando souber.")
+            notices.append("Prazo ainda desconhecido; o ciclo adaptativo interno não foi salvo como data acadêmica.")
         conn.execute("RELEASE SAVEPOINT start_curriculum_study")
+        response_profile = {
+            **profile_info,
+            **{key: profile[key] for key in ("start_date", "deadline_date", "required_study_minutes", "preferred_block_minutes", "allowed_weekdays", "priority_base")},
+            "persisted_required_study_minutes": profile["required_study_minutes"],
+            "estimated_budget_minutes": baseline["current_budget_minutes"],
+        }
+        if response_profile["required_study_minutes"] is None:
+            # Compatibilidade do contrato: o campo numérico da resposta é uma
+            # estimativa explicitamente provisória; o valor persistido continua
+            # nulo e é exposto separadamente acima.
+            response_profile["required_study_minutes"] = baseline["current_budget_minutes"]
         return {
             "curriculum": saved_curriculum, "study": study, "created": created, "reused": not created,
-            "profile": {**profile_info, **{key: profile[key] for key in ("start_date", "deadline_date", "required_study_minutes", "preferred_block_minutes", "allowed_weekdays", "priority_base")}},
+            "profile": response_profile,
             "planning_item": planning_item, "notices": notices,
+            "baseline": baseline, "objective": objective, "recommendation": recommendation, "idempotent": False,
             "shared_study": shared_link if shared_link and shared_link.get("kind") == "linked" else None,
         }
     except Exception:
@@ -1811,6 +2061,9 @@ def add_curriculum_study(conn, curriculum_id, values):
     # A configuração de esforço/prazo da disciplina é canônica; o estudo atual
     # guarda somente o estado operacional e preferências próprias.
     change_curriculum_status(conn, curriculum_id, {"academic_status":"in_progress"}, "manual")
+    adaptive_planning.ensure_baseline(conn, ident)
+    adaptive_planning.calculate(conn, ident, persist=True)
+    ensure_active_objective(conn, ident)
     return _get(conn, "materias_estudo", ident)
 
 
@@ -1853,11 +2106,15 @@ def start_curriculum_review(conn, curriculum_id, values=None):
         ident = repo.insert(conn, "materias_estudo", {
             "origin": "curriculum", "curriculum_subject_id": curriculum_id,
             "priority": values.get("priority", 3), "difficulty": values.get("difficulty", 3),
+            "objective": "review", "mastery_level": values.get("mastery_level"),
+            "mastery_is_provisional": 1 if values.get("mastery_level") in (None, "") else 0,
             "weekly_goal_minutes": values.get("weekly_goal_minutes"), "start_date": values.get("start_date") or _today(),
             "target_date": values.get("target_date"), "status": "active", "academic_period": values.get("academic_period"),
         })
     except sqlite3.IntegrityError as error:
         raise DomainError("Já existe um estudo atual para esta disciplina.", 409, "study_already_current") from error
+    adaptive_planning.ensure_baseline(conn, ident)
+    adaptive_planning.calculate(conn, ident, persist=True)
     return _get(conn, "materias_estudo", ident)
 
 
@@ -1868,14 +2125,51 @@ def _study_data(values, current=None, include_identity=False):
         if data.get(key) == "":
             data[key] = None
     candidate = {**(current or {}), **data}
-    for key, label in (("required_study_minutes", "Esforço total"), ("minimum_weekly_minutes", "Mínimo semanal"), ("weekly_goal_minutes", "Meta semanal")):
+    for key, label in (
+        ("required_study_minutes", "Esforço total"),
+        ("minimum_weekly_minutes", "Mínimo semanal"),
+        ("weekly_goal_minutes", "Meta semanal"),
+        ("daily_goal_minutes", "Meta diária"),
+        ("manual_daily_minutes", "Ritmo diário manual"),
+        ("habitual_daily_max_minutes", "Máximo habitual por matéria"),
+    ):
         if key in data:
             data[key] = _optional_minutes(data[key], label)
+    if "daily_goal_mode" in data and data["daily_goal_mode"] not in {"legacy_weekly", "per_selected_day", "campaign_total", "deadline_paced"}:
+        raise DomainError("Modo da meta diária é inválido.")
+    if "daily_goal_is_provisional" in data:
+        data["daily_goal_is_provisional"] = 1 if data["daily_goal_is_provisional"] in (True, 1, "1", "true", "True", "sim") else 0
+    for key in ("mastery_is_provisional", "difficulty_is_provisional"):
+        if key in data:
+            data[key] = 1 if _confirmed(data[key]) else 0
+    if "mastery_level" in data:
+        if data["mastery_level"] in (None, "", "unknown"):
+            data["mastery_level"] = None
+            data.setdefault("mastery_is_provisional", 1)
+        else:
+            try:
+                mastery = int(data["mastery_level"])
+            except (TypeError, ValueError) as error:
+                raise DomainError("Domínio deve estar entre 0 e 5.") from error
+            if not 0 <= mastery <= 5:
+                raise DomainError("Domínio deve estar entre 0 e 5.")
+            data["mastery_level"] = mastery
+    if "objective" in data and data["objective"] not in {"study", "review", "continuous"}:
+        raise DomainError("Objetivo do estudo inválido.")
+    if "rhythm_mode" in data and data["rhythm_mode"] not in {"suggested", "manual"}:
+        raise DomainError("Modo de ritmo inválido.")
+    effective_rhythm_mode = data.get("rhythm_mode", candidate.get("rhythm_mode", "suggested"))
+    effective_manual_daily = data.get("manual_daily_minutes", candidate.get("manual_daily_minutes"))
+    if effective_rhythm_mode == "manual" and not effective_manual_daily:
+        raise DomainError("Informe o ritmo diário para usar o modo manual.")
     if "preferred_block_minutes" in data:
         data["preferred_block_minutes"] = _optional_block_minutes(data["preferred_block_minutes"])
     if "allowed_weekdays" in data:
         data["allowed_weekdays"] = _weekdays_json(data["allowed_weekdays"]) if data["allowed_weekdays"] is not None else None
     for key, label in (("priority", "Prioridade"), ("difficulty", "Dificuldade")):
+        if key == "difficulty" and data.get(key) == "unknown":
+            data[key] = 3
+            data.setdefault("difficulty_is_provisional", 1)
         if key in data and data[key] not in (None, ""):
             try:
                 value = int(data[key])
@@ -1895,11 +2189,79 @@ def _study_data(values, current=None, include_identity=False):
 
 
 def create_personal_study(conn, values):
+    key = values.get("idempotency_key")
+    if key:
+        existing = repo.one(conn, "SELECT * FROM materias_estudo WHERE idempotency_key=?", (str(key),))
+        if existing:
+            existing["idempotent"] = True
+            return existing
     data = _study_data(values, include_identity=True)
     if data.get("related_formation_id"):
         _active_formation(conn, int(data["related_formation_id"]))
     data.update({"origin":"personal", "personal_name":_need(data.get("personal_name"), "Nome do estudo"), "priority":data.get("priority",3), "difficulty":data.get("difficulty",3), "status":"active"})
-    return _get(conn, "materias_estudo", repo.insert(conn, "materias_estudo", data))
+    ident = repo.insert(conn, "materias_estudo", data)
+    adaptive_planning.ensure_baseline(conn, ident)
+    adaptive_planning.calculate(conn, ident, persist=True)
+    ensure_active_objective(conn, ident)
+    saved = _get(conn, "materias_estudo", ident)
+    saved["idempotent"] = False
+    return saved
+
+
+def study_registration_preview(conn, values):
+    """Prévia pura do cadastro: valida e calcula sem persistir nada."""
+    registration_kind = str(values.get("registration_kind") or "personal")
+    if registration_kind not in {"personal", "curriculum"}:
+        raise DomainError("Origem do cadastro inválida.", 400, "invalid_registration_kind")
+    payload = dict(values)
+    curriculum = None
+    if registration_kind == "curriculum":
+        curriculum_id = payload.get("curriculum_subject_id")
+        if curriculum_id in (None, ""):
+            raise DomainError("Escolha uma disciplina da grade.", 400, "curriculum_required")
+        curriculum = _get(conn, "disciplinas_grade", int(curriculum_id))
+        _active_formation(conn, curriculum["formation_id"])
+        if curriculum.get("archived_at") or curriculum.get("item_type") != "subject":
+            raise DomainError("A disciplina escolhida não está disponível para cadastro.", 409, "curriculum_not_startable")
+        if curriculum.get("academic_status") in {"locked", "exempted", "completed"}:
+            raise DomainError("Esta disciplina não pode ser iniciada no estado acadêmico atual.", 409, "curriculum_not_startable")
+        payload.setdefault("start_date", curriculum.get("start_date") or _today())
+        payload.setdefault("target_date", curriculum.get("deadline_date") or curriculum.get("end_date"))
+        if payload.get("required_study_minutes") in (None, "") and curriculum.get("required_study_minutes"):
+            payload["required_study_minutes"] = curriculum["required_study_minutes"]
+        payload.setdefault("preferred_block_minutes", curriculum.get("preferred_block_minutes"))
+        payload.setdefault("allowed_weekdays", curriculum.get("allowed_weekdays"))
+        name = curriculum["name"]
+    else:
+        name = _need(payload.get("personal_name"), "Nome do estudo")
+        payload.setdefault("start_date", _today())
+    if payload.get("difficulty") == "unknown":
+        payload["difficulty"] = 3
+    if payload.get("mastery_level") == "unknown":
+        payload["mastery_level"] = None
+    try:
+        preview = adaptive_planning.preview_profile(payload, settings(conn))
+    except (ValueError, adaptive_planning.AdaptivePlanningError) as error:
+        code = getattr(error, "code", "invalid_registration")
+        raise DomainError(str(error), 400, code) from error
+    capacity = planning_capacity(conn, preview["horizon_start"], preview["horizon_end"])
+    feasible = int(capacity.get("net_free_minutes") or 0)
+    current_demand = int(capacity.get("demand_minutes") or 0)
+    new_demand = int(preview["estimated_budget_minutes"] or 0)
+    preview.update({
+        "registration_kind": registration_kind,
+        "subject_name": name,
+        "curriculum_subject_id": curriculum["id"] if curriculum else None,
+        "capacity_minutes": feasible,
+        "current_demand_minutes": current_demand,
+        "new_demand_minutes": new_demand,
+        "remaining_capacity_minutes": feasible - current_demand - new_demand,
+        "deficit_minutes": max(0, current_demand + new_demand - feasible),
+        "will_persist_deadline": bool(payload.get("target_date")),
+        "will_persist_effort": payload.get("required_study_minutes") not in (None, ""),
+        "persisted": False,
+    })
+    return preview
 
 
 def update_study(conn, ident, values):
@@ -1928,7 +2290,200 @@ def update_study(conn, ident, values):
         data.pop("personal_name", None); data.pop("related_formation_id", None)
     elif data.get("related_formation_id"):
         _active_formation(conn, int(data["related_formation_id"]))
-    repo.update(conn, "materias_estudo", ident, data); return _get(conn, "materias_estudo", ident)
+    if data:
+        data["profile_version"] = int(study.get("profile_version") or 1) + 1
+    repo.update(conn, "materias_estudo", ident, data)
+    saved = _get(conn, "materias_estudo", ident)
+    # Mudança explícita de esforço/prazo atualiza o ciclo e registra a versão;
+    # isso nunca é convertido em tempo estudado.
+    _sync_active_objective(conn, ident, values)
+    if any(key in data for key in {"difficulty", "mastery_level", "objective", "rhythm_mode", "manual_daily_minutes", "target_date", "allowed_weekdays"}):
+        adaptive_planning.calculate(conn, ident, persist=True, reason="Perfil do estudo atualizado pelo usuário.")
+    return saved
+
+
+def update_daily_goal(conn, ident, values):
+    """Atualiza o ritmo diário sem apagar a meta semanal legada.
+
+    A meta semanal antiga continua disponível para clientes antigos, mas a
+    interface nova passa a usar minutos por dia e dias permitidos.
+    """
+    permitted = {"daily_goal_minutes", "allowed_weekdays", "preferred_block_minutes", "daily_goal_mode", "daily_goal_is_provisional"}
+    data = _study_data(_fields(values, permitted), _get(conn, "materias_estudo", ident))
+    if "daily_goal_minutes" not in data:
+        raise DomainError("Informe a meta diária para atualizar o ritmo.", 400, "daily_goal_required")
+    data.setdefault("daily_goal_mode", "per_selected_day")
+    data.setdefault("daily_goal_is_provisional", 0)
+    return update_study(conn, ident, data)
+
+
+def _review_study_for_curriculum(conn, curriculum_id):
+    """Cria ou reativa o estudo canônico sem mudar a conclusão acadêmica."""
+    curriculum = _get(conn, "disciplinas_grade", curriculum_id)
+    _active_formation(conn, curriculum["formation_id"])
+    if curriculum["archived_at"] or curriculum["item_type"] != "subject":
+        raise DomainError("Esta disciplina não pode participar de uma revisão.", 409, "review_curriculum_unavailable")
+    linked = _canonical(lambda: canonical_links.canonical_study_for_subject(conn, curriculum_id))
+    current = linked.get("study") if linked and linked.get("kind") == "linked" else repo.one(
+        conn,
+        "SELECT * FROM materias_estudo WHERE curriculum_subject_id=? ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'paused' THEN 1 ELSE 2 END,id DESC LIMIT 1",
+        (curriculum_id,),
+    )
+    if current:
+        if current["status"] != "active" or current.get("archived_at"):
+            repo.update(conn, "materias_estudo", current["id"], {"status": "active", "archived_at": None, "completed_at": None})
+        study = _get(conn, "materias_estudo", current["id"])
+    else:
+        study = _get(conn, "materias_estudo", repo.insert(conn, "materias_estudo", {
+            "origin": "curriculum", "curriculum_subject_id": curriculum_id,
+            "priority": int(curriculum.get("priority_base") or 3), "difficulty": 3,
+            "status": "active", "start_date": _today(),
+        }))
+    if curriculum.get("review_status") != "in_progress":
+        repo.update(conn, "disciplinas_grade", curriculum_id, {"review_status": "in_progress", "planning_enabled": 1, "planning_opt_out": 0})
+        # A linha do tempo já tem a categoria persistida ``planning``; não
+        # ampliamos o CHECK de uma tabela histórica apenas para um rótulo novo.
+        _event(conn, curriculum_id, "planning", "Revisão ativada", "Campanha de revisão criada ou reaberta")
+    return study
+
+
+def _campaign_payload(values):
+    start = _date(values.get("start_date") or _today(), "Início da revisão")
+    end = _date(_need(values.get("end_date"), "Fim da revisão"), "Fim da revisão")
+    if end < start:
+        raise DomainError("O fim da revisão não pode ser anterior ao início.")
+    daily = _optional_minutes(values.get("daily_goal_minutes"), "Meta diária da revisão")
+    allowed = _weekdays(values.get("allowed_weekdays")) or list(range(7))
+    preferred = _optional_block_minutes(values.get("preferred_block_minutes")) if values.get("preferred_block_minutes") not in (None, "") else None
+    scope = values.get("goal_scope", "campaign_total")
+    if scope not in {"campaign_total", "per_item"}:
+        raise DomainError("Escopo da meta da revisão é inválido.")
+    return {
+        "name": _need(values.get("name"), "Nome da revisão"), "purpose": values.get("purpose") or None,
+        "start_date": start.isoformat(), "end_date": end.isoformat(), "daily_goal_minutes": daily,
+        "preferred_block_minutes": preferred, "allowed_weekdays": _weekdays_json(allowed), "goal_scope": scope,
+        "idempotency_key": values.get("idempotency_key") or None,
+    }
+
+
+def _campaign_requested_studies(conn, values):
+    result = {}
+    curriculum_ids = values.get("curriculum_subject_ids", values.get("curriculum_ids", [])) or []
+    study_ids = values.get("study_ids", []) or []
+    if not isinstance(curriculum_ids, list) or not isinstance(study_ids, list):
+        raise DomainError("As disciplinas da revisão devem ser uma lista.")
+    for curriculum_id in curriculum_ids:
+        study = _review_study_for_curriculum(conn, int(curriculum_id))
+        result[study["id"]] = {"study": study, "curriculum_subject_id": int(curriculum_id), "weight": 1}
+    for study_id in study_ids:
+        study = _get(conn, "materias_estudo", int(study_id))
+        if study["archived_at"] or study["status"] == "archived":
+            raise DomainError("Restaure o estudo antes de incluí-lo em uma revisão.", 409, "review_study_archived")
+        if study["status"] != "active":
+            repo.update(conn, "materias_estudo", study["id"], {"status": "active", "completed_at": None})
+            study = _get(conn, "materias_estudo", study["id"])
+        result[study["id"]] = {"study": study, "curriculum_subject_id": study.get("curriculum_subject_id"), "weight": 1}
+    if not result:
+        raise DomainError("Selecione ao menos uma disciplina ou estudo para revisar.", 400, "review_campaign_items_required")
+    supplied_weights = values.get("weights") or {}
+    for study_id, item in result.items():
+        supplied = supplied_weights.get(str(study_id), supplied_weights.get(study_id, item["weight"])) if isinstance(supplied_weights, dict) else item["weight"]
+        try:
+            item["weight"] = float(supplied)
+        except (TypeError, ValueError) as error:
+            raise DomainError("O peso de uma disciplina da revisão é inválido.") from error
+        if item["weight"] <= 0:
+            raise DomainError("O peso de uma disciplina da revisão deve ser maior que zero.")
+    return result
+
+
+def review_campaign_detail(conn, ident):
+    campaign = _get(conn, "review_campaigns", ident)
+    items = repo.many(conn, """
+        SELECT i.*,COALESCE(d.name,s.personal_name) name,d.formation_id,f.name formation_name
+        FROM review_campaign_items i
+        JOIN materias_estudo s ON s.id=i.study_id
+        LEFT JOIN disciplinas_grade d ON d.id=i.curriculum_subject_id
+        LEFT JOIN formacoes f ON f.id=d.formation_id
+        WHERE i.campaign_id=? ORDER BY i.id
+    """, (ident,))
+    totals = repo.one(conn, """
+        SELECT COUNT(*) planned_blocks,COALESCE(SUM(planned_duration_minutes),0) planned_minutes,
+          COALESCE(SUM(CASE WHEN status='completed' THEN planned_duration_minutes ELSE 0 END),0) completed_minutes
+        FROM sessoes_planejadas WHERE review_campaign_id=?
+    """, (ident,))
+    return {"campaign": campaign, "items": items, "planning": {key: int(value or 0) for key, value in totals.items()}}
+
+
+def review_campaigns(conn, status=None):
+    clauses, params = [], []
+    if status:
+        if status not in {"draft", "active", "paused", "completed", "cancelled"}:
+            raise DomainError("Filtro de campanhas inválido.")
+        clauses.append("c.status=?"); params.append(status)
+    rows = repo.many(conn, """
+        SELECT c.*,COUNT(i.id) item_count,COALESCE(SUM(CASE WHEN i.item_status='active' THEN i.weight ELSE 0 END),0) active_weight
+        FROM review_campaigns c LEFT JOIN review_campaign_items i ON i.campaign_id=c.id
+    """ + (" WHERE " + " AND ".join(clauses) if clauses else "") + " GROUP BY c.id ORDER BY c.start_date DESC,c.id DESC", params)
+    return rows
+
+
+def create_review_campaign(conn, values):
+    payload = _campaign_payload(values)
+    if payload["idempotency_key"]:
+        existing = repo.one(conn, "SELECT id FROM review_campaigns WHERE idempotency_key=?", (payload["idempotency_key"],))
+        if existing:
+            return {**review_campaign_detail(conn, existing["id"]), "created": False, "idempotent": True}
+    conn.execute("SAVEPOINT create_review_campaign")
+    try:
+        requested = _campaign_requested_studies(conn, values)
+        ids = list(requested)
+        marks, params = _ids_clause(ids)
+        conflict = repo.one(conn, """
+            SELECT c.id,c.name FROM review_campaigns c JOIN review_campaign_items i ON i.campaign_id=c.id
+            WHERE c.status IN ('active','paused') AND i.item_status='active' AND i.study_id IN """ + marks +
+            " AND c.start_date<=? AND c.end_date>=? LIMIT 1", (*params, payload["end_date"], payload["start_date"]))
+        if conflict:
+            raise DomainError(f"O estudo já participa da campanha ativa ‘{conflict['name']}’.", 409, "review_campaign_overlap")
+        campaign_id = repo.insert(conn, "review_campaigns", {**payload, "status": "active"})
+        for item in requested.values():
+            repo.insert(conn, "review_campaign_items", {
+                "campaign_id": campaign_id, "curriculum_subject_id": item["curriculum_subject_id"],
+                "study_id": item["study"]["id"], "weight": item["weight"],
+            })
+        conn.execute("RELEASE SAVEPOINT create_review_campaign")
+        return {**review_campaign_detail(conn, campaign_id), "created": True, "idempotent": False}
+    except Exception:
+        conn.execute("ROLLBACK TO SAVEPOINT create_review_campaign")
+        conn.execute("RELEASE SAVEPOINT create_review_campaign")
+        raise
+
+
+def update_review_campaign(conn, ident, values):
+    current = _get(conn, "review_campaigns", ident)
+    merged = {**current, **_fields(values, {"name", "purpose", "start_date", "end_date", "daily_goal_minutes", "preferred_block_minutes", "allowed_weekdays", "goal_scope", "status"})}
+    payload = _campaign_payload(merged)
+    payload.pop("idempotency_key", None)
+    payload["status"] = merged.get("status", current["status"])
+    if payload["status"] not in {"draft", "active", "paused", "completed", "cancelled"}:
+        raise DomainError("Estado da campanha é inválido.")
+    repo.update(conn, "review_campaigns", ident, payload)
+    return review_campaign_detail(conn, ident)
+
+
+def set_review_campaign_status(conn, ident, status):
+    if status not in {"paused", "active", "completed", "cancelled"}:
+        raise DomainError("Ação da campanha é inválida.")
+    campaign = _get(conn, "review_campaigns", ident)
+    repo.update(conn, "review_campaigns", ident, {"status": status})
+    cancelled = 0
+    if status in {"paused", "completed", "cancelled"}:
+        cancelled = conn.execute(
+            "UPDATE sessoes_planejadas SET status='cancelled',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+            "WHERE review_campaign_id=? AND source='automatic' AND status='planned' AND scheduled_date>=?",
+            (ident, _today()),
+        ).rowcount
+    return {**review_campaign_detail(conn, ident), "cancelled_future_automatic_blocks": cancelled, "previous_status": campaign["status"]}
 
 
 def finish_study(conn, ident, result, final_score=None):
@@ -2327,7 +2882,20 @@ def reorder_topics(conn, owner_kind, owner_id, values):
 
 
 def subject_detail(conn, ident):
-    study = _get(conn, "materias_estudo", ident)
+    study = repo.one(conn, """
+        SELECT s.*,COALESCE(d.name,s.personal_name) name,f.name formation_name,
+          d.academic_status,d.review_status,
+          COALESCE(d.deadline_date,s.target_date,d.end_date) effective_deadline,
+          COALESCE(d.required_study_minutes,s.required_study_minutes) effective_required_study_minutes,
+          COALESCE(d.preferred_block_minutes,s.preferred_block_minutes) effective_block_minutes,
+          COALESCE(d.allowed_weekdays,s.allowed_weekdays) effective_allowed_weekdays
+        FROM materias_estudo s
+        LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id
+        LEFT JOIN formacoes f ON f.id=COALESCE(s.related_formation_id,d.formation_id)
+        WHERE s.id=?
+    """, (ident,))
+    if not study:
+        raise DomainError("Registro não encontrado.", 404)
     groups = repo.many(conn, "SELECT * FROM grupos_topicos WHERE study_subject_id=? AND archived_at IS NULL ORDER BY sort_order,name", (ident,))
     topics = _contents_for_study(conn, ident)
     nested = defaultdict(list)
@@ -2337,7 +2905,49 @@ def subject_detail(conn, ident):
     study["contents"] = topics
     owner = ("curriculum", study["curriculum_subject_id"]) if study.get("curriculum_subject_id") else ("study", ident)
     study["topic_effort"] = _topic_effort_summary(conn, *owner)
+    study["latest_recommendation"] = repo.one(
+        conn,
+        "SELECT * FROM recommendation_snapshots WHERE study_subject_id=? ORDER BY calculated_at DESC,id DESC LIMIT 1",
+        (ident,),
+    )
     return study
+
+
+def adaptive_recommendation(conn, ident, persist=False):
+    _get(conn, "materias_estudo", ident)
+    try:
+        draft = adaptive_planning.calculate(conn, ident)
+        capacity = planning_capacity(conn, draft["horizon_start"], draft["horizon_end"], item_id=ident)
+        feasible = int(capacity.get("net_capacity_minutes") or capacity.get("capacity_minutes") or 0)
+        has_snapshot = repo.one(conn, "SELECT id FROM recommendation_snapshots WHERE study_subject_id=? LIMIT 1", (ident,))
+        return adaptive_planning.calculate(
+            conn,
+            ident,
+            feasible_minutes=feasible,
+            persist=bool(persist or not has_snapshot),
+        )
+    except adaptive_planning.AdaptivePlanningError as error:
+        raise DomainError(str(error), 400, error.code) from error
+
+
+def adaptive_recommendation_history(conn, ident):
+    _get(conn, "materias_estudo", ident)
+    return adaptive_planning.history(conn, ident)
+
+
+def add_study_observation(conn, ident, values):
+    try:
+        return adaptive_planning.record_observation(conn, ident, values)
+    except adaptive_planning.AdaptivePlanningError as error:
+        raise DomainError(str(error), 400, error.code) from error
+
+
+def accept_study_recommendation(conn, ident, snapshot_id, values):
+    try:
+        return adaptive_planning.accept(conn, ident, snapshot_id, values)
+    except adaptive_planning.AdaptivePlanningError as error:
+        status = 404 if error.code == "recommendation_not_found" else 400
+        raise DomainError(str(error), status, error.code) from error
 
 
 def create_group(conn, study_id, values):
@@ -2565,9 +3175,29 @@ def create_session(conn, values):
     topic_id = values.get("topic_id")
     seconds=int(_need(values.get("duration_seconds"),"Duração"))
     if seconds<=0: raise DomainError("A duração deve ser maior que zero.")
-    data=_fields(values,{"study_subject_id","topic_id","planned_session_id","date","started_at","ended_at","duration_seconds","entry_method","mastery_before","mastery_after","progress_level","notes"})
+    data=_fields(values,{"study_subject_id","topic_id","planned_session_id","date","started_at","ended_at","duration_seconds","entry_method","mastery_before","mastery_after","progress_level","notes","review_campaign_id","purpose","objective_id"})
     data.update({"study_subject_id":study_id,"duration_seconds":seconds,"date":data.get("date",_today()),"entry_method":data.get("entry_method","manual")})
-    _assert_study_accessible(conn, study_id, intent="review" if data["entry_method"] == "review" else "session")
+    planned_campaign = None
+    if data.get("planned_session_id"):
+        planned_campaign = repo.one(conn, "SELECT review_campaign_id,objective_id FROM sessoes_planejadas WHERE id=?", (data["planned_session_id"],))
+    if data.get("review_campaign_id"):
+        campaign = _get(conn, "review_campaigns", int(data["review_campaign_id"]))
+        if campaign["status"] != "active":
+            raise DomainError("A campanha de revisão não está ativa.", 409, "review_campaign_inactive")
+    campaign_review = bool(data.get("review_campaign_id") or (planned_campaign or {}).get("review_campaign_id"))
+    data["purpose"] = "review" if data["entry_method"] == "review" or campaign_review else data.get("purpose", "study")
+    if data["purpose"] not in {"study", "review"}:
+        raise DomainError("Finalidade da sessão inválida.")
+    _assert_study_accessible(conn, study_id, intent="review" if data["entry_method"] == "review" or campaign_review else "session")
+    if data.get("objective_id") in (None, ""):
+        data["objective_id"] = (planned_campaign or {}).get("objective_id")
+    if data.get("objective_id") in (None, ""):
+        active_objective = repo.one(conn, "SELECT id FROM study_objectives WHERE study_subject_id=? AND status='active' ORDER BY id DESC LIMIT 1", (study_id,))
+        data["objective_id"] = active_objective["id"] if active_objective else None
+    if data.get("objective_id") not in (None, ""):
+        objective = _get(conn, "study_objectives", int(data["objective_id"]))
+        if int(objective["study_subject_id"]) != int(study_id):
+            raise DomainError("O objetivo da sessão precisa pertencer à mesma matéria.")
     topic = _assert_topic_available_for_work(_get(conn,"topicos",topic_id)) if topic_id else None
     if topic_id and not _topic_matches_study(conn, topic, study_id): raise DomainError("O conteúdo precisa pertencer à matéria selecionada.")
     _date(data["date"])
@@ -2582,6 +3212,10 @@ def create_session(conn, values):
     if planned_id:
         planned_item = planned_detail(conn, planned_id)
         if planned_item["study_subject_id"] != study_id: raise DomainError("A sessão planejada precisa pertencer à mesma matéria.")
+        if planned_item.get("review_campaign_id"):
+            if data.get("review_campaign_id") not in (None, planned_item["review_campaign_id"]):
+                raise DomainError("A sessão precisa manter a campanha do bloco planejado.")
+            data["review_campaign_id"] = planned_item["review_campaign_id"]
         # A transição condicional é feita antes da inserção, na mesma transação.
         # Assim, duas requisições quase simultâneas não conseguem registrar duas
         # sessões para o mesmo bloco planejado.
@@ -2619,9 +3253,19 @@ def create_session(conn, values):
 
 
 def update_session(conn, ident, values):
-    old=_get(conn,"sessoes_estudo",ident); data=_fields(values,{"study_subject_id","date","started_at","ended_at","duration_seconds","entry_method","mastery_before","mastery_after","progress_level","notes","topic_id"})
+    old=_get(conn,"sessoes_estudo",ident)
+    correction_key = values.get("idempotency_key")
+    if correction_key:
+        existing_correction = repo.one(conn, "SELECT * FROM study_session_corrections WHERE idempotency_key=?", (str(correction_key),))
+        if existing_correction:
+            saved = _get(conn, "sessoes_estudo", ident)
+            saved["idempotent"] = True
+            return saved
+    data=_fields(values,{"study_subject_id","date","started_at","ended_at","duration_seconds","entry_method","mastery_before","mastery_after","progress_level","notes","topic_id","purpose"})
     topic_id=data.get("topic_id",old["topic_id"]); study_id=data.get("study_subject_id",old["study_subject_id"])
     entry_method = data.get("entry_method", old["entry_method"])
+    if data.get("purpose") not in (None, "study", "review"):
+        raise DomainError("Finalidade da sessão inválida.")
     _assert_study_accessible(conn, study_id, intent="review" if entry_method == "review" else "session")
     topic = _get(conn,"topicos",topic_id) if topic_id else None
     if topic_id and not _topic_matches_study(conn, topic, study_id): raise DomainError("O conteúdo precisa pertencer à matéria selecionada.")
@@ -2637,11 +3281,22 @@ def update_session(conn, ident, values):
         _require_future_topic_resolution(conn, topic, values.get("future_blocks_action"))
     changed_source = any(key in data for key in ("topic_id","date","entry_method"))
     if changed_source: conn.execute("UPDATE revisoes SET status='cancelled' WHERE root_session_id=? AND status='pending'",(ident,))
+    if data:
+        data["version"] = int(old.get("version") or 1) + 1
     repo.update(conn,"sessoes_estudo",ident,data); _recalculate_mastery(conn,old["topic_id"]); _recalculate_mastery(conn,topic_id)
     if changed_source and topic_id and entry_method != "review": _start_review_chain(conn,topic_id,ident,_date(data.get("date",old["date"])))
     if completed:
         repo.update(conn,"topicos",topic_id,{"status":"completed","completed_at":data.get("date",old["date"]),"last_session_date":data.get("date",old["date"])})
     saved = _get(conn,"sessoes_estudo",ident)
+    repo.insert(conn, "study_session_corrections", {
+        "study_session_id": ident,
+        "correction_type": "edit_session",
+        "before_json": json.dumps(old, ensure_ascii=False, sort_keys=True),
+        "after_json": json.dumps(saved, ensure_ascii=False, sort_keys=True),
+        "reason": values.get("edit_reason") or "Correção manual da sessão",
+        "idempotency_key": str(correction_key) if correction_key else None,
+    })
+    saved["idempotent"] = False
     if will_complete_topic:
         saved["topic_completed"] = True
         saved["future_blocks"] = _resolve_completed_topic_blocks(conn, topic, values.get("future_blocks_action"))
@@ -2649,7 +3304,46 @@ def update_session(conn, ident, values):
 
 
 def delete_session(conn, ident):
-    old=_get(conn,"sessoes_estudo",ident); conn.execute("UPDATE revisoes SET status='cancelled' WHERE root_session_id=? AND status='pending'",(ident,)); remove(conn,"sessoes_estudo",ident); _recalculate_mastery(conn,old["topic_id"])
+    old=_get(conn,"sessoes_estudo",ident)
+    conn.execute("UPDATE revisoes SET status='cancelled' WHERE root_session_id=? AND status='pending'",(ident,))
+    conn.execute("DELETE FROM study_session_corrections WHERE study_session_id=?", (ident,))
+    conn.execute("DELETE FROM session_breaks WHERE study_session_id=?", (ident,))
+    remove(conn,"sessoes_estudo",ident)
+    _recalculate_mastery(conn,old["topic_id"])
+
+
+def session_detail(conn, ident):
+    session = repo.one(conn, """
+        SELECT x.*,COALESCE(d.name,s.personal_name) subject_name,t.name topic_name
+        FROM sessoes_estudo x JOIN materias_estudo s ON s.id=x.study_subject_id
+        LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id
+        LEFT JOIN topicos t ON t.id=x.topic_id WHERE x.id=?
+    """, (ident,))
+    if not session:
+        raise DomainError("Sessão não encontrada.", 404, "session_not_found")
+    session["breaks"] = focus_tracking.breaks_for_session(conn, ident)
+    session["corrections"] = repo.many(
+        conn,
+        "SELECT * FROM study_session_corrections WHERE study_session_id=? ORDER BY created_at,id",
+        (ident,),
+    )
+    return session
+
+
+def add_session_break_correction(conn, ident, values):
+    try:
+        result = focus_tracking.add_retroactive_break(conn, ident, values)
+    except focus_tracking.FocusTrackingError as error:
+        raise DomainError(str(error), error.status, error.code) from error
+    result["detail"] = session_detail(conn, ident)
+    return result
+
+
+def update_session_break(conn, break_id, values):
+    try:
+        return focus_tracking.update_break(conn, break_id, values)
+    except focus_tracking.FocusTrackingError as error:
+        raise DomainError(str(error), error.status, error.code) from error
 
 
 def _timestamp(value, label="Horário"):
@@ -2717,6 +3411,10 @@ def _focus_snapshot(conn, focus, *, check_recovery=True):
     snapshot["recovery_limit_seconds"] = _focus_recovery_limit_seconds(conn)
     snapshot["recovery_required"] = snapshot["status"] == "recovery_required"
     snapshot["is_active"] = snapshot["status"] in {"running", "paused", "recovery_required"}
+    pause = focus_tracking.pause_totals(conn, focus_id=snapshot["id"], now=_now())
+    snapshot["pause_seconds"] = pause["pause_seconds"]
+    snapshot["current_pause_seconds"] = pause["current_pause_seconds"]
+    snapshot["breaks"] = pause["breaks"]
     return snapshot
 
 
@@ -2907,6 +3605,10 @@ def pause_focus_session(conn, ident, values=None):
         "UPDATE sessoes_foco SET status='paused',accumulated_seconds=?,paused_at=?,last_resumed_at=NULL,version=version+1,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?",
         (elapsed, now, ident),
     )
+    try:
+        focus_tracking.start_break(conn, ident, {**values, "started_at": now})
+    except focus_tracking.FocusTrackingError as error:
+        raise DomainError(str(error), error.status, error.code) from error
     return _focus_snapshot(conn, _focus_row(conn, ident))
 
 
@@ -2921,6 +3623,10 @@ def resume_focus_session(conn, ident, values=None):
     if focus["status"] != "paused":
         raise DomainError("Esta sessão de foco não está pausada.", 409, "focus_not_paused")
     now = _now()
+    try:
+        focus_tracking.finish_open_break(conn, ident, values, ended_at=now)
+    except focus_tracking.FocusTrackingError as error:
+        raise DomainError(str(error), error.status, error.code) from error
     conn.execute(
         "UPDATE sessoes_foco SET status='running',last_resumed_at=?,paused_at=NULL,version=version+1,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?",
         (now, ident),
@@ -2996,6 +3702,11 @@ def finish_focus_session(conn, ident, values):
     # sessão real, mantendo a finalização completamente transacional.
     if topic_outcome in {"completed", "advance"}:
         _require_future_topic_resolution(conn, topic, values.get("future_blocks_action"))
+    if focus["status"] == "paused":
+        try:
+            focus_tracking.finish_open_break(conn, ident, values.get("break") or {}, ended_at=_now())
+        except focus_tracking.FocusTrackingError as error:
+            raise DomainError(str(error), error.status, error.code) from error
     # A transição condicional é o marcador de idempotência para sessões livres.
     # Em uma repetição/conflito, somente a primeira finalização pode criar a
     # sessão real; a outra observa o resultado já persistido.
@@ -3015,11 +3726,14 @@ def finish_focus_session(conn, ident, values):
         "study_subject_id": focus["study_subject_id"], "topic_id": focus.get("topic_id"),
         "planned_session_id": focus.get("planned_session_id"), "date": now.date().isoformat(),
         "duration_seconds": duration, "entry_method": "timer", "notes": values.get("notes", ""),
+        "mastery_after": values.get("mastery_after"),
         "topic_completed": topic_outcome in {"completed", "advance"},
         "future_blocks_action": values.get("future_blocks_action"),
     })
     future_result = created_session.get("future_blocks")
     repo.update(conn, "sessoes_estudo", created_session["id"], {"started_at": focus["started_at"], "ended_at": now.isoformat()})
+    session = _get(conn, "sessoes_estudo", created_session["id"])
+    pause_summary = focus_tracking.attach_to_session(conn, ident, session["id"])
     session = _get(conn, "sessoes_estudo", created_session["id"])
     if topic_outcome == "review" and topic:
         repo.update(conn, "topicos", topic["id"], {"status": "for_review", "review_requested": 1})
@@ -3040,7 +3754,25 @@ def finish_focus_session(conn, ident, values):
         "session": _focus_snapshot(conn, _focus_row(conn, ident), check_recovery=False),
         "study_session": session, "note": note, "future_blocks": future_result,
         "topic_outcome": topic_outcome, "replanning_recommended": bool(topic_outcome in {"completed", "advance"} or duration),
+        "pause_summary": pause_summary,
     }
+    observation_results = []
+    assessment = values.get("assessment") or values.get("post_session_assessment")
+    if assessment not in (None, ""):
+        observation_results.append(add_study_observation(conn, focus["study_subject_id"], {
+            "kind": "mastery", "raw_value": assessment, "source": "self_report",
+            "study_session_id": session["id"], "idempotency_key": f"focus:{ident}:mastery",
+        }))
+    for key, kind in (("fatigue", "fatigue"), ("concentration_difficulty", "concentration"), ("new_content", "new_content")):
+        if values.get(key) in (None, "", False, 0, "0", "false"):
+            continue
+        observation_results.append(add_study_observation(conn, focus["study_subject_id"], {
+            "kind": kind, "raw_value": values.get(key), "source": "self_report",
+            "study_session_id": session["id"], "idempotency_key": f"focus:{ident}:{kind}",
+        }))
+    if observation_results:
+        payload["observations"] = observation_results
+        payload["recommendation"] = observation_results[-1]["recommendation"]
     if topic:
         refreshed_topic = _topic_metrics_rows(conn, [_get(conn, "topicos", topic["id"])])[0]
         payload["topic_effort_result"] = {
@@ -3078,6 +3810,10 @@ def cancel_focus_session(conn, ident, values=None):
     if focus["status"] == "completed":
         raise DomainError("Uma sessão concluída não pode ser cancelada.", 409, "focus_completed")
     now = _now()
+    try:
+        focus_tracking.finish_open_break(conn, ident, values, ended_at=now)
+    except focus_tracking.FocusTrackingError as error:
+        raise DomainError(str(error), error.status, error.code) from error
     conn.execute(
         "UPDATE sessoes_foco SET status='cancelled',accumulated_seconds=?,ended_at=?,last_resumed_at=NULL,paused_at=?,version=version+1,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=?",
         (_focus_elapsed_seconds(focus), now, now, ident),
@@ -3833,6 +4569,94 @@ def planned(conn,start,end):
     return _with_planned_topic_context(conn, repo.many(conn,sql,(start,end)))
 
 
+def planning_calendar_events(conn, start, end):
+    """Retorna uma única linha do tempo: intenção planejada e tempo realmente feito.
+
+    Um bloco concluído continua sendo mostrado como o mesmo evento do calendário;
+    a sessão real vinculada apenas complementa o bloco. Sessões manuais, sem
+    bloco correspondente, aparecem uma única vez como atividade realizada.
+    """
+    first, last = _analytics_dates(start, end)
+    planned_rows = repo.many(conn, """
+        SELECT p.*, COALESCE(s.personal_name,d.name) subject_name, t.name topic_name,
+               f.name formation_name, COALESCE(SUM(x.duration_seconds),0) real_seconds,
+               COUNT(x.id) real_sessions
+        FROM sessoes_planejadas p
+        JOIN materias_estudo s ON s.id=p.study_subject_id
+        LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id
+        LEFT JOIN formacoes f ON f.id=COALESCE(s.related_formation_id,d.formation_id)
+        LEFT JOIN topicos t ON t.id=p.topic_id
+        LEFT JOIN sessoes_estudo x ON x.planned_session_id=p.id
+        WHERE p.scheduled_date BETWEEN ? AND ?
+          AND s.archived_at IS NULL AND s.status<>'archived'
+          AND (d.id IS NULL OR d.archived_at IS NULL)
+          AND (f.id IS NULL OR f.archived_at IS NULL)
+        GROUP BY p.id
+        ORDER BY p.scheduled_date, p.start_time, p.id
+    """, (first.isoformat(), last.isoformat()))
+    events = []
+    today = _local_now().date()
+    for row in planned_rows:
+        scheduled = _date(row["scheduled_date"])
+        if row["status"] == "completed":
+            event_type = "completed_planned_block"
+        elif row["status"] == "skipped" or (row["status"] == "planned" and scheduled < today):
+            event_type = "missed_block"
+        elif row["status"] == "cancelled":
+            event_type = "cancelled_block"
+        elif row["source"] == "manual":
+            event_type = "manual_planned_block"
+        else:
+            event_type = "planned_block"
+        start_at = None
+        if row.get("start_time"):
+            hour, minute = (int(value) for value in row["start_time"].split(":"))
+            start_at = datetime.combine(scheduled, datetime.min.time(), LOCAL_TIMEZONE).replace(
+                hour=hour, minute=minute
+            ).isoformat(timespec="minutes")
+        events.append({
+            "event_id": f"planned:{row['id']}", "event_type": event_type,
+            "planned_session_id": row["id"], "study_session_id": None,
+            "review_campaign_id": row.get("review_campaign_id"),
+            "date": row["scheduled_date"], "start_at": start_at,
+            "time_known": bool(start_at), "status": row["status"], "source": row["source"],
+            "planned_minutes": int(row["planned_duration_minutes"] or 0),
+            "real_minutes": round(int(row["real_seconds"] or 0) / 60, 1),
+            "real_sessions": int(row["real_sessions"] or 0),
+            "subject_name": row["subject_name"], "topic_name": row.get("topic_name"),
+            "formation_name": row.get("formation_name"), "reason": row.get("selection_reason"),
+        })
+    actual_rows = repo.many(conn, """
+        SELECT x.*, COALESCE(s.personal_name,d.name) subject_name, t.name topic_name,
+               f.name formation_name
+        FROM sessoes_estudo x
+        JOIN materias_estudo s ON s.id=x.study_subject_id
+        LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id
+        LEFT JOIN formacoes f ON f.id=COALESCE(s.related_formation_id,d.formation_id)
+        LEFT JOIN topicos t ON t.id=x.topic_id
+        WHERE x.date BETWEEN ? AND ? AND x.planned_session_id IS NULL
+          AND s.archived_at IS NULL AND s.status<>'archived'
+        ORDER BY x.date, x.started_at, x.id
+    """, (first.isoformat(), last.isoformat()))
+    for row in actual_rows:
+        started = row.get("started_at")
+        events.append({
+            "event_id": f"actual:{row['id']}", "event_type": "unplanned_real_session",
+            "planned_session_id": None, "study_session_id": row["id"],
+            "review_campaign_id": row.get("review_campaign_id"),
+            "date": row["date"], "start_at": started, "time_known": bool(started),
+            "status": "completed", "source": row["entry_method"], "planned_minutes": 0,
+            "real_minutes": round(int(row["duration_seconds"] or 0) / 60, 1),
+            "real_sessions": 1, "subject_name": row["subject_name"],
+            "topic_name": row.get("topic_name"), "formation_name": row.get("formation_name"),
+            "reason": None,
+        })
+    return {
+        "start": first.isoformat(), "end": last.isoformat(),
+        "events": sorted(events, key=lambda item: (item["date"], item["start_at"] or "99:99", item["event_id"])),
+    }
+
+
 def planned_detail(conn, ident):
     row = repo.one(conn,"""SELECT p.*,COALESCE(s.personal_name,d.name) subject_name,t.id topic_record_id,t.name topic_name,
         t.study_subject_id topic_source_study_subject_id,t.curriculum_subject_id topic_source_curriculum_subject_id,
@@ -3911,8 +4735,20 @@ def _assert_planned_slot(conn, candidate, ignore_id=None, *, validate_availabili
 
 
 def create_planned(conn,values,source="manual"):
-    study=int(_need(values.get("study_subject_id"),"Matéria")); _assert_study_accessible(conn, study, require_current=True, intent="planning")
-    data=_fields(values,{"study_subject_id","topic_id","scheduled_date","start_time","planned_duration_minutes","selection_reason","selection_context"}); data.update({"study_subject_id":study,"scheduled_date":_need(data.get("scheduled_date"),"Data"),"planned_duration_minutes":int(_need(data.get("planned_duration_minutes"),"Duração")),"source":source})
+    study=int(_need(values.get("study_subject_id"),"Matéria"))
+    data=_fields(values,{"study_subject_id","topic_id","scheduled_date","start_time","planned_duration_minutes","selection_reason","selection_context","review_campaign_id","plan_run_id","intent","is_locked","user_modified_at","objective_id"}); data.update({"study_subject_id":study,"scheduled_date":_need(data.get("scheduled_date"),"Data"),"planned_duration_minutes":int(_need(data.get("planned_duration_minutes"),"Duração")),"source":source})
+    if data.get("objective_id") not in (None, ""):
+        objective = _get(conn, "study_objectives", int(data["objective_id"]))
+        if int(objective["study_subject_id"]) != int(study):
+            raise DomainError("O objetivo do bloco precisa pertencer à mesma matéria.")
+    data["intent"] = "review" if data.get("review_campaign_id") else data.get("intent", "study")
+    if data["intent"] not in {"study", "review"}: raise DomainError("Finalidade do bloco inválida.")
+    if "is_locked" in data: data["is_locked"] = 1 if _confirmed(data["is_locked"]) else 0
+    if data.get("review_campaign_id") is not None:
+        campaign = _get(conn, "review_campaigns", int(data["review_campaign_id"]))
+        if campaign["status"] != "active":
+            raise DomainError("A campanha de revisão não está ativa.", 409, "review_campaign_inactive")
+    _assert_study_accessible(conn, study, require_current=True, intent="review" if data.get("review_campaign_id") else "planning")
     if data["planned_duration_minutes"] <= 0: raise DomainError("A duração deve ser maior que zero.")
     if data.get("topic_id"):
         topic = _assert_topic_available_for_work(_get(conn,"topicos",data["topic_id"]))
@@ -3923,7 +4759,9 @@ def create_planned(conn,values,source="manual"):
 
 def update_planned(conn, ident, values):
     current = planned_detail(conn,ident)
-    data = _fields(values,{"study_subject_id","topic_id","scheduled_date","start_time","planned_duration_minutes","status","selection_reason","selection_context"})
+    data = _fields(values,{"study_subject_id","topic_id","scheduled_date","start_time","planned_duration_minutes","status","selection_reason","selection_context","intent","is_locked","objective_id"})
+    if "intent" in data and data["intent"] not in {"study", "review"}: raise DomainError("Finalidade do bloco inválida.")
+    if "is_locked" in data: data["is_locked"] = 1 if _confirmed(data["is_locked"]) else 0
     requested_source = values.get("source")
     if requested_source is not None:
         restoring_automatic_source = requested_source == "automatic" and _confirmed(values.get("restore_automatic_source"))
@@ -3937,6 +4775,7 @@ def update_planned(conn, ident, values):
             raise DomainError("Um bloco manual não pode voltar a ser automático.", 400, "planned_source_invalid")
         elif current["source"] == "automatic":
             data["source"] = "manual"
+            data["user_modified_at"] = _now()
         elif current["source"] != "manual":
             raise DomainError("Origem do bloco inválida.", 409, "planned_source_invalid")
     candidate = {**current, **data}
@@ -3954,6 +4793,8 @@ def update_planned(conn, ident, values):
             validate_availability=_confirmed(values.get("validate_availability")) or _confirmed(values.get("strict_availability")),
             allow_outside_availability=_confirmed(values.get("allow_outside_availability")),
         )
+    if any(key in data for key in {"scheduled_date", "start_time", "planned_duration_minutes", "study_subject_id", "topic_id"}):
+        data.setdefault("user_modified_at", _now())
     if data.get("status") == "completed" and current["status"] != "completed":
         real_session = repo.one(conn, "SELECT id FROM sessoes_estudo WHERE planned_session_id=? LIMIT 1", (ident,))
         if not real_session:
@@ -4027,7 +4868,23 @@ def _planning_windows(conn, start, end):
     preference_values = settings(conn)
     preferences = planning_preferences(conn)
     daily_limit = _nonnegative_setting_minutes(preference_values, "daily_max_study_minutes")
+    weekly_limit = _nonnegative_setting_minutes(preference_values, "weekly_max_study_minutes")
     rest_reserve = _nonnegative_setting_minutes(preference_values, "minimum_rest_minutes")
+    first_day, last_day = _date(start), _date(end)
+    full_week_start = first_day - timedelta(days=first_day.weekday())
+    full_week_end = last_day + timedelta(days=6 - last_day.weekday())
+    weekly_rows = _planned_rows_for_window(conn, full_week_start.isoformat(), full_week_end.isoformat()) if weekly_limit else rows
+    weekly_existing = defaultdict(int)
+    for row in weekly_rows:
+        if not _is_future_planned_block(row, now):
+            continue
+        planned_day = _date(row["scheduled_date"])
+        monday = (planned_day - timedelta(days=planned_day.weekday())).isoformat()
+        weekly_existing[monday] += int(row.get("planned_duration_minutes") or 0)
+    weekly_free_remaining = {
+        monday: max(0, weekly_limit - minutes)
+        for monday, minutes in weekly_existing.items()
+    }
     windows, base_minutes, free_minutes, net_capacity, net_free = {}, 0, 0, 0, 0
     capacity_rows = []
     for current in _range_dates(start, end):
@@ -4044,14 +4901,22 @@ def _planning_windows(conn, start, end):
         capacity_budget = max(0, raw_capacity - rest_reserve)
         if daily_limit:
             capacity_budget = min(capacity_budget, daily_limit)
-        base_minutes += capacity_budget
         free = _subtract(values, reserved[current.isoformat()])
         already_planned = sum(
             int(row.get("planned_duration_minutes") or 0)
             for row in rows
             if row["scheduled_date"] == current.isoformat() and _is_future_planned_block(row, now)
         )
-        free = _take_intervals(free, max(0, capacity_budget - already_planned))
+        free_budget = max(0, capacity_budget - already_planned)
+        week_key = (current - timedelta(days=current.weekday())).isoformat()
+        if weekly_limit:
+            if week_key not in weekly_free_remaining:
+                weekly_free_remaining[week_key] = max(0, weekly_limit - weekly_existing.get(week_key, 0))
+            free_budget = min(free_budget, weekly_free_remaining[week_key])
+            weekly_free_remaining[week_key] = max(0, weekly_free_remaining[week_key] - free_budget)
+        capacity_budget = already_planned + free_budget
+        base_minutes += capacity_budget
+        free = _take_intervals(free, free_budget)
         # A prévia é devolvida diretamente por ``/planning/items``. Datas em
         # chaves de dicionário não são serializáveis por JSON, então a mesma
         # forma ISO é usada tanto internamente quanto no contrato público.
@@ -4064,6 +4929,7 @@ def _planning_windows(conn, start, end):
         capacity_rows.append({
             "date": current.isoformat(), "gross_capacity_minutes": raw_capacity,
             "reserved_rest_minutes": min(rest_reserve, raw_capacity), "daily_limit_minutes": daily_limit or None,
+            "weekly_limit_minutes": weekly_limit or None,
             "budget_before_breaks_minutes": capacity_budget, "planned_minutes": already_planned,
             "free_before_breaks_minutes": smart_planning.interval_minutes(free),
             "net_capacity_minutes": day_net_capacity, "net_free_minutes": day_net_free,
@@ -4116,7 +4982,10 @@ def _planning_candidate_rows(conn, formation_id=None, item_id=None, kind=None):
            d.allowed_weekdays curriculum_allowed_weekdays,d.planning_enabled,d.planning_opt_out,d.minimum_grade,
            d.effort_is_provisional,d.deadline_is_provisional,d.planning_profile_configured_at,
           f.name formation_name,f.status formation_status,f.archived_at formation_archived_at,
-          d.archived_at curriculum_archived_at
+          d.archived_at curriculum_archived_at,
+          (SELECT b.current_budget_minutes FROM study_plan_baselines b WHERE b.study_subject_id=s.id AND b.active=1 ORDER BY b.id DESC LIMIT 1) adaptive_budget_minutes,
+          (SELECT r.recommended_daily_minutes FROM recommendation_snapshots r WHERE r.study_subject_id=s.id ORDER BY r.calculated_at DESC,r.id DESC LIMIT 1) adaptive_daily_minutes,
+          (SELECT r.recommended_block_minutes FROM recommendation_snapshots r WHERE r.study_subject_id=s.id ORDER BY r.calculated_at DESC,r.id DESC LIMIT 1) adaptive_block_minutes
         FROM materias_estudo s
         LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id
         LEFT JOIN formacoes f ON f.id=COALESCE(s.related_formation_id,d.formation_id)
@@ -4295,6 +5164,8 @@ def _effective_block_preference(row, curriculum_id, default_minutes):
     curriculum_value = row.get("curriculum_preferred_block_minutes") if curriculum_id else None
     if curriculum_value not in (None, ""):
         return int(curriculum_value), "curriculum"
+    if row.get("adaptive_block_minutes") not in (None, ""):
+        return int(row["adaptive_block_minutes"]), "adaptive_recommendation"
     return int(default_minutes), "global_default"
 
 
@@ -4482,12 +5353,57 @@ def _first_feasible_from_windows(item, start, remaining, windows, end):
     return None
 
 
+def _active_campaigns_by_study(conn, start_day, end_day):
+    """Distribui a meta total de cada campanha entre seus estudos ativos.
+
+    A partilha é determinística e conserva exatamente os minutos diários da
+    campanha. Assim, 2 h/dia com três disciplinas é 2 h no total, nunca 6 h.
+    """
+    rows = repo.many(conn, """
+        SELECT c.*,i.study_id,i.curriculum_subject_id,i.weight,i.item_status
+        FROM review_campaigns c JOIN review_campaign_items i ON i.campaign_id=c.id
+        WHERE c.status='active' AND i.item_status='active'
+          AND c.end_date>=? AND c.start_date<=?
+        ORDER BY c.id,i.study_id
+    """, (start_day.isoformat(), end_day.isoformat()))
+    grouped = defaultdict(list)
+    for row in rows:
+        grouped[row["id"]].append(row)
+    by_study = {}
+    for campaign_id, members in grouped.items():
+        campaign = members[0]
+        total = int(campaign["daily_goal_minutes"])
+        if campaign["goal_scope"] == "per_item":
+            shares = {member["study_id"]: total for member in members}
+        else:
+            total_weight = sum(float(member["weight"] or 0) for member in members)
+            raw = {member["study_id"]: total * float(member["weight"] or 0) / total_weight for member in members}
+            shares = {study_id: int(value) for study_id, value in raw.items()}
+            remainder = total - sum(shares.values())
+            for study_id in sorted(raw, key=lambda value: (-(raw[value] - int(raw[value])), value))[:remainder]:
+                shares[study_id] += 1
+        for member in members:
+            by_study[member["study_id"]] = {
+                "id": campaign_id, "name": campaign["name"], "purpose": campaign.get("purpose"),
+                "start_date": campaign["start_date"], "end_date": campaign["end_date"],
+                "daily_goal_minutes": shares[member["study_id"]],
+                "campaign_daily_goal_minutes": total, "allowed_weekdays": _stored_weekdays(campaign["allowed_weekdays"]),
+                "preferred_block_minutes": campaign.get("preferred_block_minutes"), "goal_scope": campaign["goal_scope"],
+            }
+    return by_study
+
+
+def _daily_goal_for_week(daily_goal, allowed, first, last):
+    return int(daily_goal) * sum(1 for current in _range_dates(first.isoformat(), last.isoformat()) if not allowed or current.weekday() in allowed)
+
+
 def planning_items(conn, start=None, end=None, formation_id=None, item_id=None, kind=None):
     start_day = _date(start or _today())
     end_day = _date(end or (start_day + timedelta(days=6)).isoformat())
     if end_day < start_day: raise DomainError("A data final não pode ser anterior à inicial.")
     rows = _planning_candidate_rows(conn, formation_id, item_id, kind)
     study_ids = [row["id"] for row in rows]
+    campaigns_by_study = _active_campaigns_by_study(conn, start_day, end_day)
     curriculum_ids = [row["curriculum_subject_id"] for row in rows if row.get("curriculum_subject_id")]
     shared_contexts = _canonical(lambda: canonical_links.planning_contexts(conn, study_ids))
     real_study = _minutes_by_study(conn, study_ids)
@@ -4500,7 +5416,8 @@ def planning_items(conn, start=None, end=None, formation_id=None, item_id=None, 
     farthest_dates = [end_day]
     for row in rows:
         shared = shared_contexts.get(row["id"], {})
-        for value in (row.get("deadline_date"), row.get("curriculum_end_date"), row.get("target_date"), shared.get("closest_active_deadline")):
+        campaign = campaigns_by_study.get(row["id"])
+        for value in (row.get("deadline_date"), row.get("curriculum_end_date"), row.get("target_date"), shared.get("closest_active_deadline"), campaign.get("end_date") if campaign else None):
             parsed, _invalid = _optional_date(value)
             if parsed:
                 farthest_dates.append(parsed)
@@ -4512,6 +5429,7 @@ def planning_items(conn, start=None, end=None, formation_id=None, item_id=None, 
     evaluations_by_study, evaluations_by_curriculum = _planning_evaluations_by_owner(conn, study_ids, curriculum_ids)
     horizon = _planning_windows(conn, start_day.isoformat(), farthest_day.isoformat())
     preferences = planning_preferences(conn)
+    global_subject_daily_max = _nonnegative_setting_minutes(settings(conn), "subject_daily_max_minutes")
     plan_index = _planned_minutes_index(conn, study_ids, min(start_day, week_start).isoformat(), farthest_day.isoformat())
     items = []
     today_day = _local_now().date()
@@ -4519,16 +5437,26 @@ def planning_items(conn, start=None, end=None, formation_id=None, item_id=None, 
     for row in rows:
         curriculum_id = row.get("curriculum_subject_id")
         shared = shared_contexts.get(row["id"], {})
+        campaign = campaigns_by_study.get(row["id"])
         kind = "curriculum" if curriculum_id else "personal"
         required = row.get("curriculum_required_study_minutes") if curriculum_id else row.get("required_study_minutes")
+        has_recurring_goal = bool(row.get("daily_goal_minutes") or row.get("weekly_goal_minutes") or (not curriculum_id and row.get("minimum_weekly_minutes")))
+        if required in (None, "") and not has_recurring_goal and (curriculum_id or row.get("idempotency_key")):
+            required = row.get("adaptive_budget_minutes")
         required = int(required) if required else 0
         weekly_goal = int(row.get("weekly_goal_minutes") or 0)
         minimum_weekly = int(row.get("minimum_weekly_minutes") or 0) if kind == "personal" else 0
+        daily_goal = int(row.get("daily_goal_minutes") or 0)
+        if campaign:
+            # A campanha é um objetivo próprio: não soma esforço de conclusão
+            # nem a antiga meta semanal da mesma disciplina.
+            required, weekly_goal, minimum_weekly = 0, 0, 0
+            daily_goal = int(campaign["daily_goal_minutes"])
         real = real_curriculum.get(curriculum_id, 0) if curriculum_id else real_study.get(row["id"], 0)
         week_real = week_real_study.get(row["id"], 0)
         ordinary_deadline = (row.get("deadline_date") or row.get("curriculum_end_date") or row.get("target_date")) if curriculum_id else row.get("target_date")
         deadline_options = []
-        for value in (ordinary_deadline, shared.get("closest_active_deadline")):
+        for value in (ordinary_deadline, shared.get("closest_active_deadline"), campaign.get("end_date") if campaign else None):
             parsed, invalid = _optional_date(value)
             if parsed:
                 deadline_options.append(parsed)
@@ -4540,25 +5468,31 @@ def planning_items(conn, start=None, end=None, formation_id=None, item_id=None, 
         study_start_day, invalid_study_start = _optional_date(row.get("start_date"))
         curriculum_start_day, invalid_curriculum_start = _optional_date(row.get("curriculum_start_date"))
         date_invalid = invalid_deadline or invalid_study_start or invalid_curriculum_start
-        effective_start = max([start_day, today_day, *[value for value in (study_start_day, curriculum_start_day) if value]])
+        campaign_start, invalid_campaign_start = _optional_date(campaign.get("start_date") if campaign else None)
+        date_invalid = date_invalid or invalid_campaign_start
+        effective_start = max([start_day, today_day, *[value for value in (study_start_day, curriculum_start_day, campaign_start) if value]])
         allocation_end = min(deadline_day, end_day) if deadline_day else end_day
         # A prévia pode cobrir apenas esta semana, mas a viabilidade/riscos da
         # disciplina precisam olhar até o prazo completo — não só sete dias.
         capacity_end = deadline_day if deadline_day else end_day
-        allowed = _stored_weekdays(row.get("curriculum_allowed_weekdays") if curriculum_id else row.get("allowed_weekdays"))
+        allowed = campaign.get("allowed_weekdays") if campaign else _stored_weekdays(row.get("curriculum_allowed_weekdays") if curriculum_id else row.get("allowed_weekdays"))
         effective_block_minutes, block_duration_source = _effective_block_preference(
             row, curriculum_id, preferences["default_session_minutes"],
         )
+        if campaign and block_duration_source == "global_default" and campaign.get("preferred_block_minutes"):
+            effective_block_minutes, block_duration_source = int(campaign["preferred_block_minutes"]), "review_campaign"
         planned_by_week = defaultdict(int)
+        planned_by_day = defaultdict(int)
         for planned_row in plan_index.get(row["id"], []):
             planned_day = _date(planned_row["scheduled_date"])
             monday = (planned_day - timedelta(days=planned_day.weekday())).isoformat()
             planned_by_week[monday] += int(planned_row["planned_duration_minutes"] or 0)
+            planned_by_day[planned_row["scheduled_date"]] += int(planned_row["planned_duration_minutes"] or 0)
         if capacity_end >= effective_start:
             planned_future = _indexed_planned_minutes(plan_index, row["id"], effective_start.isoformat(), capacity_end.isoformat())
         else:
             planned_future = 0
-        review_mode = bool(curriculum_id and row.get("review_status") in {"queued", "in_progress"})
+        review_mode = bool(campaign or (curriculum_id and row.get("review_status") in {"queued", "in_progress"}))
         if curriculum_id:
             # Tópicos mantêm a referência curricular de origem para a grade,
             # porém, após um vínculo canônico, podem pertencer ao mesmo estudo.
@@ -4585,7 +5519,15 @@ def planning_items(conn, start=None, end=None, formation_id=None, item_id=None, 
                 monday = (week_first - timedelta(days=week_first.weekday())).isoformat()
                 actual_this_week = week_real if monday == current_monday else 0
                 planned_this_week = int(planned_by_week.get(monday, 0))
-                if not required and weekly_goal:
+                daily_first = max(week_first, effective_start)
+                daily_last = min(_week_last, allocation_end)
+                daily_target = (
+                    _daily_goal_for_week(daily_goal, allowed, daily_first, daily_last)
+                    if daily_goal and daily_last >= daily_first else 0
+                )
+                if not required and daily_target:
+                    weekly_goal_by_week[monday] = max(0, daily_target - actual_this_week - planned_this_week)
+                elif not required and weekly_goal:
                     weekly_goal_by_week[monday] = max(0, weekly_goal - actual_this_week - planned_this_week)
                 if minimum_weekly:
                     minimum_by_week[monday] = max(0, minimum_weekly - actual_this_week - planned_this_week)
@@ -4626,7 +5568,14 @@ def planning_items(conn, start=None, end=None, formation_id=None, item_id=None, 
             "effective_block_minutes": effective_block_minutes,
             "block_duration_source": block_duration_source,
             "allowed_weekdays": allowed, "minimum_weekly_minutes": minimum_weekly,
-            "weekly_goal_minutes": int(weekly_goal), "week_real_minutes": week_real,
+            "weekly_goal_minutes": int(weekly_goal), "daily_goal_minutes": daily_goal or None,
+            "habitual_daily_max_minutes": int(row.get("habitual_daily_max_minutes") or global_subject_daily_max or 0) or None,
+            "planned_by_day": dict(planned_by_day),
+            "daily_goal_mode": "campaign_total" if campaign else row.get("daily_goal_mode", "legacy_weekly"),
+            "review_campaign_id": campaign.get("id") if campaign else None,
+            "review_campaign_name": campaign.get("name") if campaign else None,
+            "campaign_daily_goal_minutes": campaign.get("campaign_daily_goal_minutes") if campaign else None,
+            "week_real_minutes": week_real,
             "week_planned_minutes": int(planned_by_week.get(current_monday, 0)),
             "planned_by_week": dict(planned_by_week), "weekly_goal_by_week": weekly_goal_by_week,
             "minimum_by_week": minimum_by_week, "weekly_demand_by_week": weekly_demand_by_week,
@@ -4636,7 +5585,7 @@ def planning_items(conn, start=None, end=None, formation_id=None, item_id=None, 
             "review_mode": review_mode,
             "has_upcoming_evaluation": (curriculum_id in evaluation_curricula if curriculum_id else row["id"] in evaluation_studies) or bool(shared.get("has_upcoming_evaluation")),
         }
-        has_configured_demand = bool(required or weekly_goal or minimum_weekly)
+        has_configured_demand = bool(required or weekly_goal or minimum_weekly or daily_goal)
         # Uma disciplina atual é elegível por padrão. ``planning_opt_out``
         # representa a desativação explícita e não confunde o valor legado 0
         # de ``planning_enabled`` com a vontade do usuário.
@@ -4676,8 +5625,12 @@ def planning_items(conn, start=None, end=None, formation_id=None, item_id=None, 
             demand_mode = "review" if review_mode else "deadline_total"
         else:
             demand_in_period = remaining
-            deferred_beyond_preview = 0
-            demand_mode = "recurring_weekly" if weekly_goal else ("weekly_minimum" if minimum_weekly else "none")
+            if campaign and deadline_day and deadline_day > end_day:
+                future_start = max(end_day + timedelta(days=1), effective_start)
+                deferred_beyond_preview = _daily_goal_for_week(daily_goal, allowed, future_start, deadline_day)
+            else:
+                deferred_beyond_preview = 0
+            demand_mode = "review" if campaign else ("recurring_daily" if daily_goal else ("recurring_weekly" if weekly_goal else ("weekly_minimum" if minimum_weekly else "none")))
         raw["planning_state"] = planning_state
         raw["is_schedulable"] = planning_state == "ready"
         raw["demand_in_period_minutes"] = int(demand_in_period)
@@ -4977,6 +5930,468 @@ def generate_plan(conn, start, days=7):
     }
 
 
+def _planning_input_fingerprint(conn, start, end):
+    """Resume somente fatos capazes de invalidar uma prévia."""
+    payload = {
+        "settings": repo.many(conn, "SELECT key,value,updated_at FROM configuracoes ORDER BY key"),
+        "availability": repo.many(conn, "SELECT * FROM disponibilidades_semanais ORDER BY id"),
+        "exceptions": repo.many(conn, "SELECT * FROM excecoes_disponibilidade WHERE date BETWEEN ? AND ? ORDER BY id", (start, end)),
+        "intervals": repo.many(conn, "SELECT * FROM disponibilidades_intervalos WHERE start_date<=? AND end_date>=? ORDER BY id", (end, start)),
+        "planned": repo.many(conn, "SELECT id,study_subject_id,scheduled_date,start_time,planned_duration_minutes,status,source,is_locked,updated_at FROM sessoes_planejadas WHERE scheduled_date BETWEEN ? AND ? ORDER BY id", (start, end)),
+        "sessions": repo.many(conn, "SELECT id,study_subject_id,objective_id,date,duration_seconds,updated_at FROM sessoes_estudo WHERE date BETWEEN ? AND ? ORDER BY id", (start, end)),
+        "studies": repo.many(conn, "SELECT id,status,priority,difficulty,difficulty_is_provisional,mastery_level,mastery_is_provisional,daily_goal_minutes,manual_daily_minutes,required_study_minutes,minimum_weekly_minutes,allowed_weekdays,profile_version,updated_at FROM materias_estudo ORDER BY id"),
+        "curriculum": repo.many(conn, "SELECT id,academic_status,deadline_date,required_study_minutes,priority_base,allowed_weekdays,planning_opt_out,updated_at FROM disciplinas_grade ORDER BY id"),
+        "objectives": repo.many(conn, "SELECT * FROM study_objectives ORDER BY id"),
+        "topics": repo.many(conn, "SELECT id,study_subject_id,curriculum_subject_id,status,difficulty,mastery,archived_at,updated_at FROM topicos ORDER BY id"),
+    }
+    raw = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _interactive_planning_snapshot(conn, first, end, selected_study_ids=None, replace_automatic=True):
+    selected = sorted({int(value) for value in (selected_study_ids or [])})
+    rows = repo.many(conn, """
+        SELECT o.*,s.status study_status,s.archived_at study_archived_at,s.difficulty,s.difficulty_is_provisional,
+          s.mastery_level,s.mastery_is_provisional,s.rhythm_mode,s.manual_daily_minutes,s.daily_goal_minutes,
+          s.allowed_weekdays study_allowed_weekdays,s.preferred_block_minutes study_preferred_minutes,
+          s.curriculum_subject_id,s.personal_name,d.name curriculum_name,d.allowed_weekdays curriculum_allowed_weekdays,
+          d.preferred_block_minutes curriculum_preferred_minutes,d.archived_at curriculum_archived_at,
+          d.planning_opt_out,f.status formation_status,f.archived_at formation_archived_at
+        FROM study_objectives o
+        JOIN materias_estudo s ON s.id=o.study_subject_id
+        LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id
+        LEFT JOIN formacoes f ON f.id=COALESCE(s.related_formation_id,d.formation_id)
+        WHERE o.status='active' AND s.status='active' AND s.archived_at IS NULL
+          AND (d.id IS NULL OR d.archived_at IS NULL)
+          AND (f.id IS NULL OR (f.status='active' AND f.archived_at IS NULL))
+        ORDER BY o.deadline_date,o.id
+    """)
+    if selected:
+        rows = [row for row in rows if int(row["study_subject_id"]) in selected]
+    maximum_deadline = max(
+        [_date(row["deadline_date"]) for row in rows if row.get("deadline_date") and _date(row["deadline_date"]) >= first]
+        or [end]
+    )
+    calculation_end = min(max(end, maximum_deadline), first + timedelta(days=547))
+    study_ids = [row["study_subject_id"] for row in rows]
+    topic_rows = repo.many(conn, "SELECT * FROM topicos WHERE archived_at IS NULL ORDER BY sort_order,id")
+    topics_by_study = defaultdict(list)
+    for topic in topic_rows:
+        for row in rows:
+            if topic.get("study_subject_id") == row["study_subject_id"] or (
+                row.get("curriculum_subject_id") and topic.get("curriculum_subject_id") == row["curriculum_subject_id"]
+            ):
+                topics_by_study[row["study_subject_id"]].append(topic)
+    realized = {
+        row["objective_id"]: int(row["seconds"] or 0)
+        for row in repo.many(conn, "SELECT objective_id,COALESCE(SUM(duration_seconds),0) seconds FROM sessoes_estudo WHERE objective_id IS NOT NULL GROUP BY objective_id")
+    }
+    objectives = []
+    for row in rows:
+        topics = topics_by_study.get(row["study_subject_id"], [])
+        mastery = row.get("mastery_level")
+        mastery_provisional = bool(row.get("mastery_is_provisional"))
+        if mastery is None and mastery_provisional:
+            mastery = 2
+        difficulty = row.get("difficulty")
+        difficulty_provisional = bool(row.get("difficulty_is_provisional"))
+        if difficulty is None and difficulty_provisional:
+            difficulty = 3
+        allowed = _stored_weekdays(row.get("curriculum_allowed_weekdays") if row.get("curriculum_subject_id") else row.get("study_allowed_weekdays"))
+        preferred = row.get("study_preferred_minutes") or row.get("curriculum_preferred_minutes")
+        daily_target = row.get("manual_daily_minutes") if row.get("rhythm_mode") == "manual" else row.get("daily_goal_minutes")
+        objectives.append({
+            "objective_id": row["id"], "study_subject_id": row["study_subject_id"],
+            "name": row.get("curriculum_name") or row.get("personal_name") or row.get("title"),
+            "status": row["status"], "objective_type": row["objective_type"],
+            "start_date": row["start_date"], "deadline_date": row.get("deadline_date"),
+            "budget_minutes": row.get("budget_minutes"), "budget_origin": row.get("budget_origin"),
+            "budget_is_provisional": bool(row.get("budget_is_provisional")),
+            "realized_seconds": realized.get(row["id"], 0),
+            "difficulty": difficulty, "difficulty_is_provisional": difficulty_provisional,
+            "mastery": mastery, "mastery_is_provisional": mastery_provisional,
+            "allowed_weekdays": allowed, "manual_daily_minutes": int(daily_target or 0) or None,
+            "preferred_duration_minutes": int(preferred or 0) or None,
+            "topics": topics, "topic_ids": [topic["id"] for topic in topics if topic.get("status") != "completed"],
+            "canonical_valid": True, "planning_opt_out": bool(row.get("planning_opt_out")),
+        })
+
+    now = _local_now()
+    all_planned = _planned_rows_for_window(conn, first.isoformat(), calculation_end.isoformat())
+    active_focus_plans = {
+        row["planned_session_id"] for row in repo.many(
+            conn, "SELECT planned_session_id FROM sessoes_foco WHERE planned_session_id IS NOT NULL AND status IN ('running','paused','recovery_required','finishing')"
+        )
+    }
+    preserved = []
+    selected_set = set(study_ids)
+    for row in all_planned:
+        replaceable = (
+            replace_automatic and row.get("source") == "automatic" and not row.get("is_locked")
+            and row["id"] not in active_focus_plans and int(row["study_subject_id"]) in selected_set
+            and first.isoformat() <= row["scheduled_date"] <= end.isoformat()
+        )
+        if not replaceable and _is_future_planned_block(row, now):
+            preserved.append(row)
+
+    preference_values = settings(conn)
+    rest_reserve = _nonnegative_setting_minutes(preference_values, "minimum_rest_minutes")
+    availability = {}
+    for current in _range_dates(first.isoformat(), calculation_end.isoformat()):
+        windows = availability_windows(conn, current)
+        if current == now.date():
+            minute_now = now.hour * 60 + now.minute
+            windows = [(max(left, minute_now), right) for left, right in windows if right > minute_now]
+        if rest_reserve:
+            windows = _take_intervals(windows, max(0, smart_planning.interval_minutes(windows) - rest_reserve))
+        availability[current.isoformat()] = windows
+    actual_by_day = {
+        row["date"]: int(row["seconds"] or 0)
+        for row in repo.many(conn, "SELECT date,COALESCE(SUM(duration_seconds),0) seconds FROM sessoes_estudo WHERE date BETWEEN ? AND ? GROUP BY date", (first.isoformat(), calculation_end.isoformat()))
+    }
+    preferences = planning_preferences(conn)
+    return {
+        "horizon_start": first.isoformat(), "horizon_end": end.isoformat(),
+        "calculation_end": calculation_end.isoformat(), "selected_study_ids": selected or study_ids,
+        "objectives": objectives, "availability": availability,
+        "preserved_allocations": preserved, "actual_focus_seconds_by_day": actual_by_day,
+        "daily_limit_minutes": _nonnegative_setting_minutes(preference_values, "daily_max_study_minutes"),
+        "weekly_limit_minutes": _nonnegative_setting_minutes(preference_values, "weekly_max_study_minutes"),
+        "pause_minutes": int(preferences.get("planning_break_minutes") or 0),
+    }
+
+
+def create_planning_preview(conn, values):
+    start = values.get("start", _today())
+    days = int(values.get("days", 7))
+    if days < 1 or days > 93:
+        raise DomainError("A prévia aceita de 1 a 93 dias.")
+    first = _date(start)
+    if first < _local_now().date():
+        raise DomainError("O início da prévia não pode ser anterior a hoje.", 400, "planning_start_in_past")
+    end = first + timedelta(days=days - 1)
+    replace_automatic = values.get("replace_automatic", True) in (True, 1, "1", "true", "True", "sim")
+    selected_ids = values.get("selected_study_ids") or []
+    if not isinstance(selected_ids, list):
+        raise DomainError("A seleção de matérias precisa ser uma lista.")
+    intents = values.get("intents") or [{"type": "distribute_remaining", "strategy": "balanced"}]
+    parameters = values.get("parameters") or {}
+    if not isinstance(intents, list) or not isinstance(parameters, dict):
+        raise DomainError("As intenções da prévia são inválidas.")
+    snapshot = _interactive_planning_snapshot(conn, first, end, selected_ids, replace_automatic)
+    fingerprint = _planning_input_fingerprint(conn, first.isoformat(), snapshot["calculation_end"])
+    try:
+        proposal = interactive_planning.plan(snapshot, intents, parameters, _local_now())
+    except interactive_planning.PlanningError as error:
+        raise DomainError(str(error), 400, error.code) from error
+    token = str(uuid.uuid4())
+    proposal["start"] = first.isoformat()
+    proposal["end"] = end.isoformat()
+    proposal["preview_token"] = token
+    proposal["replace_automatic"] = replace_automatic
+    proposal["input_fingerprint"] = fingerprint
+    proposal["selected_study_ids"] = snapshot["selected_study_ids"]
+    proposal["allocation"] = {
+        "scheduled_in_preview_minutes": proposal["totals"]["proposed_focus_minutes"],
+        "deferred_beyond_preview_minutes": proposal["totals"]["forecast_after_preview_minutes"],
+        "unallocated_due_to_capacity_minutes": proposal["totals"]["unallocated_minutes"],
+    }
+    proposal["capacity"] = {
+        "net_free_minutes": sum(int(day.get("available_focus_minutes") or 0) for day in proposal["days"]),
+        "demand_minutes": sum(int(item.get("balance_to_plan_minutes") or 0) for item in proposal["objectives"]),
+        "capacity_by_day": [{
+            "date": day["date"], "net_free_minutes": day["available_focus_minutes"],
+            "daily_limit_minutes": snapshot.get("daily_limit_minutes") or None,
+            "weekly_limit_minutes": snapshot.get("weekly_limit_minutes") or None,
+        } for day in proposal["days"]],
+    }
+    proposal["diagnostics"] = {
+        "summary": {
+            "eligible": sum(bool(item.get("eligible_for_automatic")) for item in proposal["objectives"]),
+            "ignored": len({item["study_subject_id"] for item in proposal["blockers"]}),
+            "future": 0, "unallocated_minutes": proposal["totals"]["unallocated_minutes"],
+        },
+        "items": [{
+            "state": "ignored", "study_subject_id": item["study_subject_id"], "name": item.get("name"),
+            "reasons": [{"code": item["code"], "message": item["message"], "action": _planning_diagnostic_action(
+                "adjust_dates" if item["code"] == "deadline_required" else "configure_effort",
+                study_id=item["study_subject_id"],
+            )}],
+        } for item in proposal["blockers"]],
+    }
+    draft_id = repo.insert(conn, "planning_drafts", {
+        "token": token, "status": "draft", "horizon_start": first.isoformat(), "horizon_end": end.isoformat(),
+        "calculation_end": snapshot["calculation_end"],
+        "selected_study_ids_json": json.dumps(snapshot["selected_study_ids"], separators=(",", ":")),
+        "intents_json": json.dumps(intents, ensure_ascii=False, separators=(",", ":")),
+        "parameters_json": json.dumps(parameters, ensure_ascii=False, separators=(",", ":")),
+        "input_fingerprint": fingerprint,
+        "preview_json": json.dumps(proposal, ensure_ascii=False, separators=(",", ":")),
+    })
+    run_id = repo.insert(conn, "planning_runs", {
+        "preview_token": token,
+        "status": "preview",
+        "policy_version": interactive_planning.POLICY_VERSION,
+        "horizon_start": first.isoformat(),
+        "horizon_end": end.isoformat(),
+        "input_fingerprint": fingerprint,
+        "summary_json": json.dumps(proposal, ensure_ascii=False, separators=(",", ":")),
+        "draft_id": draft_id,
+    })
+    proposal["draft_id"] = draft_id
+    proposal["plan_run_id"] = run_id
+    return proposal
+
+
+def apply_versioned_plan(conn, values):
+    token = _need(values.get("preview_token"), "Token da prévia")
+    run = repo.one(conn, "SELECT * FROM planning_runs WHERE preview_token=?", (str(token),))
+    if not run:
+        raise DomainError("A prévia não foi encontrada; gere uma nova.", 404, "planning_preview_not_found")
+    key = values.get("idempotency_key")
+    if key:
+        prior = repo.one(conn, "SELECT * FROM planning_runs WHERE idempotency_key=?", (str(key),))
+        if prior and prior["status"] == "applied":
+            return {
+                "plan_run_id": prior["id"], "preview_token": prior["preview_token"],
+                "created": repo.many(conn, "SELECT * FROM sessoes_planejadas WHERE plan_run_id=? ORDER BY scheduled_date,start_time,id", (prior["id"],)),
+                "existing": [], "idempotent": True, "preserved_manual_blocks": True,
+            }
+    if run["status"] == "applied":
+        return {
+            "plan_run_id": run["id"], "preview_token": run["preview_token"],
+            "created": repo.many(conn, "SELECT * FROM sessoes_planejadas WHERE plan_run_id=? ORDER BY scheduled_date,start_time,id", (run["id"],)),
+            "existing": [], "idempotent": True, "preserved_manual_blocks": True,
+        }
+    draft = _get(conn, "planning_drafts", run["draft_id"]) if run.get("draft_id") else None
+    fingerprint_end = draft.get("calculation_end") if draft else run["horizon_end"]
+    current_fingerprint = _planning_input_fingerprint(conn, run["horizon_start"], fingerprint_end)
+    if current_fingerprint != run["input_fingerprint"]:
+        raise DomainError(
+            "Disponibilidade, sessões ou agenda mudaram depois da prévia. Gere outra para revisar as diferenças.",
+            409,
+            "planning_preview_stale",
+            details={"preview_fingerprint": run["input_fingerprint"], "current_fingerprint": current_fingerprint},
+        )
+    try:
+        stored = json.loads(run["summary_json"] or "{}")
+    except json.JSONDecodeError as error:
+        raise DomainError("A prévia armazenada está inválida.", 409, "planning_preview_invalid") from error
+    sessions = values.get("sessions", stored.get("sessions", []))
+    if not isinstance(sessions, list):
+        raise DomainError("A prévia do planejamento deve ser uma lista de blocos.")
+    if stored.get("applicable") is False:
+        raise DomainError(
+            "A prévia possui conflitos que precisam ser ajustados antes da aplicação.",
+            409, "planning_preview_has_conflicts", details={"conflicts": stored.get("conflicts", [])},
+        )
+    budget_changes = stored.get("budget_changes") or []
+    if budget_changes and values.get("accept_budget_changes") not in (True, 1, "1", "true", "True", "sim"):
+        raise DomainError(
+            "Confirme as revisões de orçamento mostradas na prévia.", 409,
+            "budget_changes_confirmation_required", details={"budget_changes": budget_changes},
+        )
+    replace_automatic = bool(stored.get("replace_automatic"))
+    before_rows = []
+    if replace_automatic:
+        selected_ids = [int(value) for value in (stored.get("selected_study_ids") or [])]
+        marks, selected_params = _ids_clause(selected_ids)
+        before_rows = repo.many(conn, f"""
+            SELECT * FROM sessoes_planejadas
+            WHERE source='automatic' AND status='planned' AND is_locked=0
+              AND scheduled_date BETWEEN ? AND ?
+              AND study_subject_id IN {marks}
+              AND NOT EXISTS (
+                SELECT 1 FROM sessoes_foco f
+                WHERE f.planned_session_id=sessoes_planejadas.id
+                  AND f.status IN ('running','paused','recovery_required','finishing')
+              )
+            ORDER BY id
+        """, (run["horizon_start"], run["horizon_end"], *selected_params)) if selected_ids else []
+        if selected_ids:
+            conn.execute(f"""
+            UPDATE sessoes_planejadas
+            SET status='cancelled',selection_reason='substituído por nova versão do plano',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')
+            WHERE source='automatic' AND status='planned' AND is_locked=0
+              AND scheduled_date BETWEEN ? AND ?
+              AND study_subject_id IN {marks}
+              AND NOT EXISTS (
+                SELECT 1 FROM sessoes_foco f
+                WHERE f.planned_session_id=sessoes_planejadas.id
+                  AND f.status IN ('running','paused','recovery_required','finishing')
+              )
+            """, (run["horizon_start"], run["horizon_end"], *selected_params))
+    for change in budget_changes:
+        objective = _get(conn, "study_objectives", int(change["objective_id"]))
+        previous = objective.get("budget_minutes")
+        proposed = int(change["proposed_budget_minutes"])
+        repo.update(conn, "study_objectives", objective["id"], {
+            "budget_minutes": proposed, "budget_origin": "user", "budget_is_provisional": 0,
+            "version": int(objective.get("version") or 1) + 1,
+        })
+        repo.insert(conn, "study_budget_revisions", {
+            "objective_id": objective["id"], "previous_budget_minutes": previous,
+            "new_budget_minutes": proposed, "origin": "user", "reason": change.get("reason") or "Revisão aceita na prévia.",
+            "idempotency_key": f"plan-budget-{run['id']}-{objective['id']}",
+        })
+    created, existing = [], []
+    for item in sessions:
+        if not isinstance(item, dict):
+            raise DomainError("Um bloco da prévia é inválido.")
+        selected_date = _date(item.get("scheduled_date"), "Data do bloco")
+        if not _date(run["horizon_start"]) <= selected_date <= _date(run["horizon_end"]):
+            raise DomainError("Um bloco editado ficou fora do período da prévia.", 409, "planning_block_outside_preview")
+        item_source = "manual" if item.get("source") == "manual" or item.get("origin") == "manual_intent" else "automatic"
+        found = repo.one(conn, """
+            SELECT * FROM sessoes_planejadas
+            WHERE source=? AND status='planned' AND study_subject_id=?
+              AND scheduled_date=? AND start_time=? AND planned_duration_minutes=?
+        """, (item_source, item.get("study_subject_id"), item.get("scheduled_date"), item.get("start_time"), item.get("planned_duration_minutes")))
+        if found:
+            existing.append(found)
+            continue
+        planned = create_planned(conn, {
+            **item,
+            "plan_run_id": run["id"],
+            "objective_id": item.get("objective_id"),
+            "is_locked": 1 if item_source == "manual" or item.get("is_locked") else 0,
+            "intent": "review" if item.get("review_campaign_id") else item.get("intent", "study"),
+            "selection_reason": item.get("selection_reason") or item.get("reason"),
+            "selection_context": item.get("selection_context") or json.dumps({
+                "topic_progress_percent": item.get("topic_progress_percent"),
+                "topic_remaining_minutes": item.get("topic_remaining_minutes"),
+                "priority_effective": item.get("priority_effective"),
+                "deadline_date": item.get("deadline_date"),
+            }, ensure_ascii=False),
+        }, item_source)
+        created.append(planned)
+    try:
+        conn.execute(
+            "UPDATE planning_runs SET status='applied',idempotency_key=?,applied_at=?,summary_json=? WHERE id=?",
+            (str(key) if key else None, _now(), json.dumps({**stored, "applied_sessions": sessions}, ensure_ascii=False, separators=(",", ":")), run["id"]),
+        )
+    except sqlite3.IntegrityError as error:
+        raise DomainError("Esta aplicação já foi processada.", 409, "planning_apply_duplicate") from error
+    if draft:
+        repo.update(conn, "planning_drafts", draft["id"], {"status": "applied", "applied_at": _now()})
+        repo.insert(conn, "plan_revisions", {
+            "draft_id": draft["id"], "planning_run_id": run["id"],
+            "before_json": json.dumps(before_rows, ensure_ascii=False, separators=(",", ":")),
+            "after_json": json.dumps(created, ensure_ascii=False, separators=(",", ":")),
+            "reason": "Plano interativo aplicado após confirmação explícita.",
+        })
+    if google_calendar.status(conn)["connected"]:
+        for block in created:
+            google_calendar.queue_block(conn, block["id"])
+    return {
+        "plan_run_id": run["id"], "preview_token": token,
+        "created": created, "existing": existing, "idempotent": False,
+        "preserved_manual_blocks": True, "preserved_locked_blocks": True,
+    }
+
+
+def planning_draft(conn, token):
+    draft = repo.one(conn, "SELECT * FROM planning_drafts WHERE token=?", (str(token),))
+    if not draft:
+        raise DomainError("Rascunho não encontrado.", 404, "planning_draft_not_found")
+    for source, target in (
+        ("selected_study_ids_json", "selected_study_ids"),
+        ("intents_json", "intents"), ("parameters_json", "parameters"),
+        ("preview_json", "preview"),
+    ):
+        try:
+            draft[target] = json.loads(draft.get(source) or ("[]" if target in {"selected_study_ids", "intents"} else "{}"))
+        except json.JSONDecodeError:
+            draft[target] = [] if target in {"selected_study_ids", "intents"} else {}
+    return draft
+
+
+def discard_planning_draft(conn, token):
+    draft = planning_draft(conn, token)
+    if draft["status"] == "applied":
+        raise DomainError("Um plano já aplicado não pode ser descartado como rascunho.", 409, "planning_draft_applied")
+    if draft["status"] != "discarded":
+        repo.update(conn, "planning_drafts", draft["id"], {"status": "discarded"})
+        conn.execute("UPDATE planning_runs SET status='expired' WHERE draft_id=? AND status='preview'", (draft["id"],))
+    return planning_draft(conn, token)
+
+
+DAILY_RESULT_REASONS = {
+    "lack_of_time", "fatigue", "unexpected", "difficulty",
+    "plan_problem", "finished_early", "other",
+}
+
+
+def daily_result(conn, selected_date):
+    selected = _date(selected_date).isoformat()
+    result = repo.one(conn, "SELECT * FROM daily_study_results WHERE date=?", (selected,))
+    if not result:
+        return None
+    result["reasons"] = [row["reason"] for row in repo.many(conn, "SELECT reason FROM daily_study_result_reasons WHERE daily_result_id=? ORDER BY reason", (result["id"],))]
+    return result
+
+
+def save_daily_result(conn, selected_date, values):
+    selected = _date(selected_date).isoformat()
+    status = values.get("status")
+    if status not in {"completed", "not_completed", "dismissed"}:
+        raise DomainError("Resultado diário inválido.")
+    reasons = values.get("reasons") or []
+    if not isinstance(reasons, list) or any(reason not in DAILY_RESULT_REASONS for reason in reasons):
+        raise DomainError("Um dos motivos do resultado diário é inválido.")
+    planned = repo.one(conn, "SELECT COALESCE(SUM(planned_duration_minutes),0) minutes FROM sessoes_planejadas WHERE scheduled_date=? AND status IN ('planned','completed','skipped')", (selected,))["minutes"]
+    realized = repo.one(conn, "SELECT COALESCE(SUM(duration_seconds),0) seconds FROM sessoes_estudo WHERE date=?", (selected,))["seconds"]
+    current = repo.one(conn, "SELECT * FROM daily_study_results WHERE date=?", (selected,))
+    payload = {
+        "date": selected, "status": status, "planned_minutes": int(planned or 0),
+        "realized_seconds": int(realized or 0), "comment": values.get("comment"),
+    }
+    if current:
+        payload["version"] = int(current.get("version") or 1) + 1
+        repo.update(conn, "daily_study_results", current["id"], payload)
+        ident = current["id"]
+        conn.execute("DELETE FROM daily_study_result_reasons WHERE daily_result_id=?", (ident,))
+    else:
+        ident = repo.insert(conn, "daily_study_results", payload)
+    for reason in sorted(set(reasons)):
+        conn.execute("INSERT INTO daily_study_result_reasons(daily_result_id,reason) VALUES (?,?)", (ident, reason))
+    # Bloco passado não realizado deixa de ser reserva futura. A demanda do
+    # objetivo não é aumentada: ela nunca foi abatida por esta alocação.
+    if status == "not_completed" and selected <= _today():
+        conn.execute(
+            "UPDATE sessoes_planejadas SET status='skipped',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') "
+            "WHERE scheduled_date=? AND status='planned'", (selected,),
+        )
+    return daily_result(conn, selected)
+
+
+def close_study_objective(conn, objective_id, values=None):
+    values = values or {}
+    objective = _get(conn, "study_objectives", objective_id)
+    if objective["status"] == "closed":
+        return {"objective": objective, "future_blocks": [], "idempotent": True}
+    future = repo.many(conn, "SELECT * FROM sessoes_planejadas WHERE objective_id=? AND status='planned' AND scheduled_date>=? ORDER BY scheduled_date,start_time,id", (objective_id, _today()))
+    action = values.get("future_blocks_action")
+    valid_actions = {"keep", "release", "redistribute", "plan_other"}
+    if future and action not in valid_actions:
+        raise DomainError(
+            "Escolha o destino dos horários futuros antes de encerrar o objetivo.", 409,
+            "future_blocks_action_required", details={"future_blocks": future, "options": sorted(valid_actions)},
+        )
+    repo.update(conn, "study_objectives", objective_id, {
+        "status": "closed", "closed_at": _now(), "version": int(objective.get("version") or 1) + 1,
+    })
+    if action in {"release", "redistribute", "plan_other"}:
+        conn.execute("UPDATE sessoes_planejadas SET status='cancelled',selection_reason='objetivo encerrado; horários liberados',updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE objective_id=? AND status='planned' AND scheduled_date>=?", (objective_id, _today()))
+    return {
+        "objective": _get(conn, "study_objectives", objective_id), "future_blocks": future,
+        "released": action in {"release", "redistribute", "plan_other"},
+        "released_minutes": sum(int(row.get("planned_duration_minutes") or 0) for row in future) if action in {"release", "redistribute", "plan_other"} else 0,
+        "next_action": action if action in {"redistribute", "plan_other"} else None,
+        "idempotent": False,
+    }
+
+
 def apply_smart_plan(conn, values):
     sessions = values.get("sessions", [])
     if not isinstance(sessions, list): raise DomainError("A prévia do planejamento deve ser uma lista de blocos.")
@@ -5040,6 +6455,21 @@ def today_overview(conn):
     capacity = planning_capacity(conn, today, today)
     agenda = planned(conn, today, today)
     studied = repo.one(conn, "SELECT COALESCE(SUM(duration_seconds),0)/60 minutes FROM sessoes_estudo WHERE date=?", (today,))
+    unplanned_today = repo.many(conn, """
+        SELECT x.id,COALESCE(d.name,s.personal_name) subject_name,t.name topic_name,
+          x.duration_seconds,x.entry_method,x.started_at
+        FROM sessoes_estudo x JOIN materias_estudo s ON s.id=x.study_subject_id
+        LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id
+        LEFT JOIN topicos t ON t.id=x.topic_id
+        WHERE x.date=? AND x.planned_session_id IS NULL
+        ORDER BY x.started_at,x.id
+    """, (today,))
+    active_campaigns = repo.many(conn, """
+        SELECT c.id,c.name,c.end_date,c.daily_goal_minutes,COUNT(i.id) items
+        FROM review_campaigns c LEFT JOIN review_campaign_items i ON i.campaign_id=c.id AND i.item_status='active'
+        WHERE c.status='active' AND c.start_date<=? AND c.end_date>=?
+        GROUP BY c.id ORDER BY c.end_date,c.name
+    """, (today, today))
     preference_values = settings(conn)
     suggest_during_free_time = _confirmed(preference_values.get("suggest_during_free_time", True))
     free_time_preference = preference_values.get("free_time_preference") or "suggest"
@@ -5104,6 +6534,8 @@ def today_overview(conn):
         "net_capacity_minutes": capacity["net_capacity_minutes"],
         "net_free_minutes": capacity["net_free_minutes"],
         "required_minutes": required, "agenda": agenda,
+        "unplanned_sessions": unplanned_today,
+        "active_review_campaigns": active_campaigns,
         "suggestion": recommendation_value if suggestion_slot else None,
         "suggestion_unavailable": bool(recommendation_value and not suggestion_slot),
         "day_is_full": capacity["net_free_minutes"] < preferences["minimum_session_minutes"],
@@ -5210,6 +6642,12 @@ def analytics_workload(conn, start=None, end=None, formation_id=None, item_id=No
         FROM sessoes_estudo x JOIN materias_estudo s ON s.id=x.study_subject_id
         LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id
         WHERE """ + where + " GROUP BY x.date ORDER BY x.date", params)
+    real_items_by_day = repo.many(conn, """
+        SELECT x.date,s.id study_subject_id,COALESCE(d.name,s.personal_name) name,
+          COALESCE(SUM(x.duration_seconds),0) real_seconds,COUNT(x.id) sessions
+        FROM sessoes_estudo x JOIN materias_estudo s ON s.id=x.study_subject_id
+        LEFT JOIN disciplinas_grade d ON d.id=s.curriculum_subject_id
+        WHERE """ + where + " GROUP BY x.date,s.id ORDER BY x.date,real_seconds DESC,name", params)
     planned = repo.one(conn, """
         SELECT COUNT(*) total,
           COUNT(*) FILTER(WHERE p.status='completed') completed,
@@ -5234,12 +6672,19 @@ def analytics_workload(conn, start=None, end=None, formation_id=None, item_id=No
         WHERE """ + " AND ".join(planned_clauses) + " GROUP BY p.scheduled_date ORDER BY p.scheduled_date", planned_params)
     real_by_date = {row["date"]: row for row in real_by_day}
     planned_by_date = {row["date"]: row for row in planned_by_day}
+    items_by_date = defaultdict(list)
+    for row in real_items_by_day:
+        items_by_date[row["date"]].append({
+            "study_subject_id": row["study_subject_id"], "name": row["name"],
+            "real_seconds": int(row["real_seconds"] or 0), "sessions": int(row["sessions"] or 0),
+        })
     by_day = [
         {
             "date": current.isoformat(),
             "real_seconds": int(real_by_date.get(current.isoformat(), {}).get("real_seconds", 0) or 0),
             "planned_minutes": int(planned_by_date.get(current.isoformat(), {}).get("planned_minutes", 0) or 0),
             "sessions": int(real_by_date.get(current.isoformat(), {}).get("sessions", 0) or 0),
+            "items": items_by_date[current.isoformat()],
         }
         for current in _range_dates(first.isoformat(), last.isoformat())
     ]
@@ -5388,6 +6833,32 @@ def analytics(conn):
     }
 
 
+def analytics_detailed(conn, start=None, end=None, formation_id=None, item_id=None, campaign_id=None, purpose=None):
+    try:
+        result = analytics_insights.build(
+            conn,
+            start,
+            end,
+            formation_id=formation_id,
+            item_id=item_id,
+            campaign_id=campaign_id,
+            purpose=purpose,
+        )
+    except analytics_insights.AnalyticsInsightsError as error:
+        raise DomainError(str(error), 400, "invalid_analytics_filter") from error
+    future_start = max(_today(), result["start"])
+    future_end = max(future_start, result["end"])
+    result["capacity"] = planning_capacity(conn, future_start, future_end, formation_id, item_id)
+    result["ideal"] = planning_ideal(conn, future_start, future_end, formation_id, item_id)
+    result["definitions"] = {
+        "focus": "Tempo real de estudo registrado em sessões.",
+        "pauses": "Intervalos reais; nunca contam como foco.",
+        "planned": "Blocos ativos ou concluídos no período; não é somado ao foco como se fosse outro tempo.",
+        "projection": "Capacidade e demanda futuras, separadas dos dados observados.",
+    }
+    return result
+
+
 def projects(conn, include_archived=False):
     where = "" if include_archived else "WHERE p.archived_at IS NULL"
     return repo.many(conn, "SELECT p.*,COUNT(t.id) task_count,COUNT(t.id) FILTER(WHERE t.status='completed') completed_tasks FROM projetos p LEFT JOIN projeto_tarefas t ON t.project_id=p.id " + where + " GROUP BY p.id ORDER BY p.created_at DESC")
@@ -5437,10 +6908,12 @@ def save_settings(conn, values):
         "daily_goal_minutes", "weekly_goal_minutes", "default_session_minutes", "planning_break_minutes",
         "minimum_session_minutes", "maximum_session_minutes", "review_strategy", "theme",
         "focus_recovery_minutes", "daily_max_study_minutes", "minimum_rest_minutes",
-        "suggest_during_free_time", "free_time_preference",
+        "subject_daily_max_minutes", "weekly_max_study_minutes",
+        "suggest_during_free_time", "free_time_preference", "timezone", "adaptation_mode",
+        "notifications_enabled", "focus_sound_enabled",
     }
     normalized = dict(values)
-    for key in {"daily_goal_minutes", "weekly_goal_minutes", "default_session_minutes", "planning_break_minutes", "minimum_session_minutes", "maximum_session_minutes", "focus_recovery_minutes", "daily_max_study_minutes", "minimum_rest_minutes"}:
+    for key in {"daily_goal_minutes", "weekly_goal_minutes", "default_session_minutes", "planning_break_minutes", "minimum_session_minutes", "maximum_session_minutes", "focus_recovery_minutes", "daily_max_study_minutes", "minimum_rest_minutes", "subject_daily_max_minutes", "weekly_max_study_minutes"}:
         if key not in normalized or normalized[key] in (None, ""):
             continue
         try:
@@ -5450,10 +6923,15 @@ def save_settings(conn, values):
         if amount < 0:
             raise DomainError(f"{key} não pode ser negativo.")
         normalized[key] = amount
-    if "suggest_during_free_time" in normalized:
-        normalized["suggest_during_free_time"] = 1 if _confirmed(normalized["suggest_during_free_time"]) else 0
+    for key in ("suggest_during_free_time", "notifications_enabled", "focus_sound_enabled"):
+        if key in normalized:
+            normalized[key] = 1 if _confirmed(normalized[key]) else 0
     if "free_time_preference" in normalized and normalized["free_time_preference"] not in {"suggest", "preserve"}:
         raise DomainError("Preferência de folga inválida.")
+    if "timezone" in normalized and normalized["timezone"] != "America/Sao_Paulo":
+        raise DomainError("Esta instalação usa o fuso America/Sao_Paulo.")
+    if "adaptation_mode" in normalized and normalized["adaptation_mode"] not in {"assisted", "automatic"}:
+        raise DomainError("Modo de adaptação inválido.")
     for key, value in normalized.items():
         if key in allowed: conn.execute("INSERT INTO configuracoes(key,value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now')",(key,str(value) if value is not None else None))
     return settings(conn)
