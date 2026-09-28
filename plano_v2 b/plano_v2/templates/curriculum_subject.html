@@ -1,0 +1,15 @@
+{% extends 'workspace_base.html' %}
+{% block scripts %}<script type="module" src="{{ static_asset('js/curriculum-subject.js') }}"></script>{% endblock %}
+{% block content %}
+<div id="subject-workspace" data-curriculum-id="{{ curriculum_id }}">
+  <a id="back-to-formation" class="back-link" href="/formations">← Voltar à formação</a>
+  <div id="load-error" role="alert" hidden></div>
+  <div id="subject-hero" aria-live="polite"><div class="empty">Carregando disciplina…</div></div>
+  <nav class="subject-tabs" aria-label="Áreas da disciplina">
+    <a data-tab="overview" href="?tab=overview">Visão geral</a>
+    <a data-tab="contents" href="?tab=contents">Conteúdos</a>
+    <a data-tab="equivalences" href="?tab=equivalences">Vínculos entre cursos</a>
+  </nav>
+  <section id="subject-panel" aria-live="polite"></section>
+</div>
+{% endblock %}

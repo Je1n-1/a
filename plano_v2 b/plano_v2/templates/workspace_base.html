@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark"><title>{{ title }} · Plano</title>
+  <link rel="stylesheet" href="{{ static_asset('css/formations.css') }}">
+  {% block scripts %}{% endblock %}
+</head>
+<body>
+  <a class="skip" href="#main">Ir para o conteúdo</a>
+  <aside class="sidebar">
+    <a class="brand" href="/formations"><span class="brand-icon">▥</span> Plano</a>
+    <div class="nav-label">SEU APRENDIZADO</div>
+    <nav aria-label="Navegação principal">
+      <a class="nav-link {{ 'active' if request.path == '/' or request.path.startswith('/formations') }}" href="/formations"><span aria-hidden="true">▱</span> Formações</a>
+      <a class="nav-link {{ 'active' if request.path.startswith('/subjects') or request.path.startswith('/curriculum') }}" href="/subjects"><span aria-hidden="true">▤</span> Disciplinas</a>
+      <a class="nav-link {{ 'active' if request.path in ['/today','/focus'] }}" href="/today"><span aria-hidden="true">◷</span> Hoje</a>
+    </nav>
+    <div class="sidebar-bottom"><span class="online"></span> Seu espaço de estudos</div>
+  </aside>
+  <div class="workspace">
+    <header class="topbar"><span>Seu aprendizado <span class="crumb">/</span> <strong>{{ title }}</strong></span><span class="top-note">Uma visão da sua trajetória</span></header>
+    <main id="main">{% block content %}{% endblock %}</main>
+  </div>
+  <dialog id="editor" aria-labelledby="dialog-title"><div class="dialog-heading"><div><div class="eyebrow" id="dialog-step"></div><h2 id="dialog-title"></h2></div><button type="button" class="icon-button" id="dialog-close" aria-label="Fechar">×</button></div><div id="dialog-body"></div></dialog>
+  <div id="toast" role="status" hidden></div>
+</body>
+</html>

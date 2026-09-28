@@ -1,0 +1,16 @@
+{% extends 'workspace_base.html' %}
+{% block scripts %}<script type="module" src="{{ static_asset('js/disciplines.js') }}"></script>{% endblock %}
+{% block content %}
+<header class="page-heading"><div><div class="eyebrow">SEU APRENDIZADO</div><h1>Disciplinas</h1><p>Encontre suas matérias em todas as formações. Conteúdos compartilhados aparecem uma vez.</p></div><a class="subject-link" href="/formations">Gerenciar formações →</a></header>
+<div id="catalog-error" class="notice" role="alert" hidden><span></span> <button id="catalog-retry">Tentar novamente</button></div>
+<section class="detail-panel catalog-panel" aria-label="Lista global de disciplinas">
+  <div class="toolbar">
+    <label class="search"><span aria-hidden="true">⌕</span><input id="catalog-query" type="search" aria-label="Buscar disciplinas" placeholder="Disciplina, código ou formação"></label>
+    <select id="catalog-formation" aria-label="Filtrar formação"><option value="">Todas as formações</option></select>
+    <select id="catalog-status" aria-label="Filtrar situação"><option value="">Todas as situações</option></select>
+    <button id="catalog-clear">Limpar filtros</button>
+  </div>
+  <p id="catalog-count" class="catalog-caption" aria-live="polite">Carregando disciplinas…</p>
+  <div id="catalog-list" aria-busy="true"></div>
+</section>
+{% endblock %}

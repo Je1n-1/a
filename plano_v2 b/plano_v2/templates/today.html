@@ -1,0 +1,24 @@
+{% extends 'workspace_base.html' %}
+{% block scripts %}
+<link rel="stylesheet" href="{{ static_asset('css/manual-study.css') }}">
+<script type="module" src="{{ static_asset('js/manual-study.js') }}"></script>
+{% endblock %}
+{% block content %}
+<div class="hero-heading"><div><div class="eyebrow">SEU TEMPO, SUAS ESCOLHAS</div><h1>Hoje</h1><p>Escolha o que estudar. Sem agenda automática ou duração obrigatória.</p></div><button id="manual-record">Registrar estudo realizado</button></div>
+<div id="study-error" role="alert" hidden><span></span> <button id="study-retry">Tentar novamente</button></div>
+<div id="day-summary" class="subject-metrics manual-summary" aria-live="polite"></div>
+<section id="current-focus" class="subject-card" aria-label="Sessão de foco" hidden></section>
+<section id="study-choice" class="subject-card">
+  <h2>O que você quer estudar?</h2><p>Tópico e duração são opcionais. Uma matéria concluída também pode ser revisada.</p>
+  <form id="start-study"><div class="form-grid">
+    <label class="field full">Buscar matéria<input type="search" id="study-search" placeholder="Nome da matéria ou formação"></label>
+    <label class="field full">Matéria<select id="study-subject" required><option value="">Carregando…</option></select></label>
+    <label class="field">Contexto acadêmico<select id="study-context"></select></label>
+    <label class="field">Tópico (opcional)<select id="study-topic"><option value="">Sem tópico</option></select></label>
+    <label class="field">Finalidade<select id="study-purpose"><option value="study">Estudo</option><option value="review">Revisão</option></select></label>
+    <label class="field">Relógio<select id="study-mode"><option value="free">Cronômetro livre</option><option value="target">Duração escolhida</option></select></label>
+    <label class="field" id="target-field" hidden>Duração desejada em horas<input id="study-target" type="number" min="0.01" max="24" step="0.01" placeholder="Ex.: 0,75 = 45 minutos"></label>
+  </div><p class="form-error" role="alert"></p><button type="submit" class="primary" id="start-button">Iniciar foco</button></form>
+</section>
+<section class="subject-card"><div class="section-heading"><h2>Sessões realizadas hoje</h2><span id="today-date"></span></div><div id="today-sessions" aria-live="polite"><p>Carregando…</p></div></section>
+{% endblock %}

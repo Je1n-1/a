@@ -1,0 +1,15 @@
+{% extends 'workspace_base.html' %}
+{% block scripts %}<script type="module" src="{{ static_asset('js/formations.js') }}"></script>{% endblock %}
+{% block content %}
+<header class="page-heading"><div><div class="eyebrow">ORGANIZE. APRENDA. EVOLUA.</div><h1>Formações</h1><p>Seus cursos, suas disciplinas e cada etapa concluída.</p></div><button class="primary" id="import-new"><span aria-hidden="true">＋</span> Importar grade em PDF</button></header>
+      <div id="load-error" role="alert" hidden></div>
+      <div class="formation-layout">
+        <section class="formation-list" aria-labelledby="list-title"><div class="section-heading"><h2 id="list-title">Minhas formações</h2><span id="formation-count" class="counter">0</span></div>
+          <label class="search"><span aria-hidden="true">⌕</span><input id="formation-search" type="search" placeholder="Buscar formação" aria-label="Buscar formação"></label>
+          <div id="formation-cards" aria-live="polite"><div class="empty">Carregando suas formações…</div></div>
+          <div class="import-note"><span class="document-icon" aria-hidden="true">PDF</span><div><strong>Sua grade, organizada</strong><p>Importe o arquivo do curso e confira as disciplinas antes de salvar.</p></div></div>
+          <button id="create-empty" class="text-button">Cadastrar formação manualmente</button>
+        </section>
+        <section id="formation-detail" class="detail-panel" aria-label="Grade curricular"><div class="empty">Carregando grade curricular…</div></section>
+      </div>
+{% endblock %}

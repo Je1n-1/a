@@ -1,0 +1,197 @@
+{
+  "path": "C:\\Users\\jeanm\\OneDrive\\Desktop\\a\\plano_v2 b\\plano_v2\\instance\\plano.db",
+  "trial_migrations": [
+    15
+  ],
+  "applied_to_active": true,
+  "preexisting_values_unchanged": true,
+  "tables_verified": 35,
+  "tables": {
+    "formacoes": {
+      "count": 3,
+      "sha256": "a88d277952379ec683805a6c11a83baf44304869a0dd33cc3ebeb585d245d67d"
+    },
+    "disciplinas_grade": {
+      "count": 176,
+      "sha256": "56725fbe9e2095a88caaa4441986e6b701378d37552049b7dc3c7f74fd93e008"
+    },
+    "materias_estudo": {
+      "count": 4,
+      "sha256": "e097d97e89b00c73624986bae31c5964dd074816c6d9046d25ff9856ca5a0c86"
+    },
+    "grupos_topicos": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "sessoes_planejadas": {
+      "count": 17,
+      "sha256": "f15dc5d72dcc7d94efea70ef71a2978989246bd58a06ec46d10487d1b5000d27"
+    },
+    "sessoes_estudo": {
+      "count": 9,
+      "sha256": "c035775fe85503a01e0e247e1b5538a1fe3710d8c3fd60e1b03cecac50d0da4d"
+    },
+    "avaliacao_topicos": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "disponibilidades_semanais": {
+      "count": 11,
+      "sha256": "a37bc1f8df5f83a96c387d2f7a0a7161c4469050f32e3723a3379d6af5660474"
+    },
+    "revisoes": {
+      "count": 3,
+      "sha256": "d7bb98f9a42a58c058377d99ce1d1509f071756b082fc208c39ed35d643281b7"
+    },
+    "configuracoes": {
+      "count": 12,
+      "sha256": "a965ef4aeba081d481b7c359c289391076669a4c64ef986f7be82b4453453884"
+    },
+    "projetos": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "projeto_tarefas": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "excecoes_disponibilidade": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "anotacoes_estudo": {
+      "count": 1,
+      "sha256": "891031a49985fb3fa1b00f3392c5f5f73d636518ded3a3349439be591cdfe6cc"
+    },
+    "curriculum_status_history": {
+      "count": 28,
+      "sha256": "ccb23fdb3c6587b89aeeb13a12ec171a8efc2209aee4f4ee41f1b87e3b080df9"
+    },
+    "avaliacoes": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "curriculum_timeline_events": {
+      "count": 21,
+      "sha256": "63b9e6393f4039570675a5d14688b8431c85c79834b54953e98b34528a6d898d"
+    },
+    "topicos": {
+      "count": 3,
+      "sha256": "2ec20d2cd7e1f3bf70cadaec02ba1d03a7e713d10592ffb2297dbdbd87663ebd"
+    },
+    "topic_dependencies": {
+      "count": 1,
+      "sha256": "6d0d0e0bbf6ae1508c3c8d4527ebec2108eaa861aaed45387d317c4d3aa7d63f"
+    },
+    "sessoes_foco": {
+      "count": 10,
+      "sha256": "6681f111861c2dc6becb506e9f107022d9c8b32beecf4d0a4e6ea53d40b5a942"
+    },
+    "disponibilidades_intervalos": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "curriculum_study_links": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "curriculum_study_link_audit": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "review_campaigns": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "review_campaign_items": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "study_plan_baselines": {
+      "count": 1,
+      "sha256": "60c348207e45b5a3cfb73dc6e68dc1f6a77aa0217dc9e5b830d418a00caaa85a"
+    },
+    "study_observations": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "recommendation_snapshots": {
+      "count": 1,
+      "sha256": "6ddb7198dc0b8ccfaabcc1b0aa48f8475ddf0c00a8e3232d01017df9841cbf16"
+    },
+    "recommendation_decisions": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "planning_runs": {
+      "count": 3,
+      "sha256": "67c1ff190a96d751a66fd4f49f5046e87a9efa31fed0b61f77bf3093272e9cea"
+    },
+    "session_breaks": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "study_session_corrections": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "calendar_integrations": {
+      "count": 1,
+      "sha256": "5c639a21c6f3ae73e9171a3f28c74bc8bfd1dabca65c6079a45ac5d73f9831bf"
+    },
+    "external_calendar_events": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "calendar_sync_queue": {
+      "count": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  },
+  "health": {
+    "path": "C:\\Users\\jeanm\\OneDrive\\Desktop\\a\\plano_v2 b\\plano_v2\\instance\\plano.db",
+    "exists": true,
+    "integrity": "ok",
+    "foreign_key_violations": [],
+    "counts": {
+      "formations": 3,
+      "curriculum_subjects": 176,
+      "studies": 4,
+      "topics": 3,
+      "study_sessions": 9,
+      "planned_sessions": 17,
+      "evaluations": 0,
+      "reviews": 3,
+      "notes": 1,
+      "focus_sessions": 10,
+      "canonical_study_links": 0
+    }
+  },
+  "migration": {
+    "database_path": "C:\\Users\\jeanm\\OneDrive\\Desktop\\a\\plano_v2 b\\plano_v2\\instance\\plano.db",
+    "exists": true,
+    "current_version": 15,
+    "latest_available_version": 15,
+    "applied_versions": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+    ],
+    "pending_versions": [],
+    "checksum_mismatches": [],
+    "unknown_applied_versions": [],
+    "healthy": true
+  }
+}

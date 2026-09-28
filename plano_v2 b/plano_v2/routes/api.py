@@ -1,0 +1,505 @@
+from datetime import timedelta
+from io import BytesIO
+import sqlite3
+from zipfile import ZIP_DEFLATED, ZipFile
+
+from flask import Blueprint, Response, jsonify, request, send_file
+
+from config import CURRICULUM_TEMPLATE_PATH
+from database.connection import connect, database_health
+from database.migrations import migration_status
+from database.study_diagnostics import diagnose_studies, reconcile_studies
+from services import core
+from services.grade_import import preview, preview_paste
+
+
+api = Blueprint("api", __name__, url_prefix="/api")
+
+
+@api.before_request
+def protect_manual_focus():
+    # Um cliente antigo não pode finalizar o foco novo através do planejador.
+    if request.method in {'POST','PUT'} and request.path.startswith('/api/focus/sessions/'):
+        ident=(request.view_args or {}).get('ident')
+        if ident:
+            with connect() as conn:
+                row=conn.execute('SELECT manual_mode FROM sessoes_foco WHERE id=?',(ident,)).fetchone()
+                if row and row['manual_mode']:
+                    return jsonify({'error':'Esta sessão usa o estudo manual. Retome pela página Hoje.','code':'manual_focus_only'}),409
+
+
+def body(): return request.get_json(silent=True) or request.form.to_dict()
+def respond(value, status=200): return jsonify(value), status
+def run(operation):
+    try:
+        with connect() as conn: return respond(operation(conn))
+    except core.DomainError as error:
+        payload = {"error": str(error), "code": error.code}
+        if error.blockers is not None:
+            payload["blockers"] = error.blockers
+        if error.details is not None:
+            payload["details"] = error.details
+        return respond(payload, error.status)
+    except ValueError as error: return respond({"error":str(error),"code":"validation_error"},400)
+    except sqlite3.IntegrityError: return respond({"error":"Não foi possível salvar porque os dados conflitam com um registro existente.","code":"integrity_error"},409)
+
+
+def download(operation, mimetype, filename):
+    try:
+        with connect() as conn:
+            payload = operation(conn)
+        response = Response(payload, mimetype=mimetype)
+        response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+        return response
+    except core.DomainError as error: return respond({"error":str(error),"code":error.code},error.status)
+    except ValueError as error: return respond({"error":str(error),"code":"validation_error"},400)
+    except sqlite3.IntegrityError: return respond({"error":"Não foi possível preparar a exportação porque os dados conflitam com um registro existente.","code":"integrity_error"},409)
+
+
+@api.get("/bootstrap")
+def bootstrap():
+    def operation(conn):
+        today=core._local_now().date(); end=today+timedelta(days=6)
+        return {"formations":core.formations(conn),"studies":core.studies(conn),"recommendation":core.recommendation(conn),"reviews":core.reviews(conn),"analytics":core.analytics(conn),"planned":core.planned(conn,today.isoformat(),end.isoformat())}
+    return run(operation)
+
+
+@api.get("/diagnostics")
+def diagnostics():
+    """Status seguro do banco e das migrations para suporte local."""
+    return run(lambda conn: {
+        "database": database_health(),
+        "migrations": migration_status(),
+        "legacy_studies": diagnose_studies(conn),
+    })
+
+
+@api.route("/diagnostics/studies", methods=["GET", "POST"])
+def study_diagnostics():
+    if request.method == "GET":
+        return run(lambda conn: diagnose_studies(conn, request.args.get("date")))
+    return run(lambda conn: reconcile_studies(conn, body(), body().get("date")))
+
+
+@api.route("/formations",methods=["GET","POST"])
+def formation_collection():
+    if request.method == "GET":
+        state = request.args.get("state")
+        if state is None:
+            state = "all" if request.args.get("archived") == "1" else "active"
+        return run(lambda conn: core.formations(conn, state))
+    return run(lambda conn: core.create_formation(conn,body()))
+@api.route("/formations/<int:ident>",methods=["PATCH","DELETE"])
+def formation_item(ident):
+    return run(lambda conn: core.change_formation(conn,ident,body()) if request.method=="PATCH" else core.delete_formation(conn,ident) or {"deleted":True})
+@api.post("/formations/<int:ident>/<action>")
+def formation_action(ident,action):
+    data = body()
+    if action == "archive":
+        return run(lambda conn: core.archive_formation(conn, ident, data.get("study_policy", "archive_studies")))
+    if action == "restore":
+        return run(lambda conn: core.restore_formation(conn, ident, data.get("restore_studies")))
+    if action == "destroy":
+        return run(lambda conn: core.destroy(conn, "formation", ident, data.get("confirmation"), data.get("include_dependencies")))
+    return respond({"error":"Ação de formação inválida."},400)
+@api.get("/formations/<int:ident>/dependencies")
+def formation_dependencies(ident): return run(lambda conn: core.formation_dependencies(conn, ident))
+
+
+@api.get("/formations/<int:formation_id>/curriculum")
+def curriculum(formation_id): return run(lambda conn: core.curriculum(conn,formation_id,request.args.get("archived")=="1"))
+@api.get("/formations/<int:formation_id>/curriculum/management")
+def curriculum_management(formation_id):
+    filters = {key: request.args.get(key) for key in ("q", "period", "academic_status", "review_status", "visibility", "quick", "sort", "item_type") if request.args.get(key) is not None}
+    return run(lambda conn: core.curriculum_management(conn, formation_id, filters))
+@api.post("/formations/<int:formation_id>/curriculum")
+def curriculum_create(formation_id): return run(lambda conn: core.create_curriculum(conn,formation_id,body()))
+@api.post("/formations/<int:formation_id>/curriculum/batch/preview")
+def curriculum_batch_preview(formation_id): return run(lambda conn: core.curriculum_batch_preview(conn, formation_id, body()))
+@api.post("/formations/<int:formation_id>/curriculum/batch")
+def curriculum_batch(formation_id): return run(lambda conn: core.curriculum_batch(conn, formation_id, body()))
+@api.get("/formations/<int:formation_id>/curriculum/duplicates")
+def curriculum_duplicates(formation_id): return run(lambda conn: core.duplicate_candidates(conn, formation_id))
+@api.get("/formations/<int:formation_id>/curriculum/structural-candidates")
+def curriculum_structural_candidates(formation_id): return run(lambda conn: core.structural_candidates(conn, formation_id))
+@api.post("/formations/<int:formation_id>/curriculum/merge")
+def curriculum_merge(formation_id):
+    data = body()
+    return run(lambda conn: core.merge_curriculum(conn, formation_id, data.get("primary_id"), data.get("duplicate_ids"), data.get("preserve"), data.get("confirmation")))
+@api.get("/curriculum/template")
+def curriculum_template():
+    if not CURRICULUM_TEMPLATE_PATH.is_file():
+        return respond({"error":"O modelo oficial de grade não está disponível neste momento.","code":"curriculum_template_missing"}, 404)
+    return send_file(
+        CURRICULUM_TEMPLATE_PATH,
+        as_attachment=True,
+        download_name="modelo_grade_curricular.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+@api.post("/formations/<int:formation_id>/curriculum/preview")
+def curriculum_preview(formation_id):
+    def operation(conn):
+        core._get(conn,"formacoes",formation_id)
+        upload=request.files.get("file")
+        if not upload or not upload.filename: raise core.DomainError("Selecione um arquivo.")
+        result = preview(upload, upload.filename, request.form.get("sheet") or request.args.get("sheet"))
+        return core.curriculum_import_preview(conn, formation_id, result)
+    return run(operation)
+@api.post("/formations/<int:formation_id>/curriculum/preview/paste")
+def curriculum_preview_paste(formation_id):
+    data = body()
+    return run(lambda conn: core.curriculum_import_preview(conn, formation_id, preview_paste(data.get("text"))))
+@api.post("/formations/<int:formation_id>/curriculum/import")
+def curriculum_import(formation_id):
+    data = body()
+    return run(lambda conn: core.import_curriculum(conn, formation_id, data.get("items", []), data.get("confirmed")))
+@api.route("/curriculum/<int:ident>",methods=["GET","PATCH","DELETE"])
+def curriculum_item(ident):
+    if request.method == "GET": return run(lambda conn: core.curriculum_detail(conn, ident))
+    return run(lambda conn: core.update_curriculum(conn,ident,body()) if request.method=="PATCH" else core.delete_curriculum(conn,ident) or {"deleted":True})
+@api.route("/curriculum/<int:ident>/schedule-settings", methods=["GET","PATCH"])
+def curriculum_schedule_settings(ident):
+    return run(lambda conn: core.curriculum_schedule_settings(conn, ident) if request.method == "GET" else core.update_curriculum(conn, ident, body()))
+@api.route("/curriculum/<int:ident>/contents", methods=["GET","POST"])
+def curriculum_contents(ident):
+    return run(lambda conn: core.contents(conn, ident, request.args.get("archived") == "1") if request.method == "GET" else core.create_content(conn, ident, body()))
+@api.route("/curriculum/<int:ident>/contents/distribution", methods=["GET", "POST"])
+def curriculum_content_distribution(ident):
+    return run(lambda conn: core.topic_effort_summary_for_curriculum(conn, ident) if request.method == "GET" else core.distribute_topic_effort(conn, "curriculum", ident, body()))
+@api.post("/curriculum/<int:ident>/contents/reorder")
+def curriculum_content_reorder(ident): return run(lambda conn: core.reorder_topics(conn, "curriculum", ident, body()))
+@api.get("/contents/<int:ident>/history")
+def content_history(ident): return run(lambda conn: core.content_history(conn, ident))
+@api.route("/contents/<int:ident>", methods=["PATCH","DELETE"])
+def content_item(ident): return run(lambda conn: core.update_content(conn, ident, body()) if request.method == "PATCH" else core.delete_content(conn, ident) or {"deleted": True})
+@api.post("/contents/<int:ident>/<action>")
+def content_action(ident, action):
+    if action == "archive": return run(lambda conn: core.archive_content(conn, ident))
+    if action == "restore": return run(lambda conn: core.archive_content(conn, ident, True))
+    return respond({"error":"Ação de conteúdo inválida."}, 400)
+@api.route("/curriculum/<int:ident>/evaluations", methods=["GET","POST"])
+def curriculum_evaluations(ident):
+    return run(lambda conn: core.evaluation_summary(conn, ident) if request.method == "GET" else core.create_evaluation(conn, {**body(), "curriculum_subject_id": ident}))
+@api.get("/curriculum/<int:ident>/dependencies")
+def curriculum_dependencies(ident): return run(lambda conn: core.curriculum_dependencies(conn, ident))
+@api.route("/curriculum/<int:ident>/shared-study", methods=["GET", "POST", "DELETE"])
+def curriculum_shared_study(ident):
+    """Prévia e confirmação explícita para equivalências entre formações.
+
+    A rota é propositalmente separada das alterações acadêmicas da grade: o
+    vínculo compartilha só o estudo pessoal canônico, nunca estado, nota ou
+    prazo institucional da ocorrência curricular.
+    """
+    if request.method == "GET":
+        return run(lambda conn: core.curriculum_shared_study(conn, ident))
+    if request.method == "POST":
+        return run(lambda conn: core.link_curriculum_shared_study(conn, ident, body()))
+    return run(lambda conn: core.unlink_curriculum_shared_study(conn, ident, body()))
+@api.get("/curriculum/<int:ident>/history")
+def curriculum_history(ident): return run(lambda conn: core.curriculum_status_history(conn, ident))
+@api.get("/curriculum/<int:ident>/timeline")
+def curriculum_timeline(ident): return run(lambda conn: core.curriculum_timeline(conn, ident))
+@api.post("/curriculum/<int:ident>/status")
+def curriculum_status(ident): return run(lambda conn: core.change_curriculum_status(conn, ident, body(), "manual", body().get("notes")))
+@api.post("/curriculum/<int:ident>/review")
+def curriculum_review(ident): return run(lambda conn: core.set_curriculum_review(conn, ident, body()))
+@api.post("/curriculum/<int:ident>/<action>")
+def curriculum_action(ident,action):
+    if action == "start": return run(lambda conn: core.start_curriculum_study(conn, ident, body()))
+    if action == "archive": return run(lambda conn: core.archive_curriculum(conn,ident))
+    if action == "restore": return run(lambda conn: core.archive_curriculum(conn,ident,True))
+    if action == "destroy": return run(lambda conn: core.destroy(conn,"curriculum",ident,body().get("confirmation"),body().get("include_dependencies")))
+    return respond({"error":"Ação de disciplina inválida."},400)
+@api.post("/curriculum/<int:ident>/add-study")
+def curriculum_add_study(ident): return run(lambda conn: core.add_curriculum_study(conn,ident,body()))
+
+
+@api.route("/studies",methods=["GET","POST"])
+def study_collection():
+    if request.method == "POST": return run(lambda conn: core.create_personal_study(conn,body()))
+    visibility = request.args.get("visibility")
+    return run(lambda conn: core.studies(
+        conn, request.args.get("archived")=="1", request.args.get("week_reference"), visibility,
+        request.args.get("formation_id"), request.args.get("q"), request.args.get("review_status"),
+    ))
+@api.post("/studies/preview")
+def study_registration_preview():
+    return run(lambda conn: core.study_registration_preview(conn, body()))
+@api.get("/studies/<int:ident>")
+def study_detail(ident): return run(lambda conn: core.subject_detail(conn,ident))
+@api.route("/studies/<int:ident>",methods=["PATCH","DELETE"])
+def study_item(ident): return run(lambda conn: core.update_study(conn,ident,body()) if request.method=="PATCH" else core.delete_study(conn,ident) or {"deleted":True})
+@api.patch("/studies/<int:ident>/daily-goal")
+def study_daily_goal(ident): return run(lambda conn: core.update_daily_goal(conn, ident, body()))
+@api.route("/studies/<int:ident>/recommendation", methods=["GET", "POST"])
+def study_recommendation(ident):
+    return run(lambda conn: core.adaptive_recommendation(conn, ident, request.method == "POST"))
+@api.get("/studies/<int:ident>/recommendations")
+def study_recommendation_history(ident): return run(lambda conn: core.adaptive_recommendation_history(conn, ident))
+@api.post("/studies/<int:ident>/observations")
+def study_observation(ident): return run(lambda conn: core.add_study_observation(conn, ident, body()))
+@api.post("/studies/<int:ident>/recommendations/<int:snapshot_id>/decision")
+def study_recommendation_decision(ident, snapshot_id):
+    return run(lambda conn: core.accept_study_recommendation(conn, ident, snapshot_id, body()))
+@api.get("/studies/<int:ident>/dependencies")
+def study_dependencies(ident): return run(lambda conn: core.study_dependencies(conn, ident))
+@api.post("/studies/<int:ident>/<action>")
+def study_action(ident,action):
+    data = body()
+    if action == "finish": return run(lambda conn: core.finish_study(conn,ident,data.get("result"),data.get("final_score")))
+    if action == "archive": return run(lambda conn: core.archive_study(conn,ident))
+    if action == "restore": return run(lambda conn: core.archive_study(conn,ident,True))
+    if action == "pause": return run(lambda conn: core.pause_study(conn,ident))
+    if action == "resume": return run(lambda conn: core.pause_study(conn,ident,True))
+    if action == "remove-current": return run(lambda conn: core.remove_current_study(conn,ident,data.get("resolution", data.get("academic_status", "available")),data.get("cancel_future_blocks", True)))
+    if action == "destroy": return run(lambda conn: core.destroy(conn,"study",ident,data.get("confirmation"),data.get("include_dependencies")))
+    return respond({"error":"Ação de estudo inválida."},400)
+@api.post("/studies/<int:ident>/groups")
+def group_create(ident): return run(lambda conn: core.create_group(conn,ident,body()))
+@api.post("/studies/<int:ident>/new-attempt")
+def study_new_attempt(ident): return run(lambda conn: core.new_academic_attempt(conn,ident,body()))
+@api.post("/studies/<int:ident>/topics")
+def topic_create(ident): return run(lambda conn: core.create_topic(conn,ident,body()))
+@api.route("/studies/<int:ident>/topics/distribution", methods=["GET", "POST"])
+def study_topic_distribution(ident):
+    return run(lambda conn: core.topic_effort_summary_for_study(conn, ident) if request.method == "GET" else core.distribute_topic_effort(conn, "study", ident, body()))
+@api.post("/studies/<int:ident>/topics/reorder")
+def study_topic_reorder(ident): return run(lambda conn: core.reorder_topics(conn, "study", ident, body()))
+@api.patch("/topics/<int:ident>")
+def topic_item(ident): return run(lambda conn: core.update_topic(conn,ident,body()))
+@api.post("/topics/<int:ident>/<action>")
+def topic_action(ident, action):
+    if action == "archive": return run(lambda conn: core.archive_topic(conn, ident))
+    if action == "restore": return run(lambda conn: core.archive_topic(conn, ident, True))
+    return respond({"error":"Ação de tópico inválida."}, 400)
+@api.route("/topics/<int:ident>/dependencies", methods=["GET", "PUT"])
+def topic_dependencies(ident):
+    if request.method == "GET":
+        return run(lambda conn: {"topic": core._get(conn, "topicos", ident), "prerequisite_topic_ids": core._topic_dependencies_map(conn, [ident]).get(ident, [])})
+    return run(lambda conn: core.set_topic_dependencies(conn, ident, body()))
+
+
+@api.route("/sessions",methods=["GET","POST"])
+def session_collection(): return run(lambda conn: core.history(conn,request.args.get("start"),request.args.get("end")) if request.method=="GET" else core.create_session(conn,body()))
+@api.route("/sessions/<int:ident>",methods=["GET","PATCH","DELETE"])
+def session_item(ident):
+    if request.method == "GET": return run(lambda conn: core.session_detail(conn, ident))
+    if request.method == "PATCH": return run(lambda conn: core.update_session(conn,ident,body()))
+    return run(lambda conn: core.delete_session(conn,ident) or {"deleted":True})
+@api.post("/sessions/<int:ident>/breaks")
+def session_break_create(ident): return run(lambda conn: core.add_session_break_correction(conn, ident, body()))
+@api.patch("/session-breaks/<int:ident>")
+def session_break_update(ident): return run(lambda conn: core.update_session_break(conn, ident, body()))
+
+
+@api.get("/focus/active")
+def focus_active(): return run(core.active_focus_session)
+@api.post("/focus/sessions")
+def focus_start(): return run(lambda conn: core.start_focus_session(conn, body()))
+@api.get("/focus/sessions/<int:ident>")
+def focus_session(ident): return run(lambda conn: core._focus_snapshot(conn, core._focus_row(conn, ident)))
+@api.post("/focus/sessions/<int:ident>/pause")
+def focus_pause(ident): return run(lambda conn: core.pause_focus_session(conn, ident, body()))
+@api.post("/focus/sessions/<int:ident>/resume")
+def focus_resume(ident): return run(lambda conn: core.resume_focus_session(conn, ident, body()))
+@api.post("/focus/sessions/<int:ident>/recover")
+def focus_recover(ident): return run(lambda conn: core.recover_focus_session(conn, ident, body()))
+@api.put("/focus/sessions/<int:ident>/note")
+def focus_note(ident): return run(lambda conn: core.save_focus_note(conn, ident, body()))
+@api.post("/focus/sessions/<int:ident>/finish")
+def focus_finish(ident): return run(lambda conn: core.finish_focus_session(conn, ident, body()))
+@api.post("/focus/sessions/<int:ident>/cancel")
+def focus_cancel(ident): return run(lambda conn: core.cancel_focus_session(conn, ident, body()))
+@api.get("/focus/sessions/<int:ident>/breaks")
+def focus_breaks(ident): return run(lambda conn: core._focus_snapshot(conn, core._focus_row(conn, ident))["breaks"])
+
+
+@api.route("/notes", methods=["GET", "POST"])
+def note_collection():
+    if request.method == "GET":
+        selected_date = request.args.get("date")
+        return run(lambda conn: core.notes(
+            conn,
+            request.args.get("study_subject_id") or request.args.get("subject_id"),
+            request.args.get("topic_id"),
+            request.args.get("start") or selected_date,
+            request.args.get("end") or selected_date,
+            request.args.get("status"),
+        ))
+    return run(lambda conn: core.create_note(conn, body()))
+
+
+@api.route("/notes/<int:ident>", methods=["GET", "PATCH", "DELETE"])
+def note_item(ident):
+    if request.method == "GET":
+        return run(lambda conn: core.note_detail(conn, ident))
+    if request.method == "PATCH":
+        return run(lambda conn: core.autosave_note(conn, ident, body()))
+    return run(lambda conn: core.delete_note(conn, ident) or {"deleted": True})
+
+
+@api.post("/notes/<int:ident>/finalize")
+def note_finalize(ident):
+    return run(lambda conn: core.finalize_note(conn, ident, body()))
+
+
+@api.get("/notes/<int:ident>/export")
+def note_export(ident):
+    exported = {}
+    # O nome retornado é ASCII seguro; o conteúdo continua UTF-8 e preserva acentos.
+    try:
+        with connect() as conn:
+            exported.update(core.note_markdown(conn, ident))
+        response = Response(exported["markdown"], mimetype="text/markdown")
+        response.headers["Content-Disposition"] = f'attachment; filename="{exported["filename"]}"'
+        return response
+    except core.DomainError as error: return respond({"error":str(error),"code":error.code},error.status)
+    except ValueError as error: return respond({"error":str(error),"code":"validation_error"},400)
+
+
+@api.post("/notes/export/obsidian")
+def notes_obsidian_export():
+    selected = body().get("ids", body().get("note_ids"))
+    def operation(conn):
+        archive = BytesIO()
+        with ZipFile(archive, "w", compression=ZIP_DEFLATED) as bundle:
+            for item in core.notes_for_obsidian_export(conn, selected):
+                bundle.writestr(item["filename"], item["markdown"].encode("utf-8"))
+        return archive.getvalue()
+    return download(operation, "application/zip", "anotacoes-obsidian.zip")
+
+
+@api.route("/evaluations",methods=["GET","POST"])
+def evaluation_collection(): return run(lambda conn: core.evaluations(conn,request.args.get("study_id"),request.args.get("curriculum_id")) if request.method=="GET" else core.create_evaluation(conn,body()))
+@api.route("/evaluations/<int:ident>",methods=["PATCH","DELETE"])
+def evaluation_item(ident): return run(lambda conn: core.update_evaluation(conn,ident,body()) if request.method=="PATCH" else core.delete_evaluation(conn,ident) or {"deleted":True})
+@api.get("/reviews")
+def review_collection(): return run(core.reviews)
+@api.post("/reviews/<int:ident>/complete")
+def review_complete(ident):
+    data = body()
+    return run(lambda conn: core.complete_review(conn,ident,data.get("rating"),data.get("duration_seconds"),data.get("notes")))
+
+
+@api.route("/review-campaigns", methods=["GET", "POST"])
+def review_campaign_collection():
+    return run(lambda conn: core.review_campaigns(conn, request.args.get("status")) if request.method == "GET" else core.create_review_campaign(conn, body()))
+@api.post("/review-campaigns/preview")
+def review_campaign_preview():
+    def operation(conn):
+        conn.execute("SAVEPOINT preview_review_campaign")
+        try:
+            created = core.create_review_campaign(conn, body())
+            campaign = created["campaign"]
+            first = max(core._date(campaign["start_date"]), core._local_now().date())
+            days = (core._date(campaign["end_date"]) - first).days + 1
+            preview = core.generate_plan(conn, first.isoformat(), min(93, max(1, days)))
+            return {"campaign": created, "preview": preview, "persisted": False}
+        finally:
+            conn.execute("ROLLBACK TO SAVEPOINT preview_review_campaign")
+            conn.execute("RELEASE SAVEPOINT preview_review_campaign")
+    return run(operation)
+@api.route("/review-campaigns/<int:ident>", methods=["GET", "PATCH"])
+def review_campaign_item(ident):
+    return run(lambda conn: core.review_campaign_detail(conn, ident) if request.method == "GET" else core.update_review_campaign(conn, ident, body()))
+@api.post("/review-campaigns/<int:ident>/<action>")
+def review_campaign_action(ident, action):
+    statuses = {"pause": "paused", "resume": "active", "complete": "completed", "cancel": "cancelled"}
+    if action not in statuses: return respond({"error": "Ação de campanha inválida."}, 400)
+    return run(lambda conn: core.set_review_campaign_status(conn, ident, statuses[action]))
+
+
+@api.route("/availability",methods=["GET","POST"])
+def availability_collection(): return run(core.availability if request.method=="GET" else lambda conn:core.set_availability(conn,body()))
+@api.post("/availability/batch")
+def availability_batch(): return run(lambda conn:core.set_availability_batch(conn,body()))
+@api.post("/availability/copy")
+def availability_copy(): return run(lambda conn:core.copy_availability(conn,body()))
+@api.route("/availability/<int:ident>",methods=["PATCH","DELETE"])
+def availability_item(ident): return run(lambda conn: core.update_availability(conn,ident,body()) if request.method=="PATCH" else core.remove(conn,"disponibilidades_semanais",ident) or {"deleted":True})
+@api.route("/availability-exceptions",methods=["GET","POST"])
+def availability_exceptions(): return run(lambda conn:core.availability_exceptions(conn,request.args.get("start"),request.args.get("end")) if request.method=="GET" else core.set_availability_exception(conn,body()))
+@api.route("/availability-exceptions/<int:ident>",methods=["PATCH","DELETE"])
+def availability_exception_item(ident): return run(lambda conn:core.update_availability_exception(conn,ident,body()) if request.method=="PATCH" else core.remove(conn,"excecoes_disponibilidade",ident) or {"deleted":True})
+@api.route("/availability/intervals", methods=["GET", "POST"])
+def availability_intervals():
+    return run(lambda conn: core.availability_intervals(conn, request.args.get("start"), request.args.get("end")) if request.method == "GET" else core.set_availability_interval(conn, body()))
+@api.route("/availability/intervals/<int:ident>", methods=["PATCH", "DELETE"])
+def availability_interval_item(ident):
+    return run(lambda conn: core.update_availability_interval(conn, ident, body()) if request.method == "PATCH" else core.remove(conn, "disponibilidades_intervalos", ident) or {"deleted": True})
+@api.get("/availability/days/<selected_date>")
+def availability_day(selected_date): return run(lambda conn: core.availability_day(conn, selected_date))
+@api.post("/availability/days/<selected_date>/reset")
+def availability_day_reset(selected_date): return run(lambda conn: core.reset_availability_date(conn, selected_date))
+@api.route("/planned",methods=["GET","POST"])
+def planned_collection():
+    today = core._today()
+    return run(lambda conn: core.planned(conn,request.args.get("start",today),request.args.get("end",(core._local_now().date()+timedelta(days=6)).isoformat())) if request.method=="GET" else core.create_planned(conn,body()))
+@api.delete("/planned/day/<scheduled_date>")
+def planned_day_delete(scheduled_date):
+    return run(lambda conn: core.delete_planned_day(conn, scheduled_date))
+@api.route("/planned/<int:ident>",methods=["GET","PATCH","DELETE"])
+def planned_item(ident):
+    if request.method=="GET": return run(lambda conn:core.planned_detail(conn,ident))
+    return run(lambda conn: core.update_planned(conn,ident,body()) if request.method=="PATCH" else core.remove(conn,"sessoes_planejadas",ident) or {"deleted":True})
+@api.post("/planned/<int:ident>/reschedule")
+def planned_reschedule(ident): return run(lambda conn:core.reschedule_planned(conn,ident,body()))
+@api.post("/planning/generate")
+def planning_generate(): return run(lambda conn: core.generate_plan(conn,body().get("start",core._today()),int(body().get("days",7))))
+@api.post("/planning/generate-smart")
+def planning_generate_smart(): return run(lambda conn: core.generate_plan(conn,body().get("start",core._today()),int(body().get("days",7))))
+@api.post("/planning/preview")
+def planning_preview(): return run(lambda conn: core.create_planning_preview(conn, body()))
+@api.post("/planning/apply")
+def planning_apply():
+    return run(lambda conn: core.apply_smart_plan(conn, body()))
+@api.post("/planning/apply-versioned")
+def planning_apply_versioned(): return run(lambda conn: core.apply_versioned_plan(conn, body()))
+@api.get("/planning/capacity")
+def planning_capacity(): return run(lambda conn: core.planning_capacity(conn, request.args.get("start", core._today()), request.args.get("end", (core._local_now().date()+timedelta(days=6)).isoformat())))
+@api.get("/planning/items")
+def planning_items():
+    return run(lambda conn: core.planning_items(
+        conn, request.args.get("start", core._today()),
+        request.args.get("end", (core._local_now().date()+timedelta(days=6)).isoformat()),
+        request.args.get("formation_id"), request.args.get("item_id"), request.args.get("kind"),
+    ))
+@api.get("/planning/ideal")
+def planning_ideal(): return run(lambda conn: core.planning_ideal(conn, request.args.get("start", core._today()), request.args.get("end", (core._local_now().date()+timedelta(days=6)).isoformat())))
+@api.get("/planning/calendar-events")
+def planning_calendar_events(): return run(lambda conn: core.planning_calendar_events(conn, request.args.get("start", core._today()), request.args.get("end", (core._local_now().date()+timedelta(days=6)).isoformat())))
+@api.get("/today")
+def today(): return run(core.today_overview)
+@api.get("/recommendation")
+def recommendation(): return run(core.recommendation)
+@api.get("/search")
+def search(): return run(lambda conn: core.search(conn, request.args.get("q")))
+@api.get("/analytics")
+def analytics(): return run(core.analytics)
+@api.get("/analytics/workload")
+def analytics_workload(): return run(lambda conn: core.analytics_workload(conn, request.args.get("start"), request.args.get("end"), request.args.get("formation_id"), request.args.get("item_id"), request.args.get("kind")))
+@api.get("/analytics/summary")
+def analytics_summary(): return run(lambda conn: core.analytics_summary(conn, request.args.get("date")))
+@api.get("/analytics/detailed")
+def analytics_detailed():
+    return run(lambda conn: core.analytics_detailed(
+        conn,
+        request.args.get("start"), request.args.get("end"),
+        request.args.get("formation_id"), request.args.get("item_id") or request.args.get("study_subject_id"),
+        request.args.get("campaign_id"), request.args.get("purpose"),
+    ))
+
+@api.route("/projects",methods=["GET","POST"])
+def project_collection(): return run(lambda conn: core.projects(conn,request.args.get("archived")=="1") if request.method=="GET" else core.create_project(conn,body()))
+@api.route("/projects/<int:ident>",methods=["GET","PATCH","DELETE"])
+def project_item(ident):
+    if request.method == "GET": return run(lambda conn: core.project_detail(conn,ident))
+    return run(lambda conn: core.update_project(conn,ident,body()) if request.method=="PATCH" else core.remove(conn,"projetos",ident) or {"deleted":True})
+@api.post("/projects/<int:ident>/<action>")
+def project_action(ident, action): return run(lambda conn: core.archive_project(conn,ident,action=="restore"))
+@api.post("/projects/<int:ident>/tasks")
+def project_task(ident): return run(lambda conn: core.add_project_task(conn,ident,body()))
+@api.route("/project-tasks/<int:ident>",methods=["PATCH","DELETE"])
+def project_task_item(ident): return run(lambda conn: core.update_project_task(conn,ident,body()) if request.method=="PATCH" else core.remove(conn,"projeto_tarefas",ident) or {"deleted":True})
+@api.route("/settings",methods=["GET","PUT"])
+def settings(): return run(core.settings if request.method=="GET" else lambda conn: core.save_settings(conn,body()))
