@@ -1,1 +1,0 @@
-"""Repositórios SQL da aplicação."""
