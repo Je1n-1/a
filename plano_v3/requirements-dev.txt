@@ -1,0 +1,4 @@
+-r requirements.txt
+ruff==0.17.0
+jsbeautifier==2.0.3
+editorconfig==0.17.1

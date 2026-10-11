@@ -1,0 +1,19 @@
+{
+  "live_status": 200,
+  "test_courses": 3,
+  "test_subjects": 64,
+  "test_sessions": 3,
+  "personal_database_unchanged": true,
+  "diagnostics": {
+    "foreign_key_violations": 0,
+    "integrity": "ok",
+    "last_backup": null,
+    "path": "C:\\Users\\jeanm\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\PlanoV3\\data\\plano.db",
+    "schema": [
+      "0001_tracker",
+      "0002_timer_recovery",
+      "0003_analytics"
+    ]
+  },
+  "qa_integrity": "ok"
+}

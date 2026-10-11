@@ -1,0 +1,10 @@
+{
+  "errors": [],
+  "httpErrors": [],
+  "steps": [
+    "Dois gráficos, 124 sessões, paginação de 20; exportação contém 124 registros, inclusive fora da página aberta.",
+    "Filtros por curso/disciplina e um único dia exibem só os 10 minutos líquidos da sessão na primeira data.",
+    "Correção de duração com motivo obrigatório atualiza o total e mostra os valores anteriores na auditoria.",
+    "390 px sem transbordamento da página, tabela com rolagem própria, botão de correção visível e estado vazio sem erros."
+  ]
+}

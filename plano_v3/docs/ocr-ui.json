@@ -1,0 +1,47 @@
+{
+  "errors": [],
+  "results": [
+    {
+      "file": "23_03_2026 - T14 RS - CT Eletrotécnica - Cronograma (4).pdf",
+      "course_id": 1,
+      "recognized": 26,
+      "hours": 1220,
+      "ocr": null,
+      "confirmed": true,
+      "reimport_no_duplicates": true,
+      "study_finished": true
+    },
+    {
+      "file": "eng eletrica.pdf",
+      "course_id": 2,
+      "recognized": 19,
+      "hours": 735,
+      "ocr": {
+        "engine": "windows",
+        "language": "pt-BR",
+        "pages": 4,
+        "repeated_rows": 57
+      },
+      "confirmed": true,
+      "reimport_no_duplicates": true,
+      "study_finished": true
+    },
+    {
+      "file": "eng computacao.pdf",
+      "course_id": 3,
+      "recognized": 19,
+      "hours": 735,
+      "ocr": {
+        "engine": "windows",
+        "language": "pt-BR",
+        "pages": 4,
+        "repeated_rows": 57
+      },
+      "confirmed": true,
+      "reimport_no_duplicates": true,
+      "study_finished": true
+    }
+  ],
+  "total_subjects": 64,
+  "sessions": 3
+}

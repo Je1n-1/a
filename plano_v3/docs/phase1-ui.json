@@ -1,0 +1,21 @@
+{
+  "errors": [],
+  "httpErrors": [],
+  "steps": [
+    "Modelo: 3 identificadas, 0 selecionadas; seleção em lote, edição e gravação de 3.",
+    "Reimportação sem duplicatas.",
+    "Dois cursos com disciplina homônima e códigos 001 preservados.",
+    "Estudar em um clique; recarga e segunda aba recuperam o timer; pausa, retomada e finalização criam uma sessão.",
+    "390px: Hoje e prévia sem overflow da página; Análises identificada como próxima etapa."
+  ],
+  "activeId": 1,
+  "diagnostics": {
+    "foreign_key_violations": 0,
+    "integrity": "ok",
+    "last_backup": null,
+    "path": "C:\\Users\\jeanm\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\PlanoV3\\verification\\20261010-112700\\browser.db",
+    "schema": [
+      "0001_tracker"
+    ]
+  }
+}

@@ -1,0 +1,125 @@
+﻿ID;Data inicial no período;Data final no período;Curso;Disciplina/estudo;Origem;Versão;Início da sessão (São Paulo);Fim da sessão (São Paulo);Bruto no período (s);Pausas no período (s);Líquido no período (s);Líquido total da sessão (s);Nota;Filtro inicial;Filtro final;Fuso
+124;2026-10-09;2026-10-10;Engenharia Elétrica;Circuitos Elétricos;timer;1;2026-10-09T23:40:00-03:00;2026-10-10T00:30:00-03:00;3000;1200;1800;1800;Sessão que atravessa a meia-noite;2026-10-01;2026-10-10;America/Sao_Paulo
+120;2026-10-10;2026-10-10;Engenharia da Computação;Circuitos Elétricos;manual;1;;;1514;0;1514;1514;;2026-10-01;2026-10-10;America/Sao_Paulo
+110;2026-10-10;2026-10-10;Engenharia Elétrica;Cálculo II;manual;1;;;1204;0;1204;1204;;2026-10-01;2026-10-10;America/Sao_Paulo
+100;2026-10-10;2026-10-10;Engenharia da Computação;Circuitos Elétricos;manual;1;;;909;0;909;909;;2026-10-01;2026-10-10;America/Sao_Paulo
+90;2026-10-10;2026-10-10;Engenharia Elétrica;Cálculo II;manual;1;;;3314;0;3314;3314;;2026-10-01;2026-10-10;America/Sao_Paulo
+80;2026-10-10;2026-10-10;Engenharia da Computação;Circuitos Elétricos;manual;1;;;3004;0;3004;3004;;2026-10-01;2026-10-10;America/Sao_Paulo
+70;2026-10-10;2026-10-10;Engenharia Elétrica;Cálculo II;manual;1;;;2709;0;2709;2709;;2026-10-01;2026-10-10;America/Sao_Paulo
+60;2026-10-10;2026-10-10;Engenharia da Computação;Circuitos Elétricos;manual;1;;;2414;0;2414;2414;;2026-10-01;2026-10-10;America/Sao_Paulo
+50;2026-10-10;2026-10-10;Engenharia Elétrica;Cálculo II;manual;1;;;2104;0;2104;2104;;2026-10-01;2026-10-10;America/Sao_Paulo
+40;2026-10-10;2026-10-10;Engenharia da Computação;Circuitos Elétricos;manual;1;;;1809;0;1809;1809;;2026-10-01;2026-10-10;America/Sao_Paulo
+30;2026-10-10;2026-10-10;Engenharia Elétrica;Cálculo II;manual;1;;;1514;0;1514;1514;;2026-10-01;2026-10-10;America/Sao_Paulo
+20;2026-10-10;2026-10-10;Engenharia da Computação;Circuitos Elétricos;manual;1;;;1204;0;1204;1204;;2026-10-01;2026-10-10;America/Sao_Paulo
+10;2026-10-10;2026-10-10;Engenharia Elétrica;Cálculo II;manual;1;;;909;0;909;909;;2026-10-01;2026-10-10;America/Sao_Paulo
+119;2026-10-09;2026-10-09;Engenharia Elétrica;Física Aplicada;manual;1;;;1213;0;1213;1213;;2026-10-01;2026-10-10;America/Sao_Paulo
+109;2026-10-09;2026-10-09;Engenharia Elétrica;Circuitos Elétricos;manual;1;;;903;0;903;903;;2026-10-01;2026-10-10;America/Sao_Paulo
+99;2026-10-09;2026-10-09;Engenharia Elétrica;Física Aplicada;manual;1;;;3308;0;3308;3308;;2026-10-01;2026-10-10;America/Sao_Paulo
+89;2026-10-09;2026-10-09;Engenharia Elétrica;Circuitos Elétricos;manual;1;;;3013;0;3013;3013;;2026-10-01;2026-10-10;America/Sao_Paulo
+79;2026-10-09;2026-10-09;Engenharia Elétrica;Física Aplicada;manual;1;;;2703;0;2703;2703;;2026-10-01;2026-10-10;America/Sao_Paulo
+69;2026-10-09;2026-10-09;Engenharia Elétrica;Circuitos Elétricos;manual;1;;;2408;0;2408;2408;;2026-10-01;2026-10-10;America/Sao_Paulo
+59;2026-10-09;2026-10-09;Engenharia Elétrica;Física Aplicada;manual;1;;;2113;0;2113;2113;;2026-10-01;2026-10-10;America/Sao_Paulo
+49;2026-10-09;2026-10-09;Engenharia Elétrica;Circuitos Elétricos;manual;1;;;1803;0;1803;1803;;2026-10-01;2026-10-10;America/Sao_Paulo
+39;2026-10-09;2026-10-09;Engenharia Elétrica;Física Aplicada;manual;1;;;1508;0;1508;1508;;2026-10-01;2026-10-10;America/Sao_Paulo
+29;2026-10-09;2026-10-09;Engenharia Elétrica;Circuitos Elétricos;manual;1;;;1213;0;1213;1213;;2026-10-01;2026-10-10;America/Sao_Paulo
+19;2026-10-09;2026-10-09;Engenharia Elétrica;Física Aplicada;manual;1;;;903;0;903;903;;2026-10-01;2026-10-10;America/Sao_Paulo
+9;2026-10-09;2026-10-09;Engenharia Elétrica;Circuitos Elétricos;manual;1;;;3308;0;3308;3308;;2026-10-01;2026-10-10;America/Sao_Paulo
+118;2026-10-08;2026-10-08;Engenharia Elétrica;Cálculo II;manual;1;;;912;0;912;912;;2026-10-01;2026-10-10;America/Sao_Paulo
+108;2026-10-08;2026-10-08;Engenharia da Computação;Circuitos Elétricos;manual;1;;;3302;0;3302;3302;;2026-10-01;2026-10-10;America/Sao_Paulo
+98;2026-10-08;2026-10-08;Engenharia Elétrica;Cálculo II;manual;1;;;3007;0;3007;3007;;2026-10-01;2026-10-10;America/Sao_Paulo
+88;2026-10-08;2026-10-08;Engenharia da Computação;Circuitos Elétricos;manual;1;;;2712;0;2712;2712;;2026-10-01;2026-10-10;America/Sao_Paulo
+78;2026-10-08;2026-10-08;Engenharia Elétrica;Cálculo II;manual;1;;;2402;0;2402;2402;;2026-10-01;2026-10-10;America/Sao_Paulo
+68;2026-10-08;2026-10-08;Engenharia da Computação;Circuitos Elétricos;manual;1;;;2107;0;2107;2107;;2026-10-01;2026-10-10;America/Sao_Paulo
+58;2026-10-08;2026-10-08;Engenharia Elétrica;Cálculo II;manual;1;;;1812;0;1812;1812;;2026-10-01;2026-10-10;America/Sao_Paulo
+48;2026-10-08;2026-10-08;Engenharia da Computação;Circuitos Elétricos;manual;1;;;1502;0;1502;1502;;2026-10-01;2026-10-10;America/Sao_Paulo
+38;2026-10-08;2026-10-08;Engenharia Elétrica;Cálculo II;manual;1;;;1207;0;1207;1207;;2026-10-01;2026-10-10;America/Sao_Paulo
+28;2026-10-08;2026-10-08;Engenharia da Computação;Circuitos Elétricos;manual;1;;;912;0;912;912;;2026-10-01;2026-10-10;America/Sao_Paulo
+18;2026-10-08;2026-10-08;Engenharia Elétrica;Cálculo II;manual;1;;;3302;0;3302;3302;;2026-10-01;2026-10-10;America/Sao_Paulo
+8;2026-10-08;2026-10-08;Engenharia da Computação;Circuitos Elétricos;manual;1;;;3007;0;3007;3007;;2026-10-01;2026-10-10;America/Sao_Paulo
+117;2026-10-07;2026-10-07;Engenharia Elétrica;Circuitos Elétricos;manual;1;;;3311;0;3311;3311;;2026-10-01;2026-10-10;America/Sao_Paulo
+107;2026-10-07;2026-10-07;Engenharia Elétrica;Física Aplicada;manual;1;;;3001;0;3001;3001;;2026-10-01;2026-10-10;America/Sao_Paulo
+97;2026-10-07;2026-10-07;Engenharia Elétrica;Circuitos Elétricos;manual;1;;;2706;0;2706;2706;;2026-10-01;2026-10-10;America/Sao_Paulo
+87;2026-10-07;2026-10-07;Engenharia Elétrica;Física Aplicada;manual;1;;;2411;0;2411;2411;;2026-10-01;2026-10-10;America/Sao_Paulo
+77;2026-10-07;2026-10-07;Engenharia Elétrica;Circuitos Elétricos;manual;1;;;2101;0;2101;2101;;2026-10-01;2026-10-10;America/Sao_Paulo
+67;2026-10-07;2026-10-07;Engenharia Elétrica;Física Aplicada;manual;1;;;1806;0;1806;1806;;2026-10-01;2026-10-10;America/Sao_Paulo
+57;2026-10-07;2026-10-07;Engenharia Elétrica;Circuitos Elétricos;manual;1;;;1511;0;1511;1511;;2026-10-01;2026-10-10;America/Sao_Paulo
+47;2026-10-07;2026-10-07;Engenharia Elétrica;Física Aplicada;manual;1;;;1201;0;1201;1201;;2026-10-01;2026-10-10;America/Sao_Paulo
+37;2026-10-07;2026-10-07;Engenharia Elétrica;Circuitos Elétricos;manual;1;;;906;0;906;906;;2026-10-01;2026-10-10;America/Sao_Paulo
+27;2026-10-07;2026-10-07;Engenharia Elétrica;Física Aplicada;manual;1;;;3311;0;3311;3311;;2026-10-01;2026-10-10;America/Sao_Paulo
+17;2026-10-07;2026-10-07;Engenharia Elétrica;Circuitos Elétricos;manual;1;;;3001;0;3001;3001;;2026-10-01;2026-10-10;America/Sao_Paulo
+7;2026-10-07;2026-10-07;Engenharia Elétrica;Física Aplicada;manual;1;;;2706;0;2706;2706;;2026-10-01;2026-10-10;America/Sao_Paulo
+116;2026-10-06;2026-10-06;Engenharia da Computação;Circuitos Elétricos;manual;1;;;3010;0;3010;3010;Revisão e exercícios;2026-10-01;2026-10-10;America/Sao_Paulo
+106;2026-10-06;2026-10-06;Engenharia Elétrica;Cálculo II;manual;1;;;2700;0;2700;2700;Revisão e exercícios;2026-10-01;2026-10-10;America/Sao_Paulo
+96;2026-10-06;2026-10-06;Engenharia da Computação;Circuitos Elétricos;manual;1;;;2405;0;2405;2405;Revisão e exercícios;2026-10-01;2026-10-10;America/Sao_Paulo
+86;2026-10-06;2026-10-06;Engenharia Elétrica;Cálculo II;manual;1;;;2110;0;2110;2110;Revisão e exercícios;2026-10-01;2026-10-10;America/Sao_Paulo
+76;2026-10-06;2026-10-06;Engenharia da Computação;Circuitos Elétricos;manual;1;;;1800;0;1800;1800;Revisão e exercícios;2026-10-01;2026-10-10;America/Sao_Paulo
+66;2026-10-06;2026-10-06;Engenharia Elétrica;Cálculo II;manual;1;;;1505;0;1505;1505;Revisão e exercícios;2026-10-01;2026-10-10;America/Sao_Paulo
+56;2026-10-06;2026-10-06;Engenharia da Computação;Circuitos Elétricos;manual;1;;;1210;0;1210;1210;Revisão e exercícios;2026-10-01;2026-10-10;America/Sao_Paulo
+46;2026-10-06;2026-10-06;Engenharia Elétrica;Cálculo II;manual;1;;;900;0;900;900;Revisão e exercícios;2026-10-01;2026-10-10;America/Sao_Paulo
+36;2026-10-06;2026-10-06;Engenharia da Computação;Circuitos Elétricos;manual;1;;;3305;0;3305;3305;Revisão e exercícios;2026-10-01;2026-10-10;America/Sao_Paulo
+26;2026-10-06;2026-10-06;Engenharia Elétrica;Cálculo II;manual;1;;;3010;0;3010;3010;Revisão e exercícios;2026-10-01;2026-10-10;America/Sao_Paulo
+16;2026-10-06;2026-10-06;Engenharia da Computação;Circuitos Elétricos;manual;1;;;2700;0;2700;2700;Revisão e exercícios;2026-10-01;2026-10-10;America/Sao_Paulo
+6;2026-10-06;2026-10-06;Engenharia Elétrica;Cálculo II;manual;1;;;2405;0;2405;2405;Revisão e exercícios;2026-10-01;2026-10-10;America/Sao_Paulo
+115;2026-10-05;2026-10-05;Engenharia Elétrica;Física Aplicada;manual;1;;;2709;0;2709;2709;;2026-10-01;2026-10-10;America/Sao_Paulo
+105;2026-10-05;2026-10-05;Engenharia Elétrica;Circuitos Elétricos;manual;1;;;2414;0;2414;2414;;2026-10-01;2026-10-10;America/Sao_Paulo
+95;2026-10-05;2026-10-05;Engenharia Elétrica;Física Aplicada;manual;1;;;2104;0;2104;2104;;2026-10-01;2026-10-10;America/Sao_Paulo
+85;2026-10-05;2026-10-05;Engenharia Elétrica;Circuitos Elétricos;manual;1;;;1809;0;1809;1809;;2026-10-01;2026-10-10;America/Sao_Paulo
+75;2026-10-05;2026-10-05;Engenharia Elétrica;Física Aplicada;manual;1;;;1514;0;1514;1514;;2026-10-01;2026-10-10;America/Sao_Paulo
+65;2026-10-05;2026-10-05;Engenharia Elétrica;Circuitos Elétricos;manual;1;;;1204;0;1204;1204;;2026-10-01;2026-10-10;America/Sao_Paulo
+55;2026-10-05;2026-10-05;Engenharia Elétrica;Física Aplicada;manual;1;;;909;0;909;909;;2026-10-01;2026-10-10;America/Sao_Paulo
+45;2026-10-05;2026-10-05;Engenharia Elétrica;Circuitos Elétricos;manual;1;;;3314;0;3314;3314;;2026-10-01;2026-10-10;America/Sao_Paulo
+35;2026-10-05;2026-10-05;Engenharia Elétrica;Física Aplicada;manual;1;;;3004;0;3004;3004;;2026-10-01;2026-10-10;America/Sao_Paulo
+25;2026-10-05;2026-10-05;Engenharia Elétrica;Circuitos Elétricos;manual;1;;;2709;0;2709;2709;;2026-10-01;2026-10-10;America/Sao_Paulo
+15;2026-10-05;2026-10-05;Engenharia Elétrica;Física Aplicada;manual;1;;;2414;0;2414;2414;;2026-10-01;2026-10-10;America/Sao_Paulo
+5;2026-10-05;2026-10-05;Engenharia Elétrica;Circuitos Elétricos;manual;1;;;2104;0;2104;2104;;2026-10-01;2026-10-10;America/Sao_Paulo
+114;2026-10-04;2026-10-04;Engenharia Elétrica;Cálculo II;manual;1;;;2408;0;2408;2408;;2026-10-01;2026-10-10;America/Sao_Paulo
+104;2026-10-04;2026-10-04;Engenharia da Computação;Circuitos Elétricos;manual;1;;;2113;0;2113;2113;;2026-10-01;2026-10-10;America/Sao_Paulo
+94;2026-10-04;2026-10-04;Engenharia Elétrica;Cálculo II;manual;1;;;1803;0;1803;1803;;2026-10-01;2026-10-10;America/Sao_Paulo
+84;2026-10-04;2026-10-04;Engenharia da Computação;Circuitos Elétricos;manual;1;;;1508;0;1508;1508;;2026-10-01;2026-10-10;America/Sao_Paulo
+74;2026-10-04;2026-10-04;Engenharia Elétrica;Cálculo II;manual;1;;;1213;0;1213;1213;;2026-10-01;2026-10-10;America/Sao_Paulo
+64;2026-10-04;2026-10-04;Engenharia da Computação;Circuitos Elétricos;manual;1;;;903;0;903;903;;2026-10-01;2026-10-10;America/Sao_Paulo
+54;2026-10-04;2026-10-04;Engenharia Elétrica;Cálculo II;manual;1;;;3308;0;3308;3308;;2026-10-01;2026-10-10;America/Sao_Paulo
+44;2026-10-04;2026-10-04;Engenharia da Computação;Circuitos Elétricos;manual;1;;;3013;0;3013;3013;;2026-10-01;2026-10-10;America/Sao_Paulo
+34;2026-10-04;2026-10-04;Engenharia Elétrica;Cálculo II;manual;1;;;2703;0;2703;2703;;2026-10-01;2026-10-10;America/Sao_Paulo
+24;2026-10-04;2026-10-04;Engenharia da Computação;Circuitos Elétricos;manual;1;;;2408;0;2408;2408;;2026-10-01;2026-10-10;America/Sao_Paulo
+14;2026-10-04;2026-10-04;Engenharia Elétrica;Cálculo II;manual;1;;;2113;0;2113;2113;;2026-10-01;2026-10-10;America/Sao_Paulo
+4;2026-10-04;2026-10-04;Engenharia da Computação;Circuitos Elétricos;manual;1;;;1803;0;1803;1803;;2026-10-01;2026-10-10;America/Sao_Paulo
+123;2026-10-03;2026-10-03;Engenharia Elétrica;Física Aplicada;manual;1;;;2402;0;2402;2402;;2026-10-01;2026-10-10;America/Sao_Paulo
+113;2026-10-03;2026-10-03;Engenharia Elétrica;Circuitos Elétricos;manual;1;;;2107;0;2107;2107;;2026-10-01;2026-10-10;America/Sao_Paulo
+103;2026-10-03;2026-10-03;Engenharia Elétrica;Física Aplicada;manual;1;;;1812;0;1812;1812;;2026-10-01;2026-10-10;America/Sao_Paulo
+93;2026-10-03;2026-10-03;Engenharia Elétrica;Circuitos Elétricos;manual;1;;;1502;0;1502;1502;;2026-10-01;2026-10-10;America/Sao_Paulo
+83;2026-10-03;2026-10-03;Engenharia Elétrica;Física Aplicada;manual;1;;;1207;0;1207;1207;;2026-10-01;2026-10-10;America/Sao_Paulo
+73;2026-10-03;2026-10-03;Engenharia Elétrica;Circuitos Elétricos;manual;1;;;912;0;912;912;;2026-10-01;2026-10-10;America/Sao_Paulo
+63;2026-10-03;2026-10-03;Engenharia Elétrica;Física Aplicada;manual;1;;;3302;0;3302;3302;;2026-10-01;2026-10-10;America/Sao_Paulo
+53;2026-10-03;2026-10-03;Engenharia Elétrica;Circuitos Elétricos;manual;1;;;3007;0;3007;3007;;2026-10-01;2026-10-10;America/Sao_Paulo
+43;2026-10-03;2026-10-03;Engenharia Elétrica;Física Aplicada;manual;1;;;2712;0;2712;2712;;2026-10-01;2026-10-10;America/Sao_Paulo
+33;2026-10-03;2026-10-03;Engenharia Elétrica;Circuitos Elétricos;manual;1;;;2402;0;2402;2402;;2026-10-01;2026-10-10;America/Sao_Paulo
+23;2026-10-03;2026-10-03;Engenharia Elétrica;Física Aplicada;manual;1;;;2107;0;2107;2107;;2026-10-01;2026-10-10;America/Sao_Paulo
+13;2026-10-03;2026-10-03;Engenharia Elétrica;Circuitos Elétricos;manual;1;;;1812;0;1812;1812;;2026-10-01;2026-10-10;America/Sao_Paulo
+3;2026-10-03;2026-10-03;Engenharia Elétrica;Física Aplicada;manual;1;;;1502;0;1502;1502;;2026-10-01;2026-10-10;America/Sao_Paulo
+122;2026-10-02;2026-10-02;Engenharia Elétrica;Cálculo II;manual;1;;;2101;0;2101;2101;;2026-10-01;2026-10-10;America/Sao_Paulo
+112;2026-10-02;2026-10-02;Engenharia da Computação;Circuitos Elétricos;manual;1;;;1806;0;1806;1806;;2026-10-01;2026-10-10;America/Sao_Paulo
+102;2026-10-02;2026-10-02;Engenharia Elétrica;Cálculo II;manual;1;;;1511;0;1511;1511;;2026-10-01;2026-10-10;America/Sao_Paulo
+92;2026-10-02;2026-10-02;Engenharia da Computação;Circuitos Elétricos;manual;1;;;1201;0;1201;1201;;2026-10-01;2026-10-10;America/Sao_Paulo
+82;2026-10-02;2026-10-02;Engenharia Elétrica;Cálculo II;manual;1;;;906;0;906;906;;2026-10-01;2026-10-10;America/Sao_Paulo
+72;2026-10-02;2026-10-02;Engenharia da Computação;Circuitos Elétricos;manual;1;;;3311;0;3311;3311;;2026-10-01;2026-10-10;America/Sao_Paulo
+62;2026-10-02;2026-10-02;Engenharia Elétrica;Cálculo II;manual;1;;;3001;0;3001;3001;;2026-10-01;2026-10-10;America/Sao_Paulo
+52;2026-10-02;2026-10-02;Engenharia da Computação;Circuitos Elétricos;manual;1;;;2706;0;2706;2706;;2026-10-01;2026-10-10;America/Sao_Paulo
+42;2026-10-02;2026-10-02;Engenharia Elétrica;Cálculo II;manual;1;;;2411;0;2411;2411;;2026-10-01;2026-10-10;America/Sao_Paulo
+32;2026-10-02;2026-10-02;Engenharia da Computação;Circuitos Elétricos;manual;1;;;2101;0;2101;2101;;2026-10-01;2026-10-10;America/Sao_Paulo
+22;2026-10-02;2026-10-02;Engenharia Elétrica;Cálculo II;manual;1;;;1806;0;1806;1806;;2026-10-01;2026-10-10;America/Sao_Paulo
+12;2026-10-02;2026-10-02;Engenharia da Computação;Circuitos Elétricos;manual;1;;;1511;0;1511;1511;;2026-10-01;2026-10-10;America/Sao_Paulo
+2;2026-10-02;2026-10-02;Engenharia Elétrica;Cálculo II;manual;1;;;1201;0;1201;1201;;2026-10-01;2026-10-10;America/Sao_Paulo
+121;2026-10-01;2026-10-01;Engenharia Elétrica;Circuitos Elétricos;manual;1;;;1800;0;1800;1800;Revisão e exercícios;2026-10-01;2026-10-10;America/Sao_Paulo
+111;2026-10-01;2026-10-01;Engenharia Elétrica;Física Aplicada;manual;1;;;1505;0;1505;1505;Revisão e exercícios;2026-10-01;2026-10-10;America/Sao_Paulo
+101;2026-10-01;2026-10-01;Engenharia Elétrica;Circuitos Elétricos;manual;1;;;1210;0;1210;1210;Revisão e exercícios;2026-10-01;2026-10-10;America/Sao_Paulo
+91;2026-10-01;2026-10-01;Engenharia Elétrica;Física Aplicada;manual;1;;;900;0;900;900;Revisão e exercícios;2026-10-01;2026-10-10;America/Sao_Paulo
+81;2026-10-01;2026-10-01;Engenharia Elétrica;Circuitos Elétricos;manual;1;;;3305;0;3305;3305;Revisão e exercícios;2026-10-01;2026-10-10;America/Sao_Paulo
+71;2026-10-01;2026-10-01;Engenharia Elétrica;Física Aplicada;manual;1;;;3010;0;3010;3010;Revisão e exercícios;2026-10-01;2026-10-10;America/Sao_Paulo
+61;2026-10-01;2026-10-01;Engenharia Elétrica;Circuitos Elétricos;manual;1;;;2700;0;2700;2700;Revisão e exercícios;2026-10-01;2026-10-10;America/Sao_Paulo
+51;2026-10-01;2026-10-01;Engenharia Elétrica;Física Aplicada;manual;1;;;2405;0;2405;2405;Revisão e exercícios;2026-10-01;2026-10-10;America/Sao_Paulo
+41;2026-10-01;2026-10-01;Engenharia Elétrica;Circuitos Elétricos;manual;1;;;2110;0;2110;2110;Revisão e exercícios;2026-10-01;2026-10-10;America/Sao_Paulo
+31;2026-10-01;2026-10-01;Engenharia Elétrica;Física Aplicada;manual;1;;;1800;0;1800;1800;Revisão e exercícios;2026-10-01;2026-10-10;America/Sao_Paulo
+21;2026-10-01;2026-10-01;Engenharia Elétrica;Circuitos Elétricos;manual;1;;;1505;0;1505;1505;Revisão e exercícios;2026-10-01;2026-10-10;America/Sao_Paulo
+11;2026-10-01;2026-10-01;Engenharia Elétrica;Física Aplicada;manual;1;;;1210;0;1210;1210;Revisão e exercícios;2026-10-01;2026-10-10;America/Sao_Paulo
+1;2026-10-01;2026-10-01;Engenharia Elétrica;Circuitos Elétricos;manual;1;;;900;0;900;900;Revisão e exercícios;2026-10-01;2026-10-10;America/Sao_Paulo

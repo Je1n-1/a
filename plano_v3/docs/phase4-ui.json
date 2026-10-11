@@ -1,0 +1,8 @@
+{
+  "errors": [],
+  "steps": [
+    "Hoje abre com uma API; retorno à aba coalescido; pausa não dispara leituras redundantes.",
+    "Importador carregado ao abrir; XLSX com seleção explícita; reimportação não duplica três disciplinas.",
+    "Dois gráficos; editor carregado ao corrigir; alteração salva e auditável; 390 px sem transbordamento."
+  ]
+}

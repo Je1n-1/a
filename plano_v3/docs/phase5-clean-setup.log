@@ -1,0 +1,51 @@
+Collecting Flask<4.0,>=3.0 (from -r requirements.txt (line 1))
+  Using cached flask-3.1.3-py3-none-any.whl.metadata (3.2 kB)
+Collecting python-docx<2.0,>=1.1 (from -r requirements.txt (line 2))
+  Using cached python_docx-1.2.0-py3-none-any.whl.metadata (2.0 kB)
+Collecting pypdf<7.0,>=5.0 (from -r requirements.txt (line 3))
+  Using cached pypdf-6.20.0-py3-none-any.whl.metadata (7.6 kB)
+Collecting openpyxl==3.1.5 (from -r requirements.txt (line 4))
+  Using cached openpyxl-3.1.5-py2.py3-none-any.whl.metadata (2.5 kB)
+Collecting tzdata<2027.0,>=2025.1 (from -r requirements.txt (line 5))
+  Using cached tzdata-2026.5-py2.py3-none-any.whl.metadata (1.4 kB)
+Collecting et-xmlfile (from openpyxl==3.1.5->-r requirements.txt (line 4))
+  Using cached et_xmlfile-2.0.0-py3-none-any.whl.metadata (2.7 kB)
+Collecting blinker>=1.9.0 (from Flask<4.0,>=3.0->-r requirements.txt (line 1))
+  Using cached blinker-1.9.0-py3-none-any.whl.metadata (1.6 kB)
+Collecting click>=8.1.3 (from Flask<4.0,>=3.0->-r requirements.txt (line 1))
+  Using cached click-8.5.0-py3-none-any.whl.metadata (2.6 kB)
+Collecting itsdangerous>=2.2.0 (from Flask<4.0,>=3.0->-r requirements.txt (line 1))
+  Using cached itsdangerous-2.2.0-py3-none-any.whl.metadata (1.9 kB)
+Collecting jinja2>=3.1.2 (from Flask<4.0,>=3.0->-r requirements.txt (line 1))
+  Using cached jinja2-3.1.6-py3-none-any.whl.metadata (2.9 kB)
+Collecting markupsafe>=2.1.1 (from Flask<4.0,>=3.0->-r requirements.txt (line 1))
+  Using cached markupsafe-3.0.4-cp312-cp312-win_amd64.whl.metadata (2.8 kB)
+Collecting werkzeug>=3.1.0 (from Flask<4.0,>=3.0->-r requirements.txt (line 1))
+  Using cached werkzeug-3.1.9-py3-none-any.whl.metadata (4.1 kB)
+Collecting lxml>=3.1.0 (from python-docx<2.0,>=1.1->-r requirements.txt (line 2))
+  Using cached lxml-6.1.3-cp312-cp312-win_amd64.whl.metadata (3.4 kB)
+Collecting typing_extensions>=4.9.0 (from python-docx<2.0,>=1.1->-r requirements.txt (line 2))
+  Using cached typing_extensions-4.16.0-py3-none-any.whl.metadata (3.3 kB)
+Using cached openpyxl-3.1.5-py2.py3-none-any.whl (250 kB)
+Using cached flask-3.1.3-py3-none-any.whl (103 kB)
+Using cached python_docx-1.2.0-py3-none-any.whl (252 kB)
+Using cached pypdf-6.20.0-py3-none-any.whl (401 kB)
+Using cached tzdata-2026.5-py2.py3-none-any.whl (347 kB)
+Using cached blinker-1.9.0-py3-none-any.whl (8.5 kB)
+Using cached click-8.5.0-py3-none-any.whl (125 kB)
+Using cached itsdangerous-2.2.0-py3-none-any.whl (16 kB)
+Using cached jinja2-3.1.6-py3-none-any.whl (134 kB)
+Using cached lxml-6.1.3-cp312-cp312-win_amd64.whl (4.0 MB)
+Using cached markupsafe-3.0.4-cp312-cp312-win_amd64.whl (14 kB)
+Using cached typing_extensions-4.16.0-py3-none-any.whl (45 kB)
+Using cached werkzeug-3.1.9-py3-none-any.whl (228 kB)
+Using cached et_xmlfile-2.0.0-py3-none-any.whl (18 kB)
+Installing collected packages: tzdata, typing_extensions, pypdf, markupsafe, lxml, itsdangerous, et-xmlfile, click, blinker, werkzeug, python-docx, openpyxl, jinja2, Flask
+Successfully installed Flask-3.1.3 blinker-1.9.0 click-8.5.0 et-xmlfile-2.0.0 itsdangerous-2.2.0 jinja2-3.1.6 lxml-6.1.3 markupsafe-3.0.4 openpyxl-3.1.5 pypdf-6.20.0 python-docx-1.2.0 typing_extensions-4.16.0 tzdata-2026.5 werkzeug-3.1.9
+
+[notice] A new release of pip is available: 25.0.1 -> 26.2.1
+[notice] To update, run: C:\Users\jeanm\AppData\Local\Packages\OpenAI.Codex_2p2nqsd0c76g0\LocalCache\Local\PlanoV3\verification\phase5-20261010-203115\clean-install\.venv\Scripts\python.exe -m pip install --upgrade pip
+Migrations: ['0001_tracker', '0002_timer_recovery', '0003_analytics']
+Banco: C:\Users\jeanm\AppData\Local\Packages\OpenAI.Codex_2p2nqsd0c76g0\LocalCache\Local\PlanoV3\verification\phase5-20261010-203115\data\test.db
+Banco V3: C:\Users\jeanm\AppData\Local\Packages\OpenAI.Codex_2p2nqsd0c76g0\LocalCache\Local\PlanoV3\verification\phase5-20261010-203115\data\test.db
+Pronto. Execute .\run.ps1 e abra http://127.0.0.1:5055

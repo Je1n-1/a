@@ -1,0 +1,21 @@
+{
+  "errors": [],
+  "steps": [
+    "Recarga e duas abas preservam o timer; resposta de pausa perdida é recuperada; duas finalizações geram uma sessão.",
+    "Registro manual sem horários e retry após perda de resposta: uma única sessão de 35 minutos.",
+    "Horários manuais cruzando meia-noite: 600 segundos no primeiro dia e 1.200 no seguinte.",
+    "Sessão de 9 horas exige revisão; horário real conserva 30 minutos e converte o restante em pausa.",
+    "390 px sem transbordamento; perda de conexão sinalizada e reconexão sem iniciar sessão."
+  ],
+  "diagnostics": {
+    "foreign_key_violations": 0,
+    "integrity": "ok",
+    "last_backup": null,
+    "path": "C:\\Users\\jeanm\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\PlanoV3\\verification\\phase4\\browser.db",
+    "schema": [
+      "0001_tracker",
+      "0002_timer_recovery",
+      "0003_analytics"
+    ]
+  }
+}

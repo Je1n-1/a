@@ -1,0 +1,23 @@
+test_batch_rollback_on_invalid_selected_row (test_phase1.PhaseOne.test_batch_rollback_on_invalid_selected_row) ... ok
+test_cancel_and_free_study_do_not_require_course (test_phase1.PhaseOne.test_cancel_and_free_study_do_not_require_course) ... ok
+test_courses_keep_homonyms_separate_and_duplicate_update_explicit (test_phase1.PhaseOne.test_courses_keep_homonyms_separate_and_duplicate_update_explicit) ... ok
+test_csv_tsv_txt_and_paste_preserve_accent_code_hours (test_phase1.PhaseOne.test_csv_tsv_txt_and_paste_preserve_accent_code_hours) ... ok
+test_docx_table_and_textual_pdf (test_phase1.PhaseOne.test_docx_table_and_textual_pdf) ... ok
+test_edit_archive_restore_and_duplicate_validation (test_phase1.PhaseOne.test_edit_archive_restore_and_duplicate_validation) ... ok
+test_imported_subject_starts_directly_and_survives_restart (test_phase1.PhaseOne.test_imported_subject_starts_directly_and_survives_restart) ... ok
+test_invalid_empty_large_and_no_text_pdf_are_validation_errors (test_phase1.PhaseOne.test_invalid_empty_large_and_no_text_pdf_are_validation_errors) ... invalid pdf header: b'inval'
+EOF marker not found
+EOF marker not found
+ok
+test_missing_table_refuses_startup (test_phase1.PhaseOne.test_missing_table_refuses_startup) ... ok
+test_model_preview_zero_selection_import_and_restart (test_phase1.PhaseOne.test_model_preview_zero_selection_import_and_restart) ... ok
+test_modified_migration_rejected (test_phase1.PhaseOne.test_modified_migration_rejected) ... ok
+test_multiple_sheets_require_choice (test_phase1.PhaseOne.test_multiple_sheets_require_choice) ... ok
+test_schema_idempotent_explicit_path_and_no_legacy_conversion (test_phase1.PhaseOne.test_schema_idempotent_explicit_path_and_no_legacy_conversion) ... ok
+test_timer_pause_finish_idempotence_and_archive_preserves_history (test_phase1.PhaseOne.test_timer_pause_finish_idempotence_and_archive_preserves_history) ... ok
+test_validation_and_local_request_boundary (test_phase1.PhaseOne.test_validation_and_local_request_boundary) ... ok
+
+----------------------------------------------------------------------
+Ran 15 tests in 0.458s
+
+OK

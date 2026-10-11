@@ -1,0 +1,4 @@
+{% extends 'base.html' %}{% block content %}
+<header class="page-heading"><div><p class="eyebrow">SUA BIBLIOTECA DE ESTUDOS</p><h1>Disciplinas<span>.</span></h1><p class="muted">Importe sua grade. Escolha por onde começar.</p></div><button class="button primary" id="new-course">＋ Novo curso</button></header>
+<div class="catalog-layout"><aside class="course-panel"><div class="section-heading"><h2>Meus cursos</h2><span id="course-count" class="count">0</span></div><div id="courses" aria-live="polite"><p class="muted">Carregando cursos…</p></div><label class="check-line"><input type="checkbox" id="show-archived"> Incluir arquivados</label></aside><section id="catalog" class="catalog-main" aria-live="polite"><div class="empty"><h2>Carregando sua biblioteca…</h2></div></section></div>
+<dialog id="import-dialog" class="import-dialog"></dialog>{% endblock %}{% block scripts %}<script type="module" src="{{ asset('js/subjects.js') }}"></script>{% endblock %}

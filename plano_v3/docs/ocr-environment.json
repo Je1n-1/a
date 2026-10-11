@@ -1,0 +1,10 @@
+{
+  "qa": "C:\\Users\\jeanm\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\PlanoV3\\verification\\ocr-20261011-113824",
+  "browser_database": "C:\\Users\\jeanm\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\PlanoV3\\verification\\ocr-20261011-113824\\data\\ocr.db",
+  "personal_database_sha256_before": "7a373c2eba2e718d27439d60b6679115f79ef456718c5228bb5c8a1a30cc8f8f",
+  "files": {
+    "23_03_2026 - T14 RS - CT Eletrot\u00e9cnica - Cronograma (4).pdf": "c563725010681f18fd47647fe61d36f275301a00799fd1b222edc5b218fafa87",
+    "eng computacao.pdf": "9e9ff313121675e773f95c1a7ef7d7b866cb1cbc4cf8656c13e1f430b2129a6b",
+    "eng eletrica.pdf": "9967311b26f5aa60b0c9b2917c6c13a49fd40dfcee52b071a8813948b06826be"
+  }
+}

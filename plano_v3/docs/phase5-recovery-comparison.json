@@ -1,0 +1,51 @@
+{
+  "all_rows_and_schema_equal": true,
+  "tables": {
+    "courses": 1,
+    "session_corrections": 0,
+    "session_days": 1,
+    "study_sessions": 1,
+    "subjects": 26,
+    "timer_intervals": 3,
+    "timer_recoveries": 0,
+    "timers": 1,
+    "v3_migrations": 3
+  },
+  "content_sha256": "f8fb74934c60df546e37184d2c00e8e58c9a4bd3f824f190145f94806184a33b",
+  "diagnostics": [
+    {
+      "path": "C:\\Users\\jeanm\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\PlanoV3\\verification\\phase5-20261010-203115\\data\\test-run2.db",
+      "schema": [
+        "0001_tracker",
+        "0002_timer_recovery",
+        "0003_analytics"
+      ],
+      "integrity": "ok",
+      "foreign_key_violations": 0,
+      "last_backup": null
+    },
+    {
+      "path": "C:\\Users\\jeanm\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\PlanoV3\\verification\\phase5-20261010-203115\\backups\\plano-20261010-233907-e8ebc4f37d4d.db",
+      "schema": [
+        "0001_tracker",
+        "0002_timer_recovery",
+        "0003_analytics"
+      ],
+      "integrity": "ok",
+      "foreign_key_violations": 0,
+      "last_backup": null
+    },
+    {
+      "path": "C:\\Users\\jeanm\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\PlanoV3\\verification\\phase5-20261010-203115\\recovered\\plano-20261010-233907-cbfe7a05037b.db",
+      "schema": [
+        "0001_tracker",
+        "0002_timer_recovery",
+        "0003_analytics"
+      ],
+      "integrity": "ok",
+      "foreign_key_violations": 0,
+      "last_backup": null
+    }
+  ],
+  "reapply_migrations": []
+}

@@ -1,0 +1,19 @@
+{
+  "errors": [],
+  "steps": [
+    "Cronograma real: 26 linhas, disciplina de 12 h preservada, prévia sem escrita e reimportação sem duplicar.",
+    "PDFs sem texto extraível exibem erro específico de OCR e não gravam disciplinas.",
+    "Disciplina importada inicia estudo diretamente; pausa, retomada e conclusão gravam histórico.",
+    "Backup baixado, data registrada e cópia recuperada pela UI móvel; banco ativo preservado.",
+    "Backup inválido rejeitado; Escape fecha o formulário; histórico com dois gráficos e CSV baixado."
+  ],
+  "grade": {
+    "recognized": 26,
+    "total_hours": 1220,
+    "warnings": [
+      "A carga identificada (1220 h) difere do total declarado no documento (1200 h) em 20 h."
+    ]
+  },
+  "backup_path": "C:\\Users\\jeanm\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\PlanoV3\\verification\\phase5-20261010-203115\\backups\\plano-20261010-233907-e8ebc4f37d4d.db",
+  "recovered_path": "C:\\Users\\jeanm\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\PlanoV3\\verification\\phase5-20261010-203115\\recovered\\plano-20261010-233907-cbfe7a05037b.db"
+}

@@ -1,0 +1,11 @@
+{
+  "http": 200,
+  "errors": [],
+  "schema": [
+    "0001_tracker",
+    "0002_timer_recovery"
+  ],
+  "integrity": "ok",
+  "courses_count": 1,
+  "manual_button_visible": true
+}

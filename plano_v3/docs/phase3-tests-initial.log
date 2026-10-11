@@ -1,0 +1,15 @@
+test_correction_rebuilds_all_outputs_audits_and_is_idempotent (tests.test_phase3.PhaseThree.test_correction_rebuilds_all_outputs_audits_and_is_idempotent) ... ok
+test_course_subject_free_archived_and_cards_have_defined_ranges (tests.test_phase3.PhaseThree.test_course_subject_free_archived_and_cards_have_defined_ranges) ... ok
+test_csv_accents_quotes_newlines_and_formula_neutralization (tests.test_phase3.PhaseThree.test_csv_accents_quotes_newlines_and_formula_neutralization) ... ok
+test_empty_and_invalid_filters (tests.test_phase3.PhaseThree.test_empty_and_invalid_filters) ... ok
+test_invalid_correction_rolls_back_and_cannot_touch_other_session (tests.test_phase3.PhaseThree.test_invalid_correction_rolls_back_and_cannot_touch_other_session) ... ok
+test_migration_backfills_legacy_timer_and_rejects_inconsistent_history (tests.test_phase3.PhaseThree.test_migration_backfills_legacy_timer_and_rejects_inconsistent_history) ... ok
+test_more_than_100_and_page_boundary_export_has_all (tests.test_phase3.PhaseThree.test_more_than_100_and_page_boundary_export_has_all) ... ok
+test_note_only_keeps_pause_and_new_times_reallocate (tests.test_phase3.PhaseThree.test_note_only_keeps_pause_and_new_times_reallocate) ... ok
+test_partial_midnight_filter_reconciles_liquid_and_breaks (tests.test_phase3.PhaseThree.test_partial_midnight_filter_reconciles_liquid_and_breaks) ... ok
+test_queries_do_not_grow_per_session_and_pagination_is_sql (tests.test_phase3.PhaseThree.test_queries_do_not_grow_per_session_and_pagination_is_sql) ... ok
+
+----------------------------------------------------------------------
+Ran 10 tests in 1.144s
+
+OK

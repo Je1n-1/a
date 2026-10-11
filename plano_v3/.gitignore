@@ -1,0 +1,15 @@
+.venv/
+__pycache__/
+*.pyc
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+config.local.json
+backups/
+*.sqlite
+*.sqlite3
+.ruff_cache/
+*.last-backup.json
+*.last-backup.json.*.tmp
+recovered/

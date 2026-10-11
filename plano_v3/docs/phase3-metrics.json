@@ -1,0 +1,26 @@
+{
+  "schema": [
+    "0001_tracker",
+    "0002_timer_recovery",
+    "0003_analytics"
+  ],
+  "tables": 9,
+  "routes": 27,
+  "api_routes": 22,
+  "javascript_bytes": {
+    "static\\js\\analytics.js": 7585,
+    "static\\js\\api.js": 2788,
+    "static\\js\\curriculum-import.js": 8429,
+    "static\\js\\manual-session.js": 2531,
+    "static\\js\\session-editor.js": 4538,
+    "static\\js\\shared.js": 965,
+    "static\\js\\study-format.js": 441,
+    "static\\js\\subjects.js": 8626,
+    "static\\js\\today.js": 10103
+  },
+  "v2_sha256": "64d27a914070a2abe783001162ca2f4bdbb8b8dc4319f930ab0c4bdd984602a6",
+  "python_product_files": 14,
+  "analytics_select_queries": 7,
+  "new_dependencies": 0,
+  "javascript_total_bytes": 46006
+}

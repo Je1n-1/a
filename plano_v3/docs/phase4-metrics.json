@@ -1,0 +1,26 @@
+{
+  "routes": 28,
+  "api_routes": 23,
+  "javascript_files": 9,
+  "javascript_total_bytes": 52555,
+  "python_product_files": 15,
+  "runtime_dependencies": 5,
+  "migrations_sha256": {
+    "0001_tracker.sql": "1aa55abe569bec84c44674a382646a290f2877d98d8a9c1078cb6632361a2340",
+    "0002_timer_recovery.sql": "ea29c6d86dc0413fbc1bce1bd695cc029057852dc39bb79e496eb8e4276c0e6b",
+    "0003_analytics.py": "a2ccf83bdb6c3e0e3fce5e25e0106db658b126ae0c3abb6b1f7f2f5ee4d109ba",
+    "0003_analytics.sql": "ead7659a5e16b66a1ff157b5d918709227be7232ee272ab2b18d2f8c7e16ca28"
+  },
+  "v2_sha256": "64d27a914070a2abe783001162ca2f4bdbb8b8dc4319f930ab0c4bdd984602a6",
+  "diagnostics": {
+    "path": "C:\\Users\\jeanm\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\PlanoV3\\data\\plano.db",
+    "schema": [
+      "0001_tracker",
+      "0002_timer_recovery",
+      "0003_analytics"
+    ],
+    "integrity": "ok",
+    "foreign_key_violations": 0,
+    "last_backup": null
+  }
+}

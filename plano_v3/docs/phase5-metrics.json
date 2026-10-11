@@ -1,0 +1,20 @@
+{
+  "clean_source_matches_product": true,
+  "product_files_compared": 40,
+  "routes": 30,
+  "api_routes": 25,
+  "javascript_files": 10,
+  "javascript_bytes": 55814,
+  "tables": 9,
+  "runtime_dependencies": 5,
+  "personal_database_before_sha256": "7a373c2eba2e718d27439d60b6679115f79ef456718c5228bb5c8a1a30cc8f8f",
+  "legacy_database_sha256": "64d27a914070a2abe783001162ca2f4bdbb8b8dc4319f930ab0c4bdd984602a6",
+  "schema": [
+    "0001_tracker",
+    "0002_timer_recovery",
+    "0003_analytics"
+  ],
+  "migrations_unchanged": true,
+  "personal_database_after_sha256": "7a373c2eba2e718d27439d60b6679115f79ef456718c5228bb5c8a1a30cc8f8f",
+  "personal_database_unchanged": true
+}

@@ -1,0 +1,627 @@
+{
+  "workdir": "C:\\Users\\jeanm\\AppData\\Local\\Plano\\v3-audit\\20261010-110837",
+  "source": {
+    "path": "C:\\Users\\jeanm\\OneDrive\\Desktop\\repositório_site_estudos\\a\\plano_v2\\instance\\plano.db",
+    "bytes": 536576,
+    "integrity": [
+      [
+        "ok"
+      ]
+    ],
+    "foreign_keys": [],
+    "counts": {
+      "anotacoes_estudo": 0,
+      "avaliacao_topicos": 0,
+      "avaliacoes": 0,
+      "calendar_integrations": 1,
+      "calendar_sync_queue": 0,
+      "configuracoes": 10,
+      "curriculum_status_history": 0,
+      "curriculum_study_link_audit": 0,
+      "curriculum_study_links": 0,
+      "curriculum_timeline_events": 0,
+      "daily_study_result_reasons": 0,
+      "daily_study_results": 0,
+      "disciplinas_grade": 0,
+      "disponibilidades_intervalos": 0,
+      "disponibilidades_semanais": 0,
+      "excecoes_disponibilidade": 0,
+      "external_calendar_events": 0,
+      "formacoes": 0,
+      "grupos_topicos": 0,
+      "materias_estudo": 0,
+      "plan_revisions": 0,
+      "planning_drafts": 0,
+      "planning_runs": 0,
+      "projeto_tarefas": 0,
+      "projetos": 0,
+      "recommendation_decisions": 0,
+      "recommendation_snapshots": 0,
+      "review_campaign_items": 0,
+      "review_campaigns": 0,
+      "revisoes": 0,
+      "schema_migrations": 15,
+      "session_breaks": 0,
+      "sessoes_estudo": 0,
+      "sessoes_foco": 0,
+      "sessoes_planejadas": 0,
+      "study_budget_revisions": 0,
+      "study_objectives": 0,
+      "study_observations": 0,
+      "study_plan_baselines": 0,
+      "study_session_corrections": 0,
+      "topic_dependencies": 0,
+      "topicos": 0
+    },
+    "migrations": [
+      [
+        1,
+        "foundation",
+        "c47c7a7bf5b85f5af7f7462571e0ea567e223ef3d7990bcca6a6438da13816ab"
+      ],
+      [
+        2,
+        "refinamento_funcional",
+        "4efe61c5ff3315b7237b860e8150ce69b6c889f329510ffd1c9eaaba57d19ad3"
+      ],
+      [
+        3,
+        "session_planning_integrity",
+        "bf533a4ff8792023cc6865d13497216d7968832e9a0763233bde7c97fb4c52da"
+      ],
+      [
+        4,
+        "study_notes",
+        "a1c895defc4284aa854f13b8f47ce25dad146c79e31c3c46baa8cfc335b959e7"
+      ],
+      [
+        5,
+        "curriculum_import_metadata",
+        "a612128c72e886bba3c784548d8a6cc16b918897819a1f998827a6779257b20d"
+      ],
+      [
+        6,
+        "curriculum_management",
+        "68ff033619adc3114dfb3f72ac2c591c224fcaffa8e947c7d8e433955097b003"
+      ],
+      [
+        7,
+        "smart_study_planning",
+        "604b5af1cdc542824dc2b70bd71b6d33e4832fa55f02ba93a791b9f8026a6aa1"
+      ],
+      [
+        8,
+        "topics_and_persistent_focus",
+        "99f883740f4b071979153c49434ccb68424d9d9d2e5e81c423f762786431c4ce"
+      ],
+      [
+        9,
+        "planning_profiles_and_availability_ranges",
+        "7dafa597e1e971df13ff470d4f310f5986a40055a35524a7b78a7b3379c3d7fb"
+      ],
+      [
+        10,
+        "canonical_study_links",
+        "1473fd16bc14d6b3381dd02c15c79311e7c8d3beafc1264bf13f105c2041e5d6"
+      ],
+      [
+        11,
+        "daily_goals_and_review_campaigns",
+        "3a38cfb570111a5a0bcee12c29c97db160e1e188a28439ab3f717cdf9dfc8c0d"
+      ],
+      [
+        12,
+        "adaptive_rhythm_focus_breaks",
+        "38717d91fb74fe7f5720b4473111e852b37d12d9b834cb540f3430dd6f9a9705"
+      ],
+      [
+        13,
+        "google_calendar_outbox",
+        "3a832fbc804da2b4e050d3bbf9ee10c00ef64edc807b9781f5226a49e2e76a7c"
+      ],
+      [
+        14,
+        "registration_preview_and_rhythm",
+        "64c8f9654ba7c0f8274a702a0763bbfb0c1bbe389e52fb2e2d1d921edefa2b12"
+      ],
+      [
+        15,
+        "interactive_planning_engine",
+        "4f6821b6270691aec30b86befceb4d115cf74d24653fa4a65c44f9d9dcbf440a"
+      ]
+    ]
+  },
+  "source_sha256_before": "64d27a914070a2abe783001162ca2f4bdbb8b8dc4319f930ab0c4bdd984602a6",
+  "backup": {
+    "path": "C:\\Users\\jeanm\\AppData\\Local\\Plano\\backups\\plano-v2-before-v3-20261010-110837.db",
+    "bytes": 536576,
+    "integrity": [
+      [
+        "ok"
+      ]
+    ],
+    "foreign_keys": [],
+    "counts": {
+      "anotacoes_estudo": 0,
+      "avaliacao_topicos": 0,
+      "avaliacoes": 0,
+      "calendar_integrations": 1,
+      "calendar_sync_queue": 0,
+      "configuracoes": 10,
+      "curriculum_status_history": 0,
+      "curriculum_study_link_audit": 0,
+      "curriculum_study_links": 0,
+      "curriculum_timeline_events": 0,
+      "daily_study_result_reasons": 0,
+      "daily_study_results": 0,
+      "disciplinas_grade": 0,
+      "disponibilidades_intervalos": 0,
+      "disponibilidades_semanais": 0,
+      "excecoes_disponibilidade": 0,
+      "external_calendar_events": 0,
+      "formacoes": 0,
+      "grupos_topicos": 0,
+      "materias_estudo": 0,
+      "plan_revisions": 0,
+      "planning_drafts": 0,
+      "planning_runs": 0,
+      "projeto_tarefas": 0,
+      "projetos": 0,
+      "recommendation_decisions": 0,
+      "recommendation_snapshots": 0,
+      "review_campaign_items": 0,
+      "review_campaigns": 0,
+      "revisoes": 0,
+      "schema_migrations": 15,
+      "session_breaks": 0,
+      "sessoes_estudo": 0,
+      "sessoes_foco": 0,
+      "sessoes_planejadas": 0,
+      "study_budget_revisions": 0,
+      "study_objectives": 0,
+      "study_observations": 0,
+      "study_plan_baselines": 0,
+      "study_session_corrections": 0,
+      "topic_dependencies": 0,
+      "topicos": 0
+    },
+    "migrations": [
+      [
+        1,
+        "foundation",
+        "c47c7a7bf5b85f5af7f7462571e0ea567e223ef3d7990bcca6a6438da13816ab"
+      ],
+      [
+        2,
+        "refinamento_funcional",
+        "4efe61c5ff3315b7237b860e8150ce69b6c889f329510ffd1c9eaaba57d19ad3"
+      ],
+      [
+        3,
+        "session_planning_integrity",
+        "bf533a4ff8792023cc6865d13497216d7968832e9a0763233bde7c97fb4c52da"
+      ],
+      [
+        4,
+        "study_notes",
+        "a1c895defc4284aa854f13b8f47ce25dad146c79e31c3c46baa8cfc335b959e7"
+      ],
+      [
+        5,
+        "curriculum_import_metadata",
+        "a612128c72e886bba3c784548d8a6cc16b918897819a1f998827a6779257b20d"
+      ],
+      [
+        6,
+        "curriculum_management",
+        "68ff033619adc3114dfb3f72ac2c591c224fcaffa8e947c7d8e433955097b003"
+      ],
+      [
+        7,
+        "smart_study_planning",
+        "604b5af1cdc542824dc2b70bd71b6d33e4832fa55f02ba93a791b9f8026a6aa1"
+      ],
+      [
+        8,
+        "topics_and_persistent_focus",
+        "99f883740f4b071979153c49434ccb68424d9d9d2e5e81c423f762786431c4ce"
+      ],
+      [
+        9,
+        "planning_profiles_and_availability_ranges",
+        "7dafa597e1e971df13ff470d4f310f5986a40055a35524a7b78a7b3379c3d7fb"
+      ],
+      [
+        10,
+        "canonical_study_links",
+        "1473fd16bc14d6b3381dd02c15c79311e7c8d3beafc1264bf13f105c2041e5d6"
+      ],
+      [
+        11,
+        "daily_goals_and_review_campaigns",
+        "3a38cfb570111a5a0bcee12c29c97db160e1e188a28439ab3f717cdf9dfc8c0d"
+      ],
+      [
+        12,
+        "adaptive_rhythm_focus_breaks",
+        "38717d91fb74fe7f5720b4473111e852b37d12d9b834cb540f3430dd6f9a9705"
+      ],
+      [
+        13,
+        "google_calendar_outbox",
+        "3a832fbc804da2b4e050d3bbf9ee10c00ef64edc807b9781f5226a49e2e76a7c"
+      ],
+      [
+        14,
+        "registration_preview_and_rhythm",
+        "64c8f9654ba7c0f8274a702a0763bbfb0c1bbe389e52fb2e2d1d921edefa2b12"
+      ],
+      [
+        15,
+        "interactive_planning_engine",
+        "4f6821b6270691aec30b86befceb4d115cf74d24653fa4a65c44f9d9dcbf440a"
+      ]
+    ]
+  },
+  "first_migrations": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15
+  ],
+  "migration_ms": 81.39,
+  "second_migrations": [],
+  "cases": [
+    {
+      "name": "XLSX model preview",
+      "status": 200,
+      "summary": {
+        "blocked": 0,
+        "duplicates": 0,
+        "recognized": 3,
+        "selected": 0,
+        "total_hours": 0.0,
+        "total_minutes": 0,
+        "valid": 0,
+        "with_warnings": 0
+      },
+      "error": null,
+      "format": "xlsx"
+    },
+    {
+      "name": "all unchecked confirmation",
+      "status": 200,
+      "summary": {
+        "inserted": 0,
+        "requested": 3,
+        "skipped": 3,
+        "updated": 0
+      },
+      "error": null,
+      "format": null
+    },
+    {
+      "name": "all selected confirmation",
+      "status": 200,
+      "summary": {
+        "inserted": 3,
+        "requested": 3,
+        "skipped": 0,
+        "updated": 0
+      },
+      "error": null,
+      "format": null
+    },
+    {
+      "name": "duplicate import",
+      "status": 200,
+      "summary": {
+        "inserted": 0,
+        "requested": 3,
+        "skipped": 3,
+        "updated": 0
+      },
+      "error": null,
+      "format": null
+    },
+    {
+      "name": "CSV accents leading zero",
+      "status": 200,
+      "summary": {
+        "blocked": 0,
+        "duplicates": 0,
+        "recognized": 1,
+        "selected": 1,
+        "total_hours": 0.0,
+        "total_minutes": 0,
+        "valid": 1,
+        "with_warnings": 1
+      },
+      "error": null,
+      "format": "csv"
+    },
+    {
+      "name": "CSV canonical workload header",
+      "status": 200,
+      "summary": {
+        "blocked": 0,
+        "duplicates": 0,
+        "recognized": 1,
+        "selected": 1,
+        "total_hours": 45.0,
+        "total_minutes": 2700,
+        "valid": 1,
+        "with_warnings": 0
+      },
+      "error": null,
+      "format": "csv"
+    },
+    {
+      "name": "CSV confirmation",
+      "status": 200,
+      "summary": {
+        "inserted": 1,
+        "requested": 1,
+        "skipped": 0,
+        "updated": 0
+      },
+      "error": null,
+      "format": null
+    },
+    {
+      "name": "DOCX table",
+      "status": 200,
+      "summary": {
+        "blocked": 0,
+        "duplicates": 0,
+        "recognized": 1,
+        "selected": 1,
+        "total_hours": 0.0,
+        "total_minutes": 0,
+        "valid": 1,
+        "with_warnings": 1
+      },
+      "error": null,
+      "format": "docx"
+    },
+    {
+      "name": "textual PDF synthetic",
+      "status": 200,
+      "summary": {
+        "blocked": 0,
+        "duplicates": 0,
+        "recognized": 1,
+        "selected": 1,
+        "total_hours": 60.0,
+        "total_minutes": 3600,
+        "valid": 1,
+        "with_warnings": 1
+      },
+      "error": null,
+      "format": "pdf"
+    },
+    {
+      "name": "PDF without text",
+      "status": 400,
+      "summary": null,
+      "error": "Nenhuma disciplina foi identificada. Corrija o arquivo ou cadastre manualmente.",
+      "format": null
+    },
+    {
+      "name": "empty.csv",
+      "status": 400,
+      "summary": null,
+      "error": "Nenhuma disciplina foi identificada. Corrija o arquivo ou cadastre manualmente.",
+      "format": null
+    },
+    {
+      "name": "invalid.xlsx",
+      "status": 400,
+      "summary": null,
+      "error": "O arquivo .xlsx não é uma planilha válida.",
+      "format": null
+    },
+    {
+      "name": "invalid.pdf",
+      "status": 500,
+      "summary": null,
+      "error": null,
+      "format": null
+    },
+    {
+      "name": "invalid.docx",
+      "status": 500,
+      "summary": null,
+      "error": null,
+      "format": null
+    },
+    {
+      "name": "large.csv",
+      "status": 400,
+      "summary": null,
+      "error": "O arquivo excede o limite de 5 MB.",
+      "format": null
+    },
+    {
+      "name": "grade.tsv",
+      "status": 400,
+      "summary": null,
+      "error": "Formato não suportado. Use XLSX, PDF, DOCX, CSV ou TXT.",
+      "format": null
+    }
+  ],
+  "persisted_after_app_recreation": 3,
+  "diagnostics_path": "C:\\Users\\jeanm\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\Plano\\v3-audit\\20261010-110837\\http-tests.db",
+  "short_workload_header_minutes": null,
+  "temporary_database": {
+    "path": "C:\\Users\\jeanm\\AppData\\Local\\Plano\\v3-audit\\20261010-110837\\http-tests.db",
+    "bytes": 536576,
+    "integrity": [
+      [
+        "ok"
+      ]
+    ],
+    "foreign_keys": [],
+    "counts": {
+      "anotacoes_estudo": 0,
+      "avaliacao_topicos": 0,
+      "avaliacoes": 0,
+      "calendar_integrations": 1,
+      "calendar_sync_queue": 0,
+      "configuracoes": 10,
+      "curriculum_status_history": 0,
+      "curriculum_study_link_audit": 0,
+      "curriculum_study_links": 0,
+      "curriculum_timeline_events": 0,
+      "daily_study_result_reasons": 0,
+      "daily_study_results": 0,
+      "disciplinas_grade": 4,
+      "disponibilidades_intervalos": 0,
+      "disponibilidades_semanais": 0,
+      "excecoes_disponibilidade": 0,
+      "external_calendar_events": 0,
+      "formacoes": 2,
+      "grupos_topicos": 0,
+      "materias_estudo": 0,
+      "plan_revisions": 0,
+      "planning_drafts": 0,
+      "planning_runs": 0,
+      "projeto_tarefas": 0,
+      "projetos": 0,
+      "recommendation_decisions": 0,
+      "recommendation_snapshots": 0,
+      "review_campaign_items": 0,
+      "review_campaigns": 0,
+      "revisoes": 0,
+      "schema_migrations": 15,
+      "session_breaks": 0,
+      "sessoes_estudo": 0,
+      "sessoes_foco": 0,
+      "sessoes_planejadas": 0,
+      "study_budget_revisions": 0,
+      "study_objectives": 0,
+      "study_observations": 0,
+      "study_plan_baselines": 0,
+      "study_session_corrections": 0,
+      "topic_dependencies": 0,
+      "topicos": 0
+    },
+    "migrations": [
+      [
+        1,
+        "foundation",
+        "c47c7a7bf5b85f5af7f7462571e0ea567e223ef3d7990bcca6a6438da13816ab"
+      ],
+      [
+        2,
+        "refinamento_funcional",
+        "4efe61c5ff3315b7237b860e8150ce69b6c889f329510ffd1c9eaaba57d19ad3"
+      ],
+      [
+        3,
+        "session_planning_integrity",
+        "bf533a4ff8792023cc6865d13497216d7968832e9a0763233bde7c97fb4c52da"
+      ],
+      [
+        4,
+        "study_notes",
+        "a1c895defc4284aa854f13b8f47ce25dad146c79e31c3c46baa8cfc335b959e7"
+      ],
+      [
+        5,
+        "curriculum_import_metadata",
+        "a612128c72e886bba3c784548d8a6cc16b918897819a1f998827a6779257b20d"
+      ],
+      [
+        6,
+        "curriculum_management",
+        "68ff033619adc3114dfb3f72ac2c591c224fcaffa8e947c7d8e433955097b003"
+      ],
+      [
+        7,
+        "smart_study_planning",
+        "604b5af1cdc542824dc2b70bd71b6d33e4832fa55f02ba93a791b9f8026a6aa1"
+      ],
+      [
+        8,
+        "topics_and_persistent_focus",
+        "99f883740f4b071979153c49434ccb68424d9d9d2e5e81c423f762786431c4ce"
+      ],
+      [
+        9,
+        "planning_profiles_and_availability_ranges",
+        "7dafa597e1e971df13ff470d4f310f5986a40055a35524a7b78a7b3379c3d7fb"
+      ],
+      [
+        10,
+        "canonical_study_links",
+        "1473fd16bc14d6b3381dd02c15c79311e7c8d3beafc1264bf13f105c2041e5d6"
+      ],
+      [
+        11,
+        "daily_goals_and_review_campaigns",
+        "3a38cfb570111a5a0bcee12c29c97db160e1e188a28439ab3f717cdf9dfc8c0d"
+      ],
+      [
+        12,
+        "adaptive_rhythm_focus_breaks",
+        "38717d91fb74fe7f5720b4473111e852b37d12d9b834cb540f3430dd6f9a9705"
+      ],
+      [
+        13,
+        "google_calendar_outbox",
+        "3a832fbc804da2b4e050d3bbf9ee10c00ef64edc807b9781f5226a49e2e76a7c"
+      ],
+      [
+        14,
+        "registration_preview_and_rhythm",
+        "64c8f9654ba7c0f8274a702a0763bbfb0c1bbe389e52fb2e2d1d921edefa2b12"
+      ],
+      [
+        15,
+        "interactive_planning_engine",
+        "4f6821b6270691aec30b86befceb4d115cf74d24653fa4a65c44f9d9dcbf440a"
+      ]
+    ]
+  },
+  "source_sha256_after": "64d27a914070a2abe783001162ca2f4bdbb8b8dc4319f930ab0c4bdd984602a6",
+  "inventory": {
+    "python_files": 44,
+    "js_files": 5,
+    "route_rules": 138,
+    "files": {
+      "routes\\api.py": {
+        "lines": 513,
+        "bytes": 33081
+      },
+      "services\\core.py": {
+        "lines": 7130,
+        "bytes": 419035
+      },
+      "services\\grade_import.py": {
+        "lines": 576,
+        "bytes": 25988
+      },
+      "static\\js\\app.js": {
+        "lines": 4358,
+        "bytes": 428590
+      },
+      "static\\js\\focus.js": {
+        "lines": 853,
+        "bytes": 44027
+      }
+    }
+  },
+  "api_decorators": 126
+}

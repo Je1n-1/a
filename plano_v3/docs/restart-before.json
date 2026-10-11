@@ -1,0 +1,16 @@
+{
+  "break_seconds": 0,
+  "course_name": "Engenharia El\u00e9trica",
+  "effective_seconds": 0,
+  "ended_at": null,
+  "id": 2,
+  "operation_key": "restart-validation",
+  "server_now": "2026-10-10T14:30:45+00:00",
+  "session_id": null,
+  "started_at": "2026-10-10T14:30:45+00:00",
+  "status": "paused",
+  "subject_id": 1,
+  "title": "Circuitos El\u00e9tricos I",
+  "total_seconds": 0,
+  "version": 2
+}

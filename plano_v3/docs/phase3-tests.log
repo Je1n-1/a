@@ -1,0 +1,48 @@
+test_batch_rollback_on_invalid_selected_row (test_phase1.PhaseOne.test_batch_rollback_on_invalid_selected_row) ... ok
+test_cancel_and_free_study_do_not_require_course (test_phase1.PhaseOne.test_cancel_and_free_study_do_not_require_course) ... ok
+test_courses_keep_homonyms_separate_and_duplicate_update_explicit (test_phase1.PhaseOne.test_courses_keep_homonyms_separate_and_duplicate_update_explicit) ... ok
+test_csv_tsv_txt_and_paste_preserve_accent_code_hours (test_phase1.PhaseOne.test_csv_tsv_txt_and_paste_preserve_accent_code_hours) ... ok
+test_docx_table_and_textual_pdf (test_phase1.PhaseOne.test_docx_table_and_textual_pdf) ... ok
+test_edit_archive_restore_and_duplicate_validation (test_phase1.PhaseOne.test_edit_archive_restore_and_duplicate_validation) ... ok
+test_imported_subject_starts_directly_and_survives_restart (test_phase1.PhaseOne.test_imported_subject_starts_directly_and_survives_restart) ... ok
+test_invalid_empty_large_and_no_text_pdf_are_validation_errors (test_phase1.PhaseOne.test_invalid_empty_large_and_no_text_pdf_are_validation_errors) ... invalid pdf header: b'inval'
+EOF marker not found
+EOF marker not found
+ok
+test_missing_table_refuses_startup (test_phase1.PhaseOne.test_missing_table_refuses_startup) ... ok
+test_model_preview_zero_selection_import_and_restart (test_phase1.PhaseOne.test_model_preview_zero_selection_import_and_restart) ... ok
+test_modified_migration_rejected (test_phase1.PhaseOne.test_modified_migration_rejected) ... ok
+test_multiple_sheets_require_choice (test_phase1.PhaseOne.test_multiple_sheets_require_choice) ... ok
+test_schema_idempotent_explicit_path_and_no_legacy_conversion (test_phase1.PhaseOne.test_schema_idempotent_explicit_path_and_no_legacy_conversion) ... ok
+test_timer_pause_finish_idempotence_and_archive_preserves_history (test_phase1.PhaseOne.test_timer_pause_finish_idempotence_and_archive_preserves_history) ... ok
+test_validation_and_local_request_boundary (test_phase1.PhaseOne.test_validation_and_local_request_boundary) ... ok
+test_clock_moves_backwards_and_zero_duration_are_rejected (test_phase2.PhaseTwo.test_clock_moves_backwards_and_zero_duration_are_rejected) ... ok
+test_concurrent_pause_and_stale_resume (test_phase2.PhaseTwo.test_concurrent_pause_and_stale_resume) ... ok
+test_cutoff_preserves_closed_intervals_and_audits_adjustment (test_phase2.PhaseTwo.test_cutoff_preserves_closed_intervals_and_audits_adjustment) ... ok
+test_half_open_midnight_and_historical_dst (test_phase2.PhaseTwo.test_half_open_midnight_and_historical_dst) ... ok
+test_invalid_recovery_does_not_mutate (test_phase2.PhaseTwo.test_invalid_recovery_does_not_mutate) ... ok
+test_long_timer_requires_confirmation_and_full_is_idempotent (test_phase2.PhaseTwo.test_long_timer_requires_confirmation_and_full_is_idempotent) ... ok
+test_manual_duration_retry_and_no_invented_timestamps (test_phase2.PhaseTwo.test_manual_duration_retry_and_no_invented_timestamps) ... ok
+test_manual_times_cross_midnight (test_phase2.PhaseTwo.test_manual_times_cross_midnight) ... ok
+test_manual_validation_and_archive (test_phase2.PhaseTwo.test_manual_validation_and_archive) ... ok
+test_midnight_with_pause_preserves_every_second (test_phase2.PhaseTwo.test_midnight_with_pause_preserves_every_second) ... ok
+test_migration_of_populated_phase1_preserves_rows_and_sums (test_phase2.PhaseTwo.test_migration_of_populated_phase1_preserves_rows_and_sums) ... ok
+test_pause_does_not_bypass_long_review (test_phase2.PhaseTwo.test_pause_does_not_bypass_long_review) ... ok
+test_read_snapshot_is_consistent_while_another_tab_pauses (test_phase2.PhaseTwo.test_read_snapshot_is_consistent_while_another_tab_pauses) ... ok
+test_real_concurrent_starts_and_finishes (test_phase2.PhaseTwo.test_real_concurrent_starts_and_finishes) ... ok
+test_correction_rebuilds_all_outputs_audits_and_is_idempotent (test_phase3.PhaseThree.test_correction_rebuilds_all_outputs_audits_and_is_idempotent) ... ok
+test_course_subject_free_archived_and_cards_have_defined_ranges (test_phase3.PhaseThree.test_course_subject_free_archived_and_cards_have_defined_ranges) ... ok
+test_csv_accents_quotes_newlines_and_formula_neutralization (test_phase3.PhaseThree.test_csv_accents_quotes_newlines_and_formula_neutralization) ... ok
+test_empty_and_invalid_filters (test_phase3.PhaseThree.test_empty_and_invalid_filters) ... ok
+test_invalid_correction_rolls_back_and_cannot_touch_other_session (test_phase3.PhaseThree.test_invalid_correction_rolls_back_and_cannot_touch_other_session) ... ok
+test_migration_backfills_legacy_timer_and_rejects_inconsistent_history (test_phase3.PhaseThree.test_migration_backfills_legacy_timer_and_rejects_inconsistent_history) ... ok
+test_more_than_100_and_page_boundary_export_has_all (test_phase3.PhaseThree.test_more_than_100_and_page_boundary_export_has_all) ... ok
+test_note_only_keeps_pause_and_new_times_reallocate (test_phase3.PhaseThree.test_note_only_keeps_pause_and_new_times_reallocate) ... ok
+test_partial_midnight_filter_reconciles_liquid_and_breaks (test_phase3.PhaseThree.test_partial_midnight_filter_reconciles_liquid_and_breaks) ... ok
+test_queries_do_not_grow_per_session_and_pagination_is_sql (test_phase3.PhaseThree.test_queries_do_not_grow_per_session_and_pagination_is_sql) ... ok
+test_crash_restart_running_paused_and_transaction_rollback (test_process_recovery.ProcessRecovery.test_crash_restart_running_paused_and_transaction_rollback) ... ok
+
+----------------------------------------------------------------------
+Ran 40 tests in 5.411s
+
+OK

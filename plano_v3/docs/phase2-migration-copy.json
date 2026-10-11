@@ -1,0 +1,30 @@
+{
+  "source": "C:\\Users\\jeanm\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\PlanoV3\\data\\plano.db",
+  "backup": "C:\\Users\\jeanm\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\PlanoV3\\backups\\before-phase2-20261010-141608.db",
+  "candidate": "C:\\Users\\jeanm\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\PlanoV3\\verification\\phase2\\migration-candidate-20261010-141608.db",
+  "before_versions": [
+    "0001_tracker"
+  ],
+  "applied_to_copy": [
+    "0002_timer_recovery"
+  ],
+  "existing_rows_preserved": true,
+  "counts": {
+    "courses": 1,
+    "subjects": 0,
+    "timers": 0,
+    "timer_intervals": 0,
+    "study_sessions": 0
+  },
+  "candidate_diagnostics": {
+    "path": "C:\\Users\\jeanm\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\PlanoV3\\verification\\phase2\\migration-candidate-20261010-141608.db",
+    "schema": [
+      "0001_tracker",
+      "0002_timer_recovery"
+    ],
+    "integrity": "ok",
+    "foreign_key_violations": 0,
+    "last_backup": null
+  },
+  "personal_database_migrated": false
+}

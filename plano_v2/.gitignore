@@ -3,3 +3,13 @@ __pycache__/
 *.pyc
 plano.db
 instance/*.db
+
+# SQLite sidecars, backup databases and local audit data
+*.db-wal
+*.db-shm
+*.db-journal
+instance/*.db*
+backups/
+*.sqlite
+*.sqlite3
+*.db

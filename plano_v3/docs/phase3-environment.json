@@ -1,0 +1,12 @@
+{
+  "qa": "C:\\Users\\jeanm\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\PlanoV3\\verification\\phase3",
+  "previous_server": "C:\\Users\\jeanm\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\PlanoV3\\verification\\phase3\\phase2-server",
+  "browser_database": "C:\\Users\\jeanm\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\PlanoV3\\verification\\phase3\\analytics-browser.db",
+  "subject_ids": [
+    1,
+    2,
+    3,
+    4
+  ],
+  "night_session_id": 124
+}

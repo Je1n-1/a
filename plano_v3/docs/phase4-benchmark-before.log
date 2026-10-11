@@ -1,0 +1,433 @@
+{
+  "phase": "before",
+  "python": "3.12.14",
+  "platform": "Windows-11-10.0.26200-SP0",
+  "cases": [
+    {
+      "sessions": 0,
+      "database_bytes": 118784,
+      "startup_import_and_create_app_ms": 170.137,
+      "report_30_days": {
+        "median_ms": 0.742,
+        "min_ms": 0.72,
+        "max_ms": 0.827,
+        "runs": 9
+      },
+      "report_365_days": {
+        "median_ms": 0.948,
+        "min_ms": 0.921,
+        "max_ms": 1.041,
+        "runs": 9
+      },
+      "http_analytics": {
+        "median_ms": 1.106,
+        "min_ms": 1.013,
+        "max_ms": 1.232,
+        "runs": 9
+      },
+      "history_query_plan": [
+        {
+          "id": 2,
+          "parent": 0,
+          "notused": 0,
+          "detail": "CO-ROUTINE selected"
+        },
+        {
+          "id": 12,
+          "parent": 2,
+          "notused": 165,
+          "detail": "SEARCH d USING INDEX session_days_date (local_date>? AND local_date<?)"
+        },
+        {
+          "id": 22,
+          "parent": 2,
+          "notused": 45,
+          "detail": "SEARCH x USING INTEGER PRIMARY KEY (rowid=?)"
+        },
+        {
+          "id": 25,
+          "parent": 2,
+          "notused": 45,
+          "detail": "SEARCH s USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+        },
+        {
+          "id": 30,
+          "parent": 2,
+          "notused": 45,
+          "detail": "SEARCH c USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+        },
+        {
+          "id": 35,
+          "parent": 2,
+          "notused": 0,
+          "detail": "USE TEMP B-TREE FOR GROUP BY"
+        },
+        {
+          "id": 99,
+          "parent": 0,
+          "notused": 82,
+          "detail": "SCAN selected"
+        },
+        {
+          "id": 102,
+          "parent": 0,
+          "notused": 45,
+          "detail": "SEARCH x USING INTEGER PRIMARY KEY (rowid=?)"
+        },
+        {
+          "id": 105,
+          "parent": 0,
+          "notused": 45,
+          "detail": "SEARCH s USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+        },
+        {
+          "id": 110,
+          "parent": 0,
+          "notused": 45,
+          "detail": "SEARCH c USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+        },
+        {
+          "id": 149,
+          "parent": 0,
+          "notused": 0,
+          "detail": "USE TEMP B-TREE FOR ORDER BY"
+        }
+      ],
+      "browser": {
+        "/": {
+          "median_ready_ms": 102,
+          "api_calls": [
+            "/api/courses",
+            "/api/subjects",
+            "/api/timer",
+            "/api/sessions/recent",
+            "/api/sessions/summary"
+          ],
+          "javascript_bytes": 16828,
+          "javascript_modules": [
+            "/static/js/shared.js",
+            "/static/js/today.js",
+            "/static/js/api.js",
+            "/static/js/study-format.js",
+            "/static/js/manual-session.js"
+          ],
+          "trials": [
+            238,
+            102,
+            102,
+            94,
+            98
+          ]
+        },
+        "/analytics?start=2026-09-11&end=2026-10-10": {
+          "median_ready_ms": 98,
+          "api_calls": [
+            "/api/courses",
+            "/api/subjects",
+            "/api/analytics"
+          ],
+          "javascript_bytes": 18848,
+          "javascript_modules": [
+            "/static/js/shared.js",
+            "/static/js/analytics.js",
+            "/static/js/api.js",
+            "/static/js/study-format.js",
+            "/static/js/session-editor.js",
+            "/static/js/manual-session.js"
+          ],
+          "trials": [
+            98,
+            99,
+            105,
+            96,
+            87
+          ]
+        }
+      }
+    },
+    {
+      "sessions": 1000,
+      "database_bytes": 315392,
+      "startup_import_and_create_app_ms": 173.024,
+      "report_30_days": {
+        "median_ms": 1.149,
+        "min_ms": 1.059,
+        "max_ms": 1.22,
+        "runs": 9
+      },
+      "report_365_days": {
+        "median_ms": 3.449,
+        "min_ms": 3.314,
+        "max_ms": 4.394,
+        "runs": 9
+      },
+      "http_analytics": {
+        "median_ms": 1.454,
+        "min_ms": 1.407,
+        "max_ms": 1.731,
+        "runs": 9
+      },
+      "history_query_plan": [
+        {
+          "id": 2,
+          "parent": 0,
+          "notused": 0,
+          "detail": "CO-ROUTINE selected"
+        },
+        {
+          "id": 12,
+          "parent": 2,
+          "notused": 165,
+          "detail": "SEARCH d USING INDEX session_days_date (local_date>? AND local_date<?)"
+        },
+        {
+          "id": 22,
+          "parent": 2,
+          "notused": 45,
+          "detail": "SEARCH x USING INTEGER PRIMARY KEY (rowid=?)"
+        },
+        {
+          "id": 25,
+          "parent": 2,
+          "notused": 45,
+          "detail": "SEARCH s USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+        },
+        {
+          "id": 30,
+          "parent": 2,
+          "notused": 45,
+          "detail": "SEARCH c USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+        },
+        {
+          "id": 35,
+          "parent": 2,
+          "notused": 0,
+          "detail": "USE TEMP B-TREE FOR GROUP BY"
+        },
+        {
+          "id": 99,
+          "parent": 0,
+          "notused": 82,
+          "detail": "SCAN selected"
+        },
+        {
+          "id": 102,
+          "parent": 0,
+          "notused": 45,
+          "detail": "SEARCH x USING INTEGER PRIMARY KEY (rowid=?)"
+        },
+        {
+          "id": 105,
+          "parent": 0,
+          "notused": 45,
+          "detail": "SEARCH s USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+        },
+        {
+          "id": 110,
+          "parent": 0,
+          "notused": 45,
+          "detail": "SEARCH c USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+        },
+        {
+          "id": 149,
+          "parent": 0,
+          "notused": 0,
+          "detail": "USE TEMP B-TREE FOR ORDER BY"
+        }
+      ],
+      "browser": {
+        "/": {
+          "median_ready_ms": 111,
+          "api_calls": [
+            "/api/courses",
+            "/api/subjects",
+            "/api/timer",
+            "/api/sessions/recent",
+            "/api/sessions/summary"
+          ],
+          "javascript_bytes": 16828,
+          "javascript_modules": [
+            "/static/js/shared.js",
+            "/static/js/today.js",
+            "/static/js/api.js",
+            "/static/js/manual-session.js",
+            "/static/js/study-format.js"
+          ],
+          "trials": [
+            274,
+            111,
+            96,
+            111,
+            99
+          ]
+        },
+        "/analytics?start=2026-09-11&end=2026-10-10": {
+          "median_ready_ms": 103,
+          "api_calls": [
+            "/api/courses",
+            "/api/subjects",
+            "/api/analytics"
+          ],
+          "javascript_bytes": 18848,
+          "javascript_modules": [
+            "/static/js/shared.js",
+            "/static/js/analytics.js",
+            "/static/js/api.js",
+            "/static/js/study-format.js",
+            "/static/js/session-editor.js",
+            "/static/js/manual-session.js"
+          ],
+          "trials": [
+            104,
+            104,
+            103,
+            99,
+            102
+          ]
+        }
+      }
+    },
+    {
+      "sessions": 10000,
+      "database_bytes": 2056192,
+      "startup_import_and_create_app_ms": 192.414,
+      "report_30_days": {
+        "median_ms": 3.339,
+        "min_ms": 3.081,
+        "max_ms": 3.904,
+        "runs": 9
+      },
+      "report_365_days": {
+        "median_ms": 28.956,
+        "min_ms": 27.25,
+        "max_ms": 29.652,
+        "runs": 9
+      },
+      "http_analytics": {
+        "median_ms": 4.419,
+        "min_ms": 3.866,
+        "max_ms": 6.847,
+        "runs": 9
+      },
+      "history_query_plan": [
+        {
+          "id": 2,
+          "parent": 0,
+          "notused": 0,
+          "detail": "CO-ROUTINE selected"
+        },
+        {
+          "id": 12,
+          "parent": 2,
+          "notused": 165,
+          "detail": "SEARCH d USING INDEX session_days_date (local_date>? AND local_date<?)"
+        },
+        {
+          "id": 22,
+          "parent": 2,
+          "notused": 45,
+          "detail": "SEARCH x USING INTEGER PRIMARY KEY (rowid=?)"
+        },
+        {
+          "id": 25,
+          "parent": 2,
+          "notused": 45,
+          "detail": "SEARCH s USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+        },
+        {
+          "id": 30,
+          "parent": 2,
+          "notused": 45,
+          "detail": "SEARCH c USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+        },
+        {
+          "id": 35,
+          "parent": 2,
+          "notused": 0,
+          "detail": "USE TEMP B-TREE FOR GROUP BY"
+        },
+        {
+          "id": 99,
+          "parent": 0,
+          "notused": 82,
+          "detail": "SCAN selected"
+        },
+        {
+          "id": 102,
+          "parent": 0,
+          "notused": 45,
+          "detail": "SEARCH x USING INTEGER PRIMARY KEY (rowid=?)"
+        },
+        {
+          "id": 105,
+          "parent": 0,
+          "notused": 45,
+          "detail": "SEARCH s USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+        },
+        {
+          "id": 110,
+          "parent": 0,
+          "notused": 45,
+          "detail": "SEARCH c USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+        },
+        {
+          "id": 149,
+          "parent": 0,
+          "notused": 0,
+          "detail": "USE TEMP B-TREE FOR ORDER BY"
+        }
+      ],
+      "browser": {
+        "/": {
+          "median_ready_ms": 109,
+          "api_calls": [
+            "/api/courses",
+            "/api/subjects",
+            "/api/timer",
+            "/api/sessions/recent",
+            "/api/sessions/summary"
+          ],
+          "javascript_bytes": 16828,
+          "javascript_modules": [
+            "/static/js/shared.js",
+            "/static/js/today.js",
+            "/static/js/api.js",
+            "/static/js/manual-session.js",
+            "/static/js/study-format.js"
+          ],
+          "trials": [
+            242,
+            109,
+            115,
+            106,
+            100
+          ]
+        },
+        "/analytics?start=2026-09-11&end=2026-10-10": {
+          "median_ready_ms": 105,
+          "api_calls": [
+            "/api/courses",
+            "/api/subjects",
+            "/api/analytics"
+          ],
+          "javascript_bytes": 18848,
+          "javascript_modules": [
+            "/static/js/shared.js",
+            "/static/js/analytics.js",
+            "/static/js/api.js",
+            "/static/js/study-format.js",
+            "/static/js/session-editor.js",
+            "/static/js/manual-session.js"
+          ],
+          "trials": [
+            107,
+            105,
+            105,
+            103,
+            110
+          ]
+        }
+      }
+    }
+  ]
+}
