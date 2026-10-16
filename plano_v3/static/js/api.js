@@ -51,6 +51,16 @@ export const send = (path, body, method = 'POST') => api(path, {
   method,
   body: JSON.stringify(body)
 });
+export function validateTimer(value, allowEmpty = false) {
+  if (allowEmpty && value === null) return value;
+  if (!value || !Number.isInteger(value.id) || !Number.isInteger(value.version) ||
+    !['running', 'paused', 'completed', 'cancelled'].includes(value.status) ||
+    typeof value.title !== 'string' ||
+    !Number.isFinite(value.effective_seconds) || !Number.isFinite(value.break_seconds)) {
+    throw new Error('Não foi possível confirmar o estado do relógio. Atualize a sessão para conferir.');
+  }
+  return value;
+}
 let toastTimer;
 export function toast(message) {
   $('#notifications').textContent = message;
@@ -88,8 +98,5 @@ export function dialog(title, content, onSave, button = 'Salvar') {
   return el;
 }
 export async function studyNow(subjectId) {
-  return send('/timer', {
-    subject_id: subjectId,
-    operation_key: crypto.randomUUID()
-  });
+  location.href = '/?subject=' + encodeURIComponent(subjectId);
 }

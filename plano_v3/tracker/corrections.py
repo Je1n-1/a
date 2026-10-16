@@ -2,7 +2,7 @@
 
 import json
 from datetime import date
-from . import sessions
+from . import sessions, topics
 from .domain import DomainError, LOCAL_ZONE, clean, get, now
 
 
@@ -66,6 +66,21 @@ def correct(conn, ident, values):
         data["title"] = subject["name"]
     else:
         data["title"] = clean(values.get("title", old["title"]), "Nome do estudo", required=True)
+    if subject_id != old["subject_id"] and old["topic_id"] is not None and "topic_id" not in values:
+        raise DomainError(
+            "Ao trocar a disciplina, escolha um tópico dela ou remova o vínculo explicitamente."
+        )
+    topic = topics.link(
+        conn,
+        subject_id,
+        {
+            "topic_id": values.get("topic_id", old["topic_id"]),
+            "session_kind": values.get("session_kind", old["session_kind"]),
+        },
+    )
+    if topic["topic_id"] == old["topic_id"]:
+        topic["topic_name"] = old["topic_name"]
+    data.update(topic)
     data["subject_id"] = subject_id
     data["note"] = clean(values.get("note", old["note"]), "O que estudei", 5000)
     mode = values.get("mode", "keep")
@@ -87,6 +102,7 @@ def correct(conn, ident, values):
             local_date=day,
             effective_seconds=seconds,
             break_seconds=0,
+            rest_seconds=0,
             started_at=None,
             ended_at=None,
             allocation_mode=mode,
@@ -103,6 +119,7 @@ def correct(conn, ident, values):
             local_date=start.astimezone(LOCAL_ZONE).date().isoformat(),
             effective_seconds=seconds,
             break_seconds=0,
+            rest_seconds=0,
             started_at=start.isoformat(),
             ended_at=end.isoformat(),
             allocation_mode=mode,
@@ -114,6 +131,9 @@ def correct(conn, ident, values):
     data["correction_version"] += 1
     fields = [
         "subject_id",
+        "topic_id",
+        "topic_name",
+        "session_kind",
         "title",
         "note",
         "local_date",
@@ -121,6 +141,7 @@ def correct(conn, ident, values):
         "ended_at",
         "effective_seconds",
         "break_seconds",
+        "rest_seconds",
         "allocation_mode",
         "correction_version",
     ]

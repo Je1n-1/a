@@ -102,6 +102,7 @@ def diagnostics(path):
         if "v3_migrations" not in tables:
             raise RuntimeError("Banco incompatível: use um banco V3 criado por --init-db.")
         required = {
+            "topics",
             "courses",
             "subjects",
             "timers",
@@ -124,12 +125,18 @@ def diagnostics(path):
         if integrity != ["ok"] or foreign_keys:
             raise RuntimeError("Falha na integridade do banco; inicialização interrompida.")
         mismatch = conn.execute("""SELECT x.id FROM study_sessions x LEFT JOIN
-            (SELECT session_id,SUM(effective_seconds) focus,SUM(break_seconds) pauses FROM session_days GROUP BY session_id) d
-            ON d.session_id=x.id WHERE d.session_id IS NULL OR d.focus!=x.effective_seconds OR d.pauses!=x.break_seconds LIMIT 1""").fetchone()
+            (SELECT session_id,SUM(effective_seconds) focus,SUM(break_seconds) pauses,SUM(rest_seconds) rests FROM session_days GROUP BY session_id) d
+            ON d.session_id=x.id WHERE d.session_id IS NULL OR d.focus!=x.effective_seconds OR d.pauses!=x.break_seconds OR d.rests!=x.rest_seconds LIMIT 1""").fetchone()
         if mismatch:
             raise RuntimeError(
                 "Rateio diário inconsistente com as sessões. Confira uma cópia antes de continuar."
             )
+        for table in ("timers", "study_sessions"):
+            mismatch = conn.execute(
+                f"SELECT x.id FROM {table} x LEFT JOIN topics t ON t.id=x.topic_id WHERE (x.topic_id IS NOT NULL AND (t.id IS NULL OR x.subject_id IS NOT t.subject_id OR x.topic_name IS NULL)) OR (x.session_kind='review' AND x.topic_id IS NULL) LIMIT 1"
+            ).fetchone()
+            if mismatch:
+                raise RuntimeError("Vínculo de tópico inconsistente com a disciplina.")
         return {
             "path": str(path),
             "schema": list(applied),

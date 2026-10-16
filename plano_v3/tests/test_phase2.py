@@ -55,8 +55,8 @@ class PhaseTwo(unittest.TestCase):
         self.assertEqual(
             s["daily_allocation"],
             [
-                {"date": "2026-10-10", "effective_seconds": 600, "break_seconds": 600},
-                {"date": "2026-10-11", "effective_seconds": 1200, "break_seconds": 600},
+                {"date": "2026-10-10", "effective_seconds": 600, "break_seconds": 600, "rest_seconds": 0},
+                {"date": "2026-10-11", "effective_seconds": 1200, "break_seconds": 600, "rest_seconds": 0},
             ],
         )
 
@@ -223,7 +223,7 @@ class PhaseTwo(unittest.TestCase):
         self.assertEqual(s["source"], "manual")
         self.assertEqual(
             s["daily_allocation"],
-            [{"date": "2026-10-09", "effective_seconds": 1801, "break_seconds": 0}],
+            [{"date": "2026-10-09", "effective_seconds": 1801, "break_seconds": 0, "rest_seconds": 0}],
         )
         self.assertEqual(self.count("study_sessions"), 1)
 
@@ -292,7 +292,9 @@ class PhaseTwo(unittest.TestCase):
             )
             c.commit()
         result = upgrade(legacy, Path(self.temp.name) / "backups")
-        self.assertEqual(result["applied"], ["0002_timer_recovery", "0003_analytics"])
+        self.assertEqual(
+            result["applied"], ["0002_timer_recovery", "0003_analytics", "0004_topics", "0005_scheduled_break", "0006_rest_time"]
+        )
         self.assertTrue(result["existing_rows_preserved"])
         with closing(sqlite3.connect(result["backup"])) as backup:
             self.assertEqual(backup.execute("SELECT COUNT(*) FROM v3_migrations").fetchone()[0], 1)

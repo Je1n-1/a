@@ -1,0 +1,45 @@
+{
+  "flows": [
+    "A",
+    "B",
+    "C",
+    "D",
+    "E",
+    "F",
+    "G",
+    "H",
+    "I"
+  ],
+  "imports": [
+    {
+      "filename": "Eletrotecnica.xlsx",
+      "count": 26
+    },
+    {
+      "filename": "Engenharia_Eletrica.xlsx",
+      "count": 19
+    },
+    {
+      "filename": "Engenharia_Computacao.xlsx",
+      "count": 19
+    }
+  ],
+  "errors": [],
+  "topic": {
+    "completed": 1,
+    "course_id": 1,
+    "course_name": "Computação UX",
+    "created_at": "2026-10-12T13:28:23+00:00",
+    "effective_seconds": 3,
+    "id": 1,
+    "name": "Ponteiros em C",
+    "name_key": "ponteiros em c",
+    "needs_review": 0,
+    "sessions": 2,
+    "subject_id": 1,
+    "subject_name": "Linguagens de Programação",
+    "version": 3
+  },
+  "first_timer": 1,
+  "review_timer": 2
+}

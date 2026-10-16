@@ -15,7 +15,7 @@ Na configuração pessoal atual, as cópias locais ficam em `PlanoV3/backups`, a
 3. Marque a confirmação de recuperação em arquivo separado e clique em **Validar e recuperar**.
 4. Confira o caminho, os números de cursos/disciplinas/sessões e o tempo recuperado. O arquivo novo fica em `PlanoV3/recovered`, separado do banco ativo.
 
-A recuperação não importa a V2, não aplica migrations nem troca o banco em uso. Backups incompatíveis, danificados ou com rateio inconsistente são recusados. Para um backup de versão anterior, conserve o original, faça outra cópia e use o procedimento de atualização documentado no README.
+A recuperação não importa a V2 nem troca o banco em uso. Versões V3 anteriores conhecidas são migradas somente no arquivo temporário recebido; os valores preexistentes são comparados antes de gerar a cópia recuperada. Backups com versões desconhecidas, migrations alteradas, danos ou rateio inconsistente são recusados. O arquivo original e o banco ativo permanecem preservados.
 
 Não envie apenas uma cópia de arquivo feita com o SQLite aberto: transações podem estar em arquivos auxiliares. Use o backup consistente do aplicativo. Nenhum destino existente é sobrescrito.
 

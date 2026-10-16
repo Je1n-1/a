@@ -27,7 +27,7 @@ Esse banco está fora do OneDrive e conserva os seus cadastros. Os registros art
 2. Escolha XLSX, CSV, TSV, TXT, DOCX, PDF textual ou cole uma tabela. Quando houver várias planilhas, escolha a aba.
 3. Confira os nomes, códigos, períodos, cargas e classificações na prévia. Marque as linhas desejadas ou use a seleção em lote. A prévia ainda não grava dados.
 4. Confirme e confira as quantidades inseridas, atualizadas ou ignoradas. Repetir a mesma grade não duplica disciplinas no curso.
-5. Clique em **Estudar**. Em **Hoje**, pause, retome e finalize com uma nota opcional. As cinco sessões mais recentes aparecem abaixo do relógio. Use **Ver divisão por dia** para conferir o estudo e as pausas em cada data.
+5. Clique em **Estudar** para preparar a disciplina em Hoje. Selecione ou crie um tópico, escolha Estudo/Revisão e clique em **Iniciar estudo**. Pause, retome e finalize com uma anotação opcional. As cinco sessões mais recentes aparecem abaixo do relógio. Use **Ver divisão por dia** para conferir o estudo e as pausas em cada data.
 
 Também é possível cadastrar disciplinas manualmente, editar e arquivar cursos/disciplinas, restaurar arquivados ou começar um estudo avulso. Arquivar conserva os registros associados.
 
@@ -44,21 +44,21 @@ Depois de oito horas desde o início ou a última confirmação, é necessário 
 - Data e duração: a interface aceita minutos inteiros, de 1 a 1.440. O registro é identificado como “Duração informada manualmente”, sem inventar horário de início/fim. A API aceita segundos inteiros entre 1 e 86.400.
 - Início e fim: horários interpretados em `America/Sao_Paulo`, com duração de até 24 horas e sem horário futuro. Informe um intervalo contínuo de estudo; pausas não são inferidas. Se houver pausas, registre trechos separados ou informe a duração líquida.
 
-Intervalos que atravessam meia-noite são repartidos por dia em São Paulo. Estudo e pausa são somados separadamente, preservando todos os segundos. Um registro de duração sem horários pertence integralmente à data informada. Esta divisão alimenta os indicadores, os dois gráficos, o histórico e o CSV.
+Intervalos que atravessam meia-noite são repartidos por dia em São Paulo. Estudo, pausa curta e intervalo programado são somados separadamente, preservando todos os segundos. Um registro de duração sem horários pertence integralmente à data informada. Esta divisão alimenta os indicadores, os dois gráficos, o histórico e o CSV.
 
 Se duas abas tentarem alterar o relógio, a versão persistida evita transições conflitantes. Um conflito atualiza a tela e solicita nova conferência; feche e reabra um formulário que tenha ficado desatualizado. Repetir uma finalização não gera outra sessão. Falhas de conexão são mostradas: o contador local é uma estimativa até reconectar.
 
 ## Análises e histórico
 
-Em **Análises**, escolha datas, curso e disciplina e clique em **Aplicar filtros**. Cursos e disciplinas arquivados também aparecem para consulta do histórico. Use **Últimos 30 dias** para limpar os filtros.
+Em **Análises**, escolha datas, curso, disciplina e tópico e clique em **Aplicar filtros**. Cursos e disciplinas arquivados também aparecem para consulta do histórico. Use **Últimos 30 dias** para limpar os filtros.
 
-- Os gráficos mostram somente **minutos líquidos por dia** e **por disciplina**, sem planejamento ou projeções. Dias sem estudo permanecem visíveis com zero. Disciplinas homônimas de cursos distintos continuam separadas.
+- Os gráficos mostram **minutos líquidos por dia** e a **distribuição por disciplina, curso ou tópico**, sem planejamento ou projeções. Dias sem estudo permanecem visíveis com zero. Disciplinas homônimas de cursos distintos continuam separadas.
 - **Hoje**, **Esta semana** (segunda-feira até hoje) e **Este mês** (dia 1 até hoje) respeitam curso/disciplina, usando suas próprias datas. **Período filtrado**, gráficos, tabela e CSV usam o intervalo selecionado. Os cards não devem ser somados entre si.
-- Na tabela, bruto = líquido + pausas. Se o filtro pegar parte de uma sessão que atravessou a meia-noite, as durações representam somente essa parte. Os horários de início/fim continuam identificando a sessão completa.
+- Na tabela, bruto = líquido + pausas curtas + intervalos programados. Se o filtro pegar parte de uma sessão que atravessou a meia-noite, as durações representam somente essa parte. Os horários de início/fim continuam identificando a sessão completa.
 - A tabela pagina 20, 50 ou 100 registros. **Exportar CSV** inclui todos os registros dos filtros aplicados, independentemente da página. O arquivo usa UTF-8 com BOM, ponto e vírgula, segundos inteiros e neutralização de campos que poderiam ser interpretados como fórmulas pelo Excel.
 - Os contadores exibem horas:minutos:segundos. Os gráficos exibem minutos com até duas casas decimais; os totais continuam calculados em segundos. O período de uma consulta pode ter até 3.661 dias.
 
-**Corrigir** exige um motivo e permite alterar disciplina/nota mantendo os intervalos, ou substituir o tempo da sessão inteira por uma duração/data ou por início/fim contínuos. As opções de substituição removem pausas do resultado corrigido e avisam isso no formulário; o original permanece na trilha de alterações. A origem (cronômetro/manual) é preservada e a sessão recebe uma nova versão. **Alterações** mostra motivo, data e valores anteriores/novos. Repetir o envio não gera outra correção, e uma aba desatualizada recebe conflito.
+**Corrigir** exige um motivo e permite alterar disciplina/nota mantendo os intervalos, ou substituir o tempo da sessão inteira por uma duração/data ou por início/fim contínuos. As opções de substituição removem pausas e intervalos do resultado corrigido e avisam isso no formulário; o original permanece na trilha de alterações. A origem (cronômetro/manual) é preservada e a sessão recebe uma nova versão. **Alterações** mostra motivo, data e valores anteriores/novos. Repetir o envio não gera outra correção, e uma aba desatualizada recebe conflito.
 
 As sessões e os intervalos são a origem dos dados. `session_days` guarda o rateio calculado na mesma transação de finalização, registro manual ou correção. A inicialização também confere se a soma diária coincide com os totais das sessões. Não edite essas tabelas manualmente.
 
@@ -123,7 +123,7 @@ Para verificar uma cópia sem sobrescrever o banco principal, inicie outra inst�
 Get-ChildItem static/js/*.js | ForEach-Object { node --check $_.FullName }
 ```
 
-Resultado atual: 55 testes automatizados aprovados, incluindo concorrência, interrupção abrupta, rateio, correções auditáveis, contrato de Hoje e reconciliação dos gráficos/histórico/CSV com mais de 100 sessões. Fluxos validados no Edge em desktop e largura de 390 px. Veja [a homologação da Fase 5](docs/FASE_5_ENTREGA.md) e [a entrega da Fase 4](docs/FASE_4_ENTREGA.md), [a Fase 3](docs/FASE_3_ENTREGA.md), [a Fase 2](docs/FASE_2_ENTREGA.md) e [a Fase 1](docs/FASE_1_ENTREGA.md).
+Resultado atual: 65 testes automatizados aprovados, incluindo concorrência, interrupção abrupta, rateio, correções auditáveis, contrato de Hoje e reconciliação dos gráficos/histórico/CSV com mais de 100 sessões. Fluxos validados no Edge em desktop e largura de 390 px. Veja [a homologação da Fase 5](docs/FASE_5_ENTREGA.md) e [a entrega da Fase 4](docs/FASE_4_ENTREGA.md), [a Fase 3](docs/FASE_3_ENTREGA.md), [a Fase 2](docs/FASE_2_ENTREGA.md) e [a Fase 1](docs/FASE_1_ENTREGA.md).
 
 O script `tests/browser_phase1.cjs` registra a reprodução realizada nesta máquina: usa o Playwright do runtime local e Edge, acessa a porta 5055 e exige um banco de teste recém-inicializado, sem cursos. Nunca execute esse script contra seus dados pessoais. A dependência de automação é apenas de verificação, não do site.
 
@@ -177,3 +177,41 @@ Os PDFs de Engenharia Elétrica e Engenharia da Computação agora são importad
 As evidências `docs/phase5-*` registram instalação isolada, testes, interface e igualdade do banco recuperado. O roteiro `tests/browser_phase5.cjs` usa os caminhos de verificação em `docs/phase5-environment.json`, requer uma base sem cursos e aceita `PLANO_REAL_GRADE_FOLDER` para localizar os três PDFs; não o execute na base pessoal.
 
 O suporte OCR usa Windows PowerShell e o recurso nativo de reconhecimento de texto em português. Se o recurso estiver ausente em outra máquina, a importação informa isso; os demais formatos continuam disponíveis. Não há envio do PDF para serviços externos. O roteiro `tests/browser_pdf_ocr.cjs` usa os três arquivos reais e a base isolada indicada em `docs/ocr-environment.json`; exige uma base nova, sem cursos.
+
+
+## Tópicos e revisão manual
+
+A atualização de UX adiciona tópicos por disciplina. É possível criar um tópico no próprio início do estudo, reutilizá-lo em várias sessões e consultar seu tempo acumulado. Concluído e Precisa de revisão são escolhas independentes. Finalizar uma revisão não limpa a pendência automaticamente: escolha explicitamente Revisão realizada / sem pendência.
+
+A lista de disciplinas permite alterar a situação diretamente e abrir os Tópicos. O botão Tópicos para revisão mostra pendências do curso. O histórico oferece Estudar novamente, que prepara uma nova sessão sem alterar a anterior. O estudo avulso e as sessões sem tópico continuam disponíveis.
+
+A migration 0004_topics adiciona campos opcionais, mantendo sessões antigas sem vínculo inventado. Para outra instalação V3, use o procedimento de atualização explícita acima, com servidor parado. Backups V3 anteriores conhecidos podem ser recuperados: somente a cópia recebida é migrada e validada, sem substituir o banco ativo.
+
+Os indicadores de tempo registrado incluem apenas sessões finalizadas, com pausas e intervalos descontados. O indicador global mostra a sessão ativa ou pausada em qualquer página, usando o mesmo relógio persistido.
+
+Veja o [relatório de UX, testes e migração](docs/UX_TOPICOS_ENTREGA.md). A base pessoal estava vazia na atualização; os testes com histórico preenchido usaram bancos separados. A verificação desta etapa foi exclusivamente desktop.
+
+
+### Pausa curta, intervalo e conteúdo colado
+
+**Pausa curta** registra interrupções rápidas. **Intervalo de estudo** programa um
+horário de retorno ou uma duração, com aviso sonoro. Durante o intervalo, o
+contador de pausa curta fica parado. O descanso continua até Retomar, mesmo
+após o alarme; Silenciar aviso apenas desliga o lembrete. Os três tempos ficam
+separados no relógio, histórico e CSV.
+
+Em **Disciplinas → Tópicos → Colar conteúdo para separar**, cole uma lista do AVA
+ou sumário, escolha o tipo de separação e revise os títulos antes de confirmar.
+O atalho também está em Hoje, depois de selecionar a disciplina. A prévia é
+editável e não grava dados; títulos longos não são cortados automaticamente.
+**Separar este texto** reaproveita um tópico existente, preservando o original
+e seu histórico. Prints ainda precisam ter seu texto extraído antes de colar.
+
+
+Em Hoje, a escolha de disciplinas está agrupada em **Em andamento**, **Para
+revisar**, **Concluídas** e **Outras disciplinas**, nessa ordem. Revisão significa
+ter ao menos um tópico marcado como Precisa de revisão. Uma disciplina em
+andamento permanece no primeiro grupo mesmo com revisão pendente; uma concluída
+com essa pendência entra em Para revisar. Cada disciplina aparece uma vez.
+A sugestão segue os grupos e os filtros de curso/busca; dentro do grupo, usa ordem
+alfabética. Selecioná-la prepara a sessão sem iniciar o relógio.

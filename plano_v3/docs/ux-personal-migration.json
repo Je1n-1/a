@@ -1,0 +1,38 @@
+{
+  "database": "C:\\Users\\jeanm\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\PlanoV3\\data\\plano.db",
+  "backup": "C:\\Users\\jeanm\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\PlanoV3\\backups\\ux-20261012-103145\\before-upgrade-20261012-103145-006591.db",
+  "verified_copy": "C:\\Users\\jeanm\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\PlanoV3\\backups\\ux-20261012-103145\\verified-upgrade-20261012-103145-006591.db",
+  "applied": [
+    "0004_topics"
+  ],
+  "existing_rows_preserved": true,
+  "counts_before": {
+    "courses": 0,
+    "subjects": 0,
+    "timers": 0,
+    "timer_intervals": 0,
+    "study_sessions": 0,
+    "timer_recoveries": 0,
+    "session_days": 0,
+    "session_corrections": 0
+  },
+  "diagnostics": {
+    "path": "C:\\Users\\jeanm\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\PlanoV3\\data\\plano.db",
+    "schema": [
+      "0001_tracker",
+      "0002_timer_recovery",
+      "0003_analytics",
+      "0004_topics"
+    ],
+    "integrity": "ok",
+    "foreign_key_violations": 0,
+    "last_backup": null
+  },
+  "personal_hash_before": "7a373c2eba2e718d27439d60b6679115f79ef456718c5228bb5c8a1a30cc8f8f",
+  "personal_history_present": false,
+  "backup_after": {
+    "database": "C:\\Users\\jeanm\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\PlanoV3\\data\\plano.db",
+    "path": "C:\\Users\\jeanm\\AppData\\Local\\Packages\\OpenAI.Codex_2p2nqsd0c76g0\\LocalCache\\Local\\PlanoV3\\backups\\plano-20261012-133145-5ec075e69553.db",
+    "created_at": "2026-10-12T13:31:45.040964+00:00"
+  }
+}

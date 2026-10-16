@@ -9,7 +9,8 @@ import {
   date,
   timestamp
 } from './study-format.js';
-let subjects = [],
+let topics = [],
+  subjects = [],
   courses = [],
   current = null,
   sequence = 0;
@@ -25,6 +26,13 @@ function subjectOptions(selected = '') {
   field('subject_id').value = selected;
 }
 
+function topicOptions(selected = '') {
+  const course = field('course_id').value,
+    subject = field('subject_id').value;
+  field('topic_id').innerHTML = '<option value="">Todos os tópicos</option><option value="none">Sem tópico informado</option>' + topics.filter(t => (!course || t.course_id === Number(course)) && (!subject || t.subject_id === Number(subject))).map(t => `<option value="${t.id}">${esc(t.name)} · ${esc(t.subject_name)}</option>`).join('');
+  field('topic_id').value = [...field('topic_id').options].some(o => o.value === selected) ? selected : '';
+}
+
 function query(page) {
   const params = new URLSearchParams(new FormData(form));
   params.set('page', page);
@@ -35,8 +43,11 @@ function query(page) {
 function charts(data) {
   const peak = Math.max(1, ...data.by_day.map(d => d.effective_seconds));
   $('#day-chart').innerHTML = data.by_day.map(d => `<div class="day-column" tabindex="0" aria-label="${date(d.date)}: ${clock(d.effective_seconds)} de estudo" title="${date(d.date)} · ${clock(d.effective_seconds)} (${minutes(d.effective_seconds)} min)"><span class="day-value">${minutes(d.effective_seconds)}</span><div class="day-bar" style="height:${(d.effective_seconds/peak)*160}px" aria-hidden="true"></div><span class="day-date">${d.date.slice(8)}/${d.date.slice(5,7)}</span></div>`).join('');
-  const max = Math.max(1, ...data.by_subject.map(d => d.effective_seconds));
-  $('#subject-chart').innerHTML = data.by_subject.length ? data.by_subject.map(d => `<div class="subject-bar-row" tabindex="0" aria-label="${esc(d.name)}: ${clock(d.effective_seconds)}"><div class="subject-bar-label"><span>${esc(d.name)}<small>${esc(d.course_name||'Sem curso')}</small></span><strong title="${clock(d.effective_seconds)}">${minutes(d.effective_seconds)} min</strong></div><div class="subject-track"><div class="subject-fill" style="width:${d.effective_seconds/max*100}%"></div></div></div>`).join('') : '<p class="muted">Nenhuma disciplina com estudo neste período.</p>';
+  const scroll = $('.day-chart-scroll');
+  scroll.scrollLeft = scroll.scrollWidth;
+  const grouped = data['by_' + $('#breakdown').value];
+  const max = Math.max(1, ...grouped.map(d => d.effective_seconds));
+  $('#subject-chart').innerHTML = grouped.length ? grouped.map(d => `<div class="subject-bar-row" tabindex="0" aria-label="${esc(d.name)}: ${clock(d.effective_seconds)}"><div class="subject-bar-label"><span>${esc(d.name)}<small>${esc([d.subject_name,d.course_name].filter(Boolean).join(' · '))}</small></span><strong title="${clock(d.effective_seconds)}">${clock(d.effective_seconds)}</strong></div><div class="subject-track"><div class="subject-fill" style="width:${d.effective_seconds/max*100}%"></div></div></div>`).join('') : '<p class="muted">Nenhum estudo neste período.</p>';
 }
 
 function render(data) {
@@ -49,9 +60,9 @@ function render(data) {
   $('#filter-context').textContent = `Período aplicado: ${date(data.filters.start)} a ${date(data.filters.end)} · America/Sao_Paulo · Tempos no formato horas:minutos:segundos.`;
   charts(data);
   $('#history-body').innerHTML = data.history.rows.length ? data.history.rows.map(r => {
-    const partial = r.effective_seconds !== r.total_effective_seconds || r.break_seconds !== r.total_break_seconds;
-    return `<tr data-session-id="${r.id}"><td><strong>${date(r.first_day)}${r.last_day!==r.first_day?' — '+date(r.last_day):''}</strong><small>${r.started_at?esc(timestamp(r.started_at))+'<br>até '+esc(timestamp(r.ended_at)):'Duração informada, sem horários'}</small>${partial?'<small>Trecho no período filtrado</small>':''}</td><td>${esc(r.title)}<small>${esc(r.course_name||'Estudo avulso')}</small></td><td class="history-time">${clock(r.effective_seconds+r.break_seconds)}</td><td class="history-time">${clock(r.break_seconds)}</td><td class="history-time"><strong>${clock(r.effective_seconds)}</strong></td><td>${r.source==='timer'?'Cronômetro':'Manual'}${r.correction_version>1?'<small>Corrigido · v'+r.correction_version+'</small>':''}</td><td>${esc(r.note)||'<span class="muted">—</span>'}</td><td><button class="button secondary small" data-edit="${r.id}">Corrigir</button><button class="text-button" data-audit="${r.id}">Alterações (${r.correction_version-1})</button></td></tr>`;
-  }).join('') : '<tr><td colspan="8" class="muted">Nenhuma sessão corresponde aos filtros.</td></tr>';
+    const partial = r.effective_seconds !== r.total_effective_seconds || r.break_seconds !== r.total_break_seconds || r.rest_seconds !== r.total_rest_seconds;
+    return `<tr data-session-id="${r.id}"><td><strong>${date(r.first_day)}${r.last_day!==r.first_day?' — '+date(r.last_day):''}</strong><small>${r.started_at?esc(timestamp(r.started_at))+'<br>até '+esc(timestamp(r.ended_at)):'Duração informada, sem horários'}</small>${partial?'<small>Trecho no período filtrado</small>':''}</td><td>${esc(r.title)}<small>${esc(r.course_name||'Estudo avulso')}</small><small class="history-topic">${esc(r.topic_name||'Sem tópico informado')}</small></td><td class="history-time">${clock(r.effective_seconds+r.break_seconds+r.rest_seconds)}</td><td class="history-time">${clock(r.break_seconds)}</td><td class="history-time">${clock(r.rest_seconds)}</td><td class="history-time"><strong>${clock(r.effective_seconds)}</strong></td><td>${r.source==='timer'?'Cronômetro':'Manual'}<small>${r.session_kind==='review'?'Revisão':r.session_kind==='study'?'Estudo':'Tipo não informado'}</small>${r.correction_version>1?'<small>Corrigido · v'+r.correction_version+'</small>':''}</td><td>${esc(r.note)||'<span class="muted">—</span>'}</td><td><a class="button secondary small" href="/?subject=${r.subject_id||'free'}&title=${encodeURIComponent(r.title)}${r.topic_id?'&topic='+r.topic_id+'&kind='+(r.session_kind||'study'):''}">Estudar novamente</a><button class="button secondary small" data-edit="${r.id}">Corrigir</button><button class="text-button" data-audit="${r.id}">Alterações (${r.correction_version-1})</button></td></tr>`;
+  }).join('') : '<tr><td colspan="9" class="muted">Nenhuma sessão corresponde aos filtros.</td></tr>';
   $('#page-info').textContent = `Página ${data.history.page} de ${data.history.pages} · ${data.history.total} sessões · total do período: ${clock(data.summary.period.effective_seconds)}`;
   $('#previous-page').disabled = data.history.page <= 1;
   $('#next-page').disabled = data.history.page >= data.history.pages;
@@ -86,12 +97,20 @@ form.onsubmit = e => {
   e.preventDefault();
   load();
 };
-field('course_id').onchange = () => subjectOptions();
+field('course_id').onchange = () => {
+  subjectOptions();
+  topicOptions();
+};
+field('subject_id').onchange = () => topicOptions();
+$('#breakdown').onchange = () => {
+  if (current) charts(current);
+};
 $('#reset-filters').onclick = () => {
   form.reset();
   field('start').value = '';
   field('end').value = '';
   subjectOptions();
+  topicOptions();
   load();
 };
 $('#page-size').onchange = () => load();
@@ -122,6 +141,7 @@ $('#export-csv').onclick = async () => {
     });
   if (f.course_id) params.set('course_id', f.course_id);
   if (f.subject_id) params.set('subject_id', f.subject_id);
+  if (f.topic_id) params.set('topic_id', f.topic_id);
   try {
     const response = await fetch('/api/analytics/export.csv?' + params);
     if (!response.ok) {
@@ -143,12 +163,13 @@ $('#export-csv').onclick = async () => {
 };
 async function init() {
   try {
-    [courses, subjects] = await Promise.all([api('/courses?archived=1'), api('/subjects?archived=1')]);
+    [courses, subjects, topics] = await Promise.all([api('/courses?archived=1'), api('/subjects?archived=1'), api('/topics?archived=1')]);
     field('course_id').innerHTML = '<option value="">Todos os cursos</option>' + courses.map(c => `<option value="${c.id}">${esc(c.name)}${c.archived_at?' (arquivado)':''}</option>`).join('');
     const params = new URLSearchParams(location.search);
     for (const key of ['start', 'end', 'course_id'])
       if (params.has(key)) field(key).value = params.get(key);
     subjectOptions(params.get('subject_id') || '');
+    topicOptions(params.get('topic_id') || '');
     if (['20', '50', '100'].includes(params.get('page_size'))) $('#page-size').value = params.get('page_size');
     await load(params.get('page') || 1);
   } catch (error) {

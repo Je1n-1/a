@@ -1,7 +1,7 @@
 from functools import wraps
 import sqlite3
 from flask import Blueprint, Response, current_app, jsonify, request
-from . import catalog, db, imports, timer, sessions, analytics, corrections, today, storage
+from . import catalog, db, imports, timer, sessions, analytics, corrections, today, storage, topics
 from .domain import DomainError
 
 api = Blueprint("api", __name__, url_prefix="/api")
@@ -198,3 +198,39 @@ def analytics_csv(conn):
 def diagnostics():
     path = current_app.config["DATABASE_PATH"]
     return jsonify({**db.diagnostics(path), "last_backup": storage.last_backup(path)})
+
+
+@api.get("/topics")
+@endpoint()
+def topic_list(conn):
+    return topics.listing(
+        conn,
+        analytics.number(request.args.get("subject_id"), "Disciplina"),
+        request.args.get("review") == "1",
+        request.args.get("archived") == "1",
+    )
+
+
+@api.post("/topics")
+@endpoint(True)
+def topic_create(conn):
+    values = body()
+    return topics.create(conn, values.get("subject_id"), values.get("name"))
+
+
+@api.patch("/topics/<int:ident>")
+@endpoint(True)
+def topic_update(conn, ident):
+    return topics.update(conn, ident, body())
+
+
+@api.post("/subjects/<int:ident>/topics/preview")
+@endpoint()
+def topic_preview(conn, ident):
+    return topics.preview(conn, ident, body())
+
+
+@api.post("/subjects/<int:ident>/topics/confirm")
+@endpoint(True)
+def topic_confirm(conn, ident):
+    return topics.create_many(conn, ident, body())

@@ -92,6 +92,12 @@ def recover_copy(database: Path, upload) -> dict:
                     raise DomainError("Escolha um backup de até 64 MB.", 413)
                 output.write(chunk)
         try:
+            # Only the uploaded temporary copy is migrated. The active DB is never switched.
+            from upgrade import contents, verify_preserved
+
+            before = contents(source)
+            db.initialize(source)
+            verify_preserved(source, before)
             copy_database(source, destination)
         except (sqlite3.DatabaseError, RuntimeError) as error:
             raise DomainError(
@@ -103,7 +109,7 @@ def recover_copy(database: Path, upload) -> dict:
         ).fetchone()
         counts = {
             name: conn.execute(f'SELECT COUNT(*) FROM "{name}"').fetchone()[0]
-            for name in ("courses", "subjects")
+            for name in ("courses", "subjects", "topics")
         }
     return {
         "path": str(destination),

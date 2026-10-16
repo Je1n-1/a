@@ -1,7 +1,7 @@
 """Registro manual e rateio de intervalos reais por dia em São Paulo."""
 
 from datetime import date, datetime, time, timedelta, timezone
-from . import catalog
+from . import catalog, topics
 from .domain import DomainError, LOCAL_ZONE, clean, get, now
 
 
@@ -45,7 +45,7 @@ def daily_allocation(conn, session):
     days = {}
 
     def add(day, kind, seconds):
-        entry = days.setdefault(day, {"date": day, "effective_seconds": 0, "break_seconds": 0})
+        entry = days.setdefault(day, {"date": day, "effective_seconds": 0, "break_seconds": 0, "rest_seconds": 0})
         entry[kind] += seconds
 
     if session["source"] == "timer" and session.get("allocation_mode", "original") == "original":
@@ -57,7 +57,7 @@ def daily_allocation(conn, session):
                 raise DomainError("Sessão finalizada contém intervalo aberto.", 409)
             for day, seconds in split_interval(row["started_at"], row["ended_at"]):
                 add(
-                    day, "effective_seconds" if row["kind"] == "focus" else "break_seconds", seconds
+                    day, "rest_seconds" if row["is_rest"] else "effective_seconds" if row["kind"] == "focus" else "break_seconds", seconds
                 )
     elif session["started_at"]:
         for day, seconds in split_interval(session["started_at"], session["ended_at"]):
@@ -67,6 +67,7 @@ def daily_allocation(conn, session):
     if (
         sum(d["effective_seconds"] for d in days.values()) != session["effective_seconds"]
         or sum(d["break_seconds"] for d in days.values()) != session["break_seconds"]
+        or sum(d["rest_seconds"] for d in days.values()) != session.get("rest_seconds", 0)
     ):
         raise DomainError(
             "Os intervalos divergem do total da sessão. Confira os dados antes de agregar.", 409
@@ -84,8 +85,8 @@ def rebuild_days(conn, ident):
     allocation = daily_allocation(conn, get(conn, "study_sessions", ident))
     conn.execute("DELETE FROM session_days WHERE session_id=?", (ident,))
     conn.executemany(
-        "INSERT INTO session_days VALUES (?,?,?,?)",
-        [(ident, d["date"], d["effective_seconds"], d["break_seconds"]) for d in allocation],
+        "INSERT INTO session_days(session_id,local_date,effective_seconds,break_seconds,rest_seconds) VALUES (?,?,?,?,?)",
+        [(ident, d["date"], d["effective_seconds"], d["break_seconds"], d["rest_seconds"]) for d in allocation],
     )
 
 
@@ -133,6 +134,7 @@ def manual(conn, values):
         local_date = start.astimezone(LOCAL_ZONE).date().isoformat()
     else:
         raise DomainError("Escolha duração ou horários para o registro manual.")
+    topic = topics.link(conn, subject_id, values, allow_create=True)
     note = clean(values.get("note"), "O que estudei", 5000)
     ident = conn.execute(
         """INSERT INTO study_sessions
@@ -140,5 +142,9 @@ def manual(conn, values):
         VALUES (?,?,'manual',?,?,?,?,?,?,?)""",
         (subject_id, title, started, ended, local_date, seconds, note, stamp, request_key),
     ).lastrowid
+    conn.execute(
+        "UPDATE study_sessions SET topic_id=?,topic_name=?,session_kind=? WHERE id=?",
+        (topic["topic_id"], topic["topic_name"], topic["session_kind"], ident),
+    )
     rebuild_days(conn, ident)
     return detail(conn, ident)

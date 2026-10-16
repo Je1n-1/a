@@ -34,6 +34,9 @@ def filters(values):
         "subject_id": "free"
         if values.get("subject_id") == "free"
         else number(values.get("subject_id"), "Disciplina"),
+        "topic_id": "none"
+        if values.get("topic_id") == "none"
+        else number(values.get("topic_id"), "Tópico"),
         "page": number(values.get("page"), "Página", 1),
         "page_size": number(values.get("page_size"), "Tamanho da página", 20, 100),
         "today": today.isoformat(),
@@ -52,6 +55,11 @@ def selection(f, *, labels=False):
     elif f["subject_id"]:
         where.append("x.subject_id=?")
         args.append(f["subject_id"])
+    if f.get("topic_id") == "none":
+        where.append("x.topic_id IS NULL")
+    elif f.get("topic_id"):
+        where.append("x.topic_id=?")
+        args.append(f["topic_id"])
     joins = "FROM session_days d JOIN study_sessions x ON x.id=d.session_id"
     if labels or f["course_id"]:
         joins += " LEFT JOIN subjects s ON s.id=x.subject_id"
@@ -65,7 +73,7 @@ def totals(conn, f):
     return dict(
         conn.execute(
             """SELECT COALESCE(SUM(d.effective_seconds),0) effective_seconds,
-        COALESCE(SUM(d.break_seconds),0) break_seconds,COUNT(DISTINCT x.id) sessions """
+        COALESCE(SUM(d.break_seconds),0) break_seconds,COALESCE(SUM(d.rest_seconds),0) rest_seconds,COUNT(DISTINCT x.id) sessions """
             + clause,
             args,
         ).fetchone()
@@ -93,14 +101,14 @@ def history_query(f):
     clause, args = selection(f)
     return (
         """WITH selected AS (SELECT x.id,SUM(d.effective_seconds) effective_seconds,
-        SUM(d.break_seconds) break_seconds,MIN(d.local_date) first_day,MAX(d.local_date) last_day
+        SUM(d.break_seconds) break_seconds,SUM(d.rest_seconds) rest_seconds,MIN(d.local_date) first_day,MAX(d.local_date) last_day
         """
         + clause
         + """ GROUP BY x.id)
-        SELECT x.id,x.subject_id,x.title,x.source,x.started_at,x.ended_at,x.local_date,x.note,
+        SELECT x.id,x.subject_id,x.topic_id,x.topic_name,x.session_kind,x.title,x.source,x.started_at,x.ended_at,x.local_date,x.note,
         x.correction_version,x.allocation_mode,c.name course_name,
-        selected.effective_seconds,selected.break_seconds,selected.first_day,selected.last_day,
-        x.effective_seconds total_effective_seconds,x.break_seconds total_break_seconds
+        selected.effective_seconds,selected.break_seconds,selected.rest_seconds,selected.first_day,selected.last_day,
+        x.effective_seconds total_effective_seconds,x.break_seconds total_break_seconds,x.rest_seconds total_rest_seconds
         FROM selected JOIN study_sessions x ON x.id=selected.id
         LEFT JOIN subjects s ON s.id=x.subject_id LEFT JOIN courses c ON c.id=s.course_id
         ORDER BY selected.last_day DESC,COALESCE(x.started_at,x.local_date) DESC,x.id DESC""",
@@ -147,6 +155,24 @@ def report(conn, values):
             args,
         )
     ]
+    by_course = [
+        dict(r)
+        for r in conn.execute(
+            "SELECT c.id course_id,COALESCE(c.name,'Estudo avulso') name,SUM(d.effective_seconds) effective_seconds "
+            + clause
+            + " GROUP BY c.id ORDER BY effective_seconds DESC,name",
+            args,
+        )
+    ]
+    by_topic = [
+        dict(r)
+        for r in conn.execute(
+            "SELECT x.topic_id,x.subject_id,COALESCE(x.topic_name,'Sem tópico informado') name,s.name subject_name,c.name course_name,SUM(d.effective_seconds) effective_seconds "
+            + clause
+            + " GROUP BY x.topic_id,x.topic_name,x.subject_id ORDER BY effective_seconds DESC,name",
+            args,
+        )
+    ]
     pages = max(1, (period["sessions"] + f["page_size"] - 1) // f["page_size"])
     f["page"] = min(f["page"], pages)
     sql, args = history_query(f)
@@ -161,6 +187,8 @@ def report(conn, values):
         "summary": summary,
         "by_day": by_day,
         "by_subject": by_subject,
+        "by_course": by_course,
+        "by_topic": by_topic,
         "history": {
             "rows": rows,
             "page": f["page"],
@@ -200,13 +228,16 @@ def export_csv(conn, values):
             "Início da sessão (São Paulo)",
             "Fim da sessão (São Paulo)",
             "Bruto no período (s)",
-            "Pausas no período (s)",
+            "Pausas curtas no período (s)",
             "Líquido no período (s)",
             "Líquido total da sessão (s)",
             "Nota",
             "Filtro inicial",
             "Filtro final",
             "Fuso",
+            "Tópico",
+            "Tipo de sessão",
+            "Intervalos programados no período (s)",
         ]
     )
     for row in conn.execute(sql, args):
@@ -221,7 +252,7 @@ def export_csv(conn, values):
                 row["correction_version"],
                 local_time(row["started_at"]),
                 local_time(row["ended_at"]),
-                row["effective_seconds"] + row["break_seconds"],
+                row["effective_seconds"] + row["break_seconds"] + row["rest_seconds"],
                 row["break_seconds"],
                 row["effective_seconds"],
                 row["total_effective_seconds"],
@@ -229,6 +260,9 @@ def export_csv(conn, values):
                 f["start"],
                 f["end"],
                 f["timezone"],
+                safe_cell(row["topic_name"]),
+                row["session_kind"] or "",
+                row["rest_seconds"],
             ]
         )
     return "\ufeff" + output.getvalue()
