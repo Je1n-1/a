@@ -21,7 +21,7 @@ class PhaseOne(unittest.TestCase):
         self.path = Path(self.temp.name) / "test.db"
         self.assertEqual(
             db.initialize(self.path),
-            ["0001_tracker", "0002_timer_recovery", "0003_analytics", "0004_topics", "0005_scheduled_break", "0006_rest_time"],
+            ["0001_tracker", "0002_timer_recovery", "0003_analytics", "0004_topics", "0005_scheduled_break", "0006_rest_time", "0007_projects"],
         )
         self.client = create_app(self.path).test_client()
 

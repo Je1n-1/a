@@ -250,7 +250,7 @@ class PhaseThree(unittest.TestCase):
             c.set_trace_callback(queries.append)
             data = analytics.report(c, {"start": "2026-10-09", "end": "2026-10-09"})
         self.assertEqual(len(data["history"]["rows"]), 20)
-        self.assertEqual(len(queries), 10)  # 4 totals, 4 groupings, 1 history, rollback.
+        self.assertEqual(len(queries), 13)  # 4 totals, 7 groupings, 1 history, rollback.
         self.assertTrue(any("LIMIT 20 OFFSET 0" in q for q in queries))
 
     def test_migration_backfills_legacy_timer_and_rejects_inconsistent_history(self):
@@ -270,7 +270,7 @@ class PhaseThree(unittest.TestCase):
             )
             c.commit()
         result = upgrade(old, Path(self.temp.name) / "backup")
-        self.assertEqual(result["applied"], ["0003_analytics", "0004_topics", "0005_scheduled_break", "0006_rest_time"])
+        self.assertEqual(result["applied"], ["0003_analytics", "0004_topics", "0005_scheduled_break", "0006_rest_time", "0007_projects"])
         with db.read_transaction(old) as c:
             self.assertEqual(
                 [

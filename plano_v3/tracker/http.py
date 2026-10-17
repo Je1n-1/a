@@ -1,7 +1,7 @@
 from functools import wraps
 import sqlite3
 from flask import Blueprint, Response, current_app, jsonify, request
-from . import catalog, db, imports, timer, sessions, analytics, corrections, today, storage, topics
+from . import catalog, db, imports, timer, sessions, analytics, corrections, today, storage, topics, projects
 from .domain import DomainError
 
 api = Blueprint("api", __name__, url_prefix="/api")
@@ -234,3 +234,45 @@ def topic_preview(conn, ident):
 @endpoint(True)
 def topic_confirm(conn, ident):
     return topics.create_many(conn, ident, body())
+
+
+@api.get('/projects')
+@endpoint()
+def project_list(conn):
+    return projects.listing(conn, request.args.get('archived') == '1')
+
+
+@api.get('/project-steps')
+@endpoint()
+def project_steps(conn):
+    return [dict(r) for r in conn.execute('SELECT id,project_id,name,completed FROM project_steps ORDER BY project_id,id')]
+
+
+@api.post('/projects')
+@endpoint(True)
+def project_create(conn):
+    return projects.save(conn, body())
+
+
+@api.get('/projects/<int:ident>')
+@endpoint()
+def project_detail(conn, ident):
+    return projects.detail(conn, ident)
+
+
+@api.patch('/projects/<int:ident>')
+@endpoint(True)
+def project_update(conn, ident):
+    return projects.save(conn, body(), ident)
+
+
+@api.post('/projects/<int:ident>/steps')
+@endpoint(True)
+def step_create(conn, ident):
+    return projects.save_step(conn, ident, body())
+
+
+@api.patch('/projects/<int:ident>/steps/<int:step>')
+@endpoint(True)
+def step_update(conn, ident, step):
+    return projects.save_step(conn, ident, body(), step)

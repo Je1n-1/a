@@ -1,3 +1,4 @@
+import {activityLink} from './activity-link.js';
 import {
   $,
   esc,
@@ -9,7 +10,7 @@ import {
   date,
   timestamp
 } from './study-format.js';
-let topics = [],
+let projects = [], steps = [], topics = [],
   subjects = [],
   courses = [],
   current = null,
@@ -33,6 +34,25 @@ function topicOptions(selected = '') {
   field('topic_id').value = [...field('topic_id').options].some(o => o.value === selected) ? selected : '';
 }
 
+function projectOptions(selected='') {
+  // Include projects with historical sessions in a former course too; SQL filters the snapshot.
+  field('project_id').innerHTML='<option value="">Todos os projetos</option>'+projects.map(p=>`<option value="${p.id}">${esc(p.name)}${p.archived_at?' (arquivado)':''}</option>`).join('');
+  field('project_id').value=selected;
+}
+function stepOptions(selected='') {
+  const project=field('project_id').value;
+  field('step_id').innerHTML='<option value="">Todas as etapas</option>'+steps.filter(s=>!project||s.project_id===Number(project)).map(s=>`<option value="${s.id}">${esc(s.name)}${!project?' · '+esc(projects.find(p=>p.id===s.project_id)?.name||''):''}</option>`).join('');
+  field('step_id').value=selected;
+}
+function activityFilters() {
+  const work=field('activity').value==='project';
+  document.querySelectorAll('[data-study-filter]').forEach(el=>{el.hidden=work;el.querySelector('select').disabled=work;if(work)el.querySelector('select').value='';});
+  document.querySelectorAll('[data-project-filter]').forEach(el=>{el.hidden=!work;el.querySelector('select').disabled=!work;if(!work)el.querySelector('select').value='';});
+  $('#breakdown').value=work?'project':field('activity').value==='study'?'subject':'activity';
+}
+field('activity').onchange=()=>{activityFilters();load();};
+field('project_id').onchange=()=>stepOptions();
+
 function query(page) {
   const params = new URLSearchParams(new FormData(form));
   params.set('page', page);
@@ -42,7 +62,7 @@ function query(page) {
 
 function charts(data) {
   const peak = Math.max(1, ...data.by_day.map(d => d.effective_seconds));
-  $('#day-chart').innerHTML = data.by_day.map(d => `<div class="day-column" tabindex="0" aria-label="${date(d.date)}: ${clock(d.effective_seconds)} de estudo" title="${date(d.date)} · ${clock(d.effective_seconds)} (${minutes(d.effective_seconds)} min)"><span class="day-value">${minutes(d.effective_seconds)}</span><div class="day-bar" style="height:${(d.effective_seconds/peak)*160}px" aria-hidden="true"></div><span class="day-date">${d.date.slice(8)}/${d.date.slice(5,7)}</span></div>`).join('');
+  $('#day-chart').innerHTML = data.by_day.map(d => `<div class="day-column" tabindex="0" aria-label="${date(d.date)}: ${clock(d.effective_seconds)} de atividade" title="${date(d.date)} · ${clock(d.effective_seconds)} (${minutes(d.effective_seconds)} min)"><span class="day-value">${minutes(d.effective_seconds)}</span><div class="day-bar" style="height:${(d.effective_seconds/peak)*160}px" aria-hidden="true"></div><span class="day-date">${d.date.slice(8)}/${d.date.slice(5,7)}</span></div>`).join('');
   const scroll = $('.day-chart-scroll');
   scroll.scrollLeft = scroll.scrollWidth;
   const grouped = data['by_' + $('#breakdown').value];
@@ -61,7 +81,7 @@ function render(data) {
   charts(data);
   $('#history-body').innerHTML = data.history.rows.length ? data.history.rows.map(r => {
     const partial = r.effective_seconds !== r.total_effective_seconds || r.break_seconds !== r.total_break_seconds || r.rest_seconds !== r.total_rest_seconds;
-    return `<tr data-session-id="${r.id}"><td><strong>${date(r.first_day)}${r.last_day!==r.first_day?' — '+date(r.last_day):''}</strong><small>${r.started_at?esc(timestamp(r.started_at))+'<br>até '+esc(timestamp(r.ended_at)):'Duração informada, sem horários'}</small>${partial?'<small>Trecho no período filtrado</small>':''}</td><td>${esc(r.title)}<small>${esc(r.course_name||'Estudo avulso')}</small><small class="history-topic">${esc(r.topic_name||'Sem tópico informado')}</small></td><td class="history-time">${clock(r.effective_seconds+r.break_seconds+r.rest_seconds)}</td><td class="history-time">${clock(r.break_seconds)}</td><td class="history-time">${clock(r.rest_seconds)}</td><td class="history-time"><strong>${clock(r.effective_seconds)}</strong></td><td>${r.source==='timer'?'Cronômetro':'Manual'}<small>${r.session_kind==='review'?'Revisão':r.session_kind==='study'?'Estudo':'Tipo não informado'}</small>${r.correction_version>1?'<small>Corrigido · v'+r.correction_version+'</small>':''}</td><td>${esc(r.note)||'<span class="muted">—</span>'}</td><td><a class="button secondary small" href="/?subject=${r.subject_id||'free'}&title=${encodeURIComponent(r.title)}${r.topic_id?'&topic='+r.topic_id+'&kind='+(r.session_kind||'study'):''}">Estudar novamente</a><button class="button secondary small" data-edit="${r.id}">Corrigir</button><button class="text-button" data-audit="${r.id}">Alterações (${r.correction_version-1})</button></td></tr>`;
+    return `<tr data-session-id="${r.id}"><td><strong>${date(r.first_day)}${r.last_day!==r.first_day?' — '+date(r.last_day):''}</strong><small>${r.started_at?esc(timestamp(r.started_at))+'<br>até '+esc(timestamp(r.ended_at)):'Duração informada, sem horários'}</small>${partial?'<small>Trecho no período filtrado</small>':''}</td><td>${r.project_id?'Projeto · ':r.subject_id?'Disciplina · ':''}${esc(r.title)}<small>${esc(r.course_name||(r.project_id?'Projeto independente':'Estudo avulso'))}</small><small class="history-topic">${esc(r.project_id?(r.step_name||'Sem etapa informada'):(r.topic_name||'Sem tópico informado'))}</small></td><td class="history-time">${clock(r.effective_seconds+r.break_seconds+r.rest_seconds)}</td><td class="history-time">${clock(r.break_seconds)}</td><td class="history-time">${clock(r.rest_seconds)}</td><td class="history-time"><strong>${clock(r.effective_seconds)}</strong></td><td>${r.source==='timer'?'Cronômetro':'Manual'}<small>${r.project_id?'Trabalho':r.session_kind==='review'?'Revisão':r.session_kind==='study'?'Estudo':'Tipo não informado'}</small>${r.correction_version>1?'<small>Corrigido · v'+r.correction_version+'</small>':''}</td><td>${esc(r.note)||'<span class="muted">—</span>'}</td><td><a class="button secondary small" href="${activityLink(r)}">${r.project_id?'Trabalhar novamente':'Estudar novamente'}</a><button class="button secondary small" data-edit="${r.id}">Corrigir</button><button class="text-button" data-audit="${r.id}">Alterações (${r.correction_version-1})</button></td></tr>`;
   }).join('') : '<tr><td colspan="9" class="muted">Nenhuma sessão corresponde aos filtros.</td></tr>';
   $('#page-info').textContent = `Página ${data.history.page} de ${data.history.pages} · ${data.history.total} sessões · total do período: ${clock(data.summary.period.effective_seconds)}`;
   $('#previous-page').disabled = data.history.page <= 1;
@@ -100,6 +120,7 @@ form.onsubmit = e => {
 field('course_id').onchange = () => {
   subjectOptions();
   topicOptions();
+  projectOptions();stepOptions();
 };
 field('subject_id').onchange = () => topicOptions();
 $('#breakdown').onchange = () => {
@@ -111,6 +132,7 @@ $('#reset-filters').onclick = () => {
   field('end').value = '';
   subjectOptions();
   topicOptions();
+  activityFilters();projectOptions();stepOptions();
   load();
 };
 $('#page-size').onchange = () => load();
@@ -142,6 +164,7 @@ $('#export-csv').onclick = async () => {
   if (f.course_id) params.set('course_id', f.course_id);
   if (f.subject_id) params.set('subject_id', f.subject_id);
   if (f.topic_id) params.set('topic_id', f.topic_id);
+  for (const key of ['activity','project_id','step_id']) if(f[key])params.set(key,f[key]);
   try {
     const response = await fetch('/api/analytics/export.csv?' + params);
     if (!response.ok) {
@@ -163,11 +186,14 @@ $('#export-csv').onclick = async () => {
 };
 async function init() {
   try {
-    [courses, subjects, topics] = await Promise.all([api('/courses?archived=1'), api('/subjects?archived=1'), api('/topics?archived=1')]);
+    [courses, subjects, topics, projects, steps] = await Promise.all([api('/courses?archived=1'), api('/subjects?archived=1'), api('/topics?archived=1'),api('/projects?archived=1'),api('/project-steps')]);
     field('course_id').innerHTML = '<option value="">Todos os cursos</option>' + courses.map(c => `<option value="${c.id}">${esc(c.name)}${c.archived_at?' (arquivado)':''}</option>`).join('');
     const params = new URLSearchParams(location.search);
-    for (const key of ['start', 'end', 'course_id'])
+    for (const key of ['start', 'end', 'course_id', 'activity'])
       if (params.has(key)) field(key).value = params.get(key);
+    activityFilters();
+    projectOptions(params.get('project_id')||'');
+    stepOptions(params.get('step_id')||'');
     subjectOptions(params.get('subject_id') || '');
     topicOptions(params.get('topic_id') || '');
     if (['20', '50', '100'].includes(params.get('page_size'))) $('#page-size').value = params.get('page_size');

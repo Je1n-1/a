@@ -1,7 +1,7 @@
 """Registro manual e rateio de intervalos reais por dia em São Paulo."""
 
 from datetime import date, datetime, time, timedelta, timezone
-from . import catalog, topics
+from . import catalog, topics, projects
 from .domain import DomainError, LOCAL_ZONE, clean, get, now
 
 
@@ -134,6 +134,9 @@ def manual(conn, values):
         local_date = start.astimezone(LOCAL_ZONE).date().isoformat()
     else:
         raise DomainError("Escolha duração ou horários para o registro manual.")
+    project = projects.link(conn, values)
+    if project["project_id"] is not None:
+        title = project["project_name"]
     topic = topics.link(conn, subject_id, values, allow_create=True)
     note = clean(values.get("note"), "O que estudei", 5000)
     ident = conn.execute(
@@ -146,5 +149,6 @@ def manual(conn, values):
         "UPDATE study_sessions SET topic_id=?,topic_name=?,session_kind=? WHERE id=?",
         (topic["topic_id"], topic["topic_name"], topic["session_kind"], ident),
     )
+    projects.attach(conn, "study_sessions", ident, project)
     rebuild_days(conn, ident)
     return detail(conn, ident)

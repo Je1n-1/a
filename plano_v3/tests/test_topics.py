@@ -266,7 +266,7 @@ class TopicFlows(unittest.TestCase):
         old_bytes = old.read_bytes()
         result = upgrade(old, Path(self.temp.name) / "backups")
         verify_preserved(old, before)
-        self.assertEqual(result["applied"], ["0004_topics", "0005_scheduled_break", "0006_rest_time"])
+        self.assertEqual(result["applied"], ["0004_topics", "0005_scheduled_break", "0006_rest_time", "0007_projects"])
         previous = create_app(old).test_client().get("/api/sessions/1").json
         self.assertIsNone(previous["topic_id"])
         self.assertIsNone(previous["session_kind"])

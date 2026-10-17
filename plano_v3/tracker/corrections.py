@@ -2,7 +2,7 @@
 
 import json
 from datetime import date
-from . import sessions, topics
+from . import sessions, topics, projects
 from .domain import DomainError, LOCAL_ZONE, clean, get, now
 
 
@@ -82,6 +82,15 @@ def correct(conn, ident, values):
         topic["topic_name"] = old["topic_name"]
     data.update(topic)
     data["subject_id"] = subject_id
+    project = projects.link(conn, {"project_id": values.get("project_id", old["project_id"]), "step_id": values.get("step_id", old["step_id"]), "subject_id": subject_id, **topic}, active=False)
+    if project["project_id"] == old["project_id"]:
+        for field in ('project_name', 'project_course_id'):
+            project[field] = old[field]
+        if project['step_id'] == old['step_id']:
+            project['step_name'] = old['step_name']
+    data.update(project)
+    if project['project_id'] is not None:
+        data['title'] = project['project_name']
     data["note"] = clean(values.get("note", old["note"]), "O que estudei", 5000)
     mode = values.get("mode", "keep")
     stamp = now()
@@ -129,7 +138,7 @@ def correct(conn, ident, values):
     if data == old:
         raise DomainError("Altere ao menos um campo para registrar a correção.")
     data["correction_version"] += 1
-    fields = [
+    fields = [*projects.FIELDS,
         "subject_id",
         "topic_id",
         "topic_name",

@@ -19,8 +19,8 @@ function render(timer) {
   updateBreakTimer(timer);
   indicator.hidden = !timer || !['running', 'paused'].includes(timer.status);
   if (indicator.hidden) return;
-  const state = timer.recovery_required ? 'Conferir tempo da sessão' : timer.rest_active ? 'Intervalo programado' : timer.status === 'paused' ? 'Pausa curta' : 'Estudo em andamento';
-  indicator.innerHTML = `<strong>${state}</strong><span>${esc(timer.title)}${timer.topic_name ? ' · ' + esc(timer.topic_name) : ''}</span><span>Voltar à sessão →</span>`;
+  const state = timer.recovery_required ? 'Conferir tempo da sessão' : timer.rest_active ? 'Intervalo programado' : timer.status === 'paused' ? 'Pausa curta' : timer.project_id ? 'Trabalho em andamento' : 'Estudo em andamento';
+  indicator.innerHTML = `<strong>${state}</strong><span>${esc(timer.title)}${(timer.topic_name||timer.step_name) ? ' · ' + esc(timer.topic_name||timer.step_name) : ''}</span><span>Voltar à sessão →</span>`;
 }
 
 export function publishTimer(timer) {

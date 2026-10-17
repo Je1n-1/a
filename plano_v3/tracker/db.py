@@ -103,6 +103,8 @@ def diagnostics(path):
             raise RuntimeError("Banco incompatível: use um banco V3 criado por --init-db.")
         required = {
             "topics",
+            "projects",
+            "project_steps",
             "courses",
             "subjects",
             "timers",
@@ -137,6 +139,12 @@ def diagnostics(path):
             ).fetchone()
             if mismatch:
                 raise RuntimeError("Vínculo de tópico inconsistente com a disciplina.")
+        for table in ("timers", "study_sessions"):
+            mismatch = conn.execute(f"""SELECT x.id FROM {table} x LEFT JOIN project_steps st ON st.id=x.step_id
+                WHERE (x.project_id IS NOT NULL AND (x.subject_id IS NOT NULL OR x.topic_id IS NOT NULL OR x.project_name IS NULL OR x.session_kind='review'))
+                OR (x.step_id IS NOT NULL AND (x.project_id IS NULL OR st.project_id IS NOT x.project_id OR x.step_name IS NULL)) LIMIT 1""").fetchone()
+            if mismatch:
+                raise RuntimeError("Vínculo de projeto ou etapa inconsistente.")
         return {
             "path": str(path),
             "schema": list(applied),

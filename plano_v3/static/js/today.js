@@ -1,3 +1,5 @@
+import {projectPicker} from './project-picker.js';
+import {activityLink} from './activity-link.js';
 import {enableBreakSound} from './break-alarm.js';
 import {
   topicPicker
@@ -31,6 +33,17 @@ let subjects = [],
   generation = 0,
   loaded = false;
 const picker = topicPicker($('#start-topics'), {allowBulk: true});
+const workPicker = projectPicker($('#project-choice'));
+const isProject = () => $('#activity-kind').value === 'project';
+function activityMode() {
+  $('#study-choice').hidden = isProject();
+  $('#project-choice').hidden = !isProject();
+  $('#study-choice').querySelectorAll('input,select,button').forEach(x=>x.disabled=isProject());
+  $('#project-choice').querySelectorAll('input,select').forEach(x=>x.disabled=!isProject());
+  $('#start-button').textContent = isProject()?'▶ Iniciar trabalho':'▶ Iniciar estudo';
+}
+$('#activity-kind').onchange = async () => {activityMode();operationKey=crypto.randomUUID();if(isProject())await workPicker.load();else await prepareTopic();};
+activityMode();
 const liveSeconds = () => Math.max(0, Math.floor((performance.now() - received) / 1000));
 const elapsed = () => timer ? timer.effective_seconds + (timer.status === 'running' ? liveSeconds() : 0) : 0;
 const pauses = () => timer ? timer.break_seconds + (timer.status === 'paused' && !timer.rest_active ? liveSeconds() : 0) : 0;
@@ -55,10 +68,10 @@ function tick() {
 
 function paint() {
   publishTimer(timer);
-  $('#timer-status').textContent = timer ? (timer.rest_active ? 'Em intervalo' : timer.status === 'paused' ? 'Em pausa curta' : 'Em estudo') : 'Pronto para começar';
+  $('#timer-status').textContent = timer ? (timer.rest_active ? 'Em intervalo' : timer.status === 'paused' ? 'Em pausa curta' : timer.project_id ? 'Em trabalho' : 'Em estudo') : 'Pronto para começar';
   $('#timer-status').classList.toggle('green', timer?.status === 'running');
   $('#clock-hint').textContent = timer ? (timer.rest_active ? 'Descanso programado. Retome quando voltar.' : timer.status === 'paused' ? 'Pausa curta em andamento.' : 'Um minuto de cada vez.') : 'Seu próximo passo começa aqui.';
-  $('#active-title').innerHTML = timer ? `<strong>${esc(timer.title)}</strong>${timer.topic_name?`<span class="active-topic">${esc(timer.topic_name)} · ${timer.session_kind==='review'?'Revisão':'Estudo'}</span>`:''}<small>${esc(timer.course_name||'Estudo avulso')}</small>` : '';
+  $('#active-title').innerHTML = timer ? `<strong>${timer.project_id?'Projeto · ':''}${esc(timer.title)}</strong>${(timer.topic_name||timer.step_name)?`<span class="active-topic">${esc(timer.topic_name||timer.step_name)} · ${timer.project_id?'Trabalho':timer.project_id?'Trabalho':r.session_kind==='review'?'Revisão':'Estudo'}</span>`:''}<small>${esc(timer.course_name||(timer.project_id?'Projeto independente':'Estudo avulso'))}</small>` : '';
   $('#selection-card').hidden = !!timer;
   const needsReview = timer?.recovery_required;
   $('#recovery-notice').hidden = !needsReview;
@@ -114,7 +127,7 @@ function paintRecent({
 }) {
   $('#today-total').textContent = clock(totals.today.effective_seconds);
   $('#week-total').textContent = clock(totals.week.effective_seconds);
-  $('#recent').innerHTML = rows.length ? rows.map(r => `<article class="recent-item"><div><strong>${esc(r.title)}</strong><small>${esc(r.course_name||'Estudo avulso')} · ${esc(dateLabel(r))} · ${r.source==='manual'?(r.started_at?'Horários informados manualmente':'Duração informada manualmente'):'Cronômetro'}</small>${r.topic_name?`<p><strong>${esc(r.topic_name)}</strong> · ${r.session_kind==='review'?'Revisão':'Estudo'}</p>`:''}${r.note?`<p>${esc(r.note)}</p>`:''}<a class="inline-link repeat-study" href="/?subject=${r.subject_id||'free'}&title=${encodeURIComponent(r.title)}${r.topic_id?'&topic='+r.topic_id+'&kind='+(r.session_kind||'study'):''}">Estudar novamente</a> <button class="inline-link" data-session="${r.id}">Ver divisão por dia</button></div><div class="recent-time">${duration(r.effective_seconds)}<small>${duration(r.break_seconds)} de pausa curta</small><small>${duration(r.rest_seconds)} de intervalo</small></div></article>`).join('') : '<div class="empty"><h3>Sua primeira sessão começa hoje.</h3><p>Ao finalizar o relógio, o tempo e suas anotações aparecem aqui.</p></div>';
+  $('#recent').innerHTML = rows.length ? rows.map(r => `<article class="recent-item"><div><strong>${r.project_id?'Projeto · ':''}${esc(r.title)}</strong><small>${esc(r.course_name||(r.project_id?'Projeto independente':'Estudo avulso'))} · ${esc(dateLabel(r))} · ${r.source==='manual'?(r.started_at?'Horários informados manualmente':'Duração informada manualmente'):'Cronômetro'}</small>${(r.topic_name||r.step_name)?`<p><strong>${esc(r.topic_name||r.step_name)}</strong> · ${r.project_id?'Trabalho':r.session_kind==='review'?'Revisão':'Estudo'}</p>`:''}${r.note?`<p>${esc(r.note)}</p>`:''}<a class="inline-link repeat-study" href="${activityLink(r)}">${r.project_id?'Trabalhar novamente':'Estudar novamente'}</a> <button class="inline-link" data-session="${r.id}">Ver divisão por dia</button></div><div class="recent-time">${duration(r.effective_seconds)}<small>${duration(r.break_seconds)} de pausa curta</small><small>${duration(r.rest_seconds)} de intervalo</small></div></article>`).join('') : '<div class="empty"><h3>Sua primeira sessão começa hoje.</h3><p>Ao finalizar o relógio, o tempo e suas anotações aparecem aqui.</p></div>';
 }
 async function recent() {
   paintRecent(await api('/today?catalog=0'));
@@ -170,15 +183,15 @@ $('#start-form').onsubmit = async e => {
   e.preventDefault();
   if (busy) return;
   const selected = $('#today-subject').value;
-  if (!selected) return;
+  if (!isProject() && !selected) return;
   busy = true;
   ++generation;
   $('#start-button').disabled = true;
   $('#timer-error').textContent = '';
   try {
     accept(await send('/timer', {
-      ...picker.values(),
-      subject_id: selected === 'free' ? null : Number(selected),
+      ...(isProject()?workPicker.values():picker.values()),
+      subject_id: isProject() ? null : selected === 'free' ? null : Number(selected),
       title: $('#free-title').value,
       operation_key: operationKey
     }));
@@ -207,7 +220,7 @@ async function action(target, verb, values = {}) {
     });
     accept(result);
     notifySessionChange();
-    if (verb === 'finish') toast('Sessão salva. Seu estudo ficou registrado.');
+    if (verb === 'finish') toast('Sessão salva. Seu tempo ficou registrado.');
     if (verb === 'cancel') toast('Relógio descartado. Nenhum tempo somado ao histórico.');
     if (verb === 'recover') toast('Período confirmado. O relógio está pausado.');
     if (verb === 'finish') await recent();
@@ -271,7 +284,7 @@ $('#timer-actions').onclick = async e => {
       toast(error.message);
       return;
     }
-    return dialog('Finalizar estudo', `<p>Tempo líquido: <strong>${duration(elapsed())}</strong>. O relógio continua no estado atual até confirmar.</p>${topic ? `<p><strong>Tópico: ${esc(target.topic_name)}</strong></p><div class="dialog-grid"><label>Conclusão<select name="completed"><option value="">Manter: ${topic.completed?'concluído':'não concluído'}</option><option value="true">Marcar como concluído</option><option value="false">Marcar como não concluído</option></select></label><label>Revisão<select name="needs_review"><option value="">Manter: ${topic.needs_review?'necessária':'não pendente'}</option><option value="true">Precisa de revisão</option><option value="false">Revisão realizada / sem pendência</option></select></label></div>` : ''}<label>Anotação da sessão <span class="muted">(opcional)</span><textarea name="note" maxlength="5000" placeholder="Ex.: exercícios feitos e dúvidas que ficaram"></textarea></label>`, async values => {
+    return dialog(target.project_id?'Finalizar trabalho':'Finalizar estudo', `<p>Tempo líquido: <strong>${duration(elapsed())}</strong>. O relógio continua no estado atual até confirmar.</p>${topic ? `<p><strong>Tópico: ${esc(target.topic_name)}</strong></p><div class="dialog-grid"><label>Conclusão<select name="completed"><option value="">Manter: ${topic.completed?'concluído':'não concluído'}</option><option value="true">Marcar como concluído</option><option value="false">Marcar como não concluído</option></select></label><label>Revisão<select name="needs_review"><option value="">Manter: ${topic.needs_review?'necessária':'não pendente'}</option><option value="true">Precisa de revisão</option><option value="false">Revisão realizada / sem pendência</option></select></label></div>` : ''}<label>O que fiz nesta sessão <span class="muted">(opcional)</span><textarea name="note" maxlength="5000" placeholder="Ex.: exercícios feitos e dúvidas que ficaram"></textarea></label>`, async values => {
       const result = {};
       for (const field of ['completed', 'needs_review'])
         if (values[field]) result[field] = values[field] === 'true';
@@ -335,6 +348,10 @@ async function init() {
     if (!init.prepared) {
       const params = new URLSearchParams(location.search);
       const wanted = params.get('subject');
+      if(params.get('project')) {
+        $('#activity-kind').value='project';activityMode();
+        await workPicker.load(params.get('project'),params.get('step'));
+      }
       if (wanted && [...$('#today-subject').options].some(o => o.value === wanted)) {
         $('#today-subject').value = wanted;
         $('#subject-suggestion').hidden = true;

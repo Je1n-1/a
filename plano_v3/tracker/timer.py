@@ -1,7 +1,7 @@
 """Relógio persistido: transições serializadas, recuperação e conclusão única."""
 
 from datetime import datetime, timedelta
-from . import catalog, topics
+from . import catalog, topics, projects
 from .domain import DomainError, LOCAL_ZONE, clean, get, now
 from .sessions import instant, rebuild_days
 
@@ -37,6 +37,8 @@ def snapshot(conn, ident, current=None):
         (timer["subject_id"],),
     ).fetchone()
     timer["course_name"] = subject["course_name"] if subject else None
+    if timer["project_course_id"] is not None:
+        timer["course_name"] = get(conn, "courses", timer["project_course_id"])["name"]
     session = conn.execute("SELECT id FROM study_sessions WHERE timer_id=?", (ident,)).fetchone()
     timer["session_id"] = session["id"] if session else None
     confirmation = conn.execute(
@@ -75,7 +77,7 @@ def start(conn, values):
             else previous["topic_id"] == values.get("topic_id")
         )
         same_kind = previous["session_kind"] == values.get("session_kind", previous["session_kind"])
-        if previous["subject_id"] != subject_id or not same_topic or not same_kind:
+        if previous["subject_id"] != subject_id or not same_topic or not same_kind or previous["project_id"] != values.get("project_id") or previous["step_id"] != values.get("step_id"):
             raise DomainError(
                 "Identificador já utilizado em outro estudo. Confira a sessão atual.", 409
             )
@@ -92,6 +94,9 @@ def start(conn, values):
         title = subject["name"]
     else:
         title = clean(values.get("title") or "Estudo avulso", "Nome do estudo", required=True)
+    project = projects.link(conn, values)
+    if project["project_id"] is not None:
+        title = project["project_name"]
     topic = topics.link(conn, subject_id, values, allow_create=True)
     stamp = now()
     ident = conn.execute(
@@ -109,6 +114,7 @@ def start(conn, values):
     conn.execute(
         "INSERT INTO timer_intervals(timer_id,kind,started_at) VALUES (?,'focus',?)", (ident, stamp)
     )
+    projects.attach(conn, "timers", ident, project)
     return snapshot(conn, ident)
 
 
@@ -258,6 +264,7 @@ def transition(conn, ident, action, values, *, _at=None):
             "UPDATE study_sessions SET topic_id=?,topic_name=?,session_kind=?,rest_seconds=? WHERE id=?",
             (timer["topic_id"], timer["topic_name"], timer["session_kind"], totals["rest_seconds"], session_id),
         )
+        projects.attach(conn, "study_sessions", session_id, timer)
         if values.get("topic_result") is not None:
             if timer["topic_id"] is None or not isinstance(values["topic_result"], dict):
                 raise DomainError("Escolha um tópico para registrar sua conclusão ou revisão.")
@@ -311,6 +318,6 @@ def recent(conn):
     return [
         dict(row)
         for row in conn.execute("""SELECT x.*,c.name course_name FROM study_sessions x
-        LEFT JOIN subjects s ON s.id=x.subject_id LEFT JOIN courses c ON c.id=s.course_id
+        LEFT JOIN subjects s ON s.id=x.subject_id LEFT JOIN courses c ON c.id=COALESCE(s.course_id,x.project_course_id)
         ORDER BY x.id DESC LIMIT 5""")
     ]

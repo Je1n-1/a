@@ -27,7 +27,13 @@ def filters(values):
         raise DomainError("Informe datas válidas para o período.")
     if end < start or (end - start).days > 3660:
         raise DomainError("Escolha um período em ordem cronológica, com no máximo 3.661 dias.")
+    activity = values.get('activity') or 'all'
+    if activity not in ('all', 'study', 'project'):
+        raise DomainError('Escolha tudo, disciplinas ou projetos.')
     return {
+        "activity": activity,
+        "project_id": number(values.get('project_id'), 'Projeto'),
+        "step_id": number(values.get('step_id'), 'Etapa'),
         "start": start.isoformat(),
         "end": end.isoformat(),
         "course_id": number(values.get("course_id"), "Curso"),
@@ -48,10 +54,10 @@ def selection(f, *, labels=False):
     where = ["d.local_date BETWEEN ? AND ?"]
     args = [f["start"], f["end"]]
     if f["course_id"]:
-        where.append("s.course_id=?")
+        where.append("COALESCE(s.course_id,x.project_course_id)=?")
         args.append(f["course_id"])
     if f["subject_id"] == "free":
-        where.append("x.subject_id IS NULL")
+        where.append("x.subject_id IS NULL AND x.project_id IS NULL")
     elif f["subject_id"]:
         where.append("x.subject_id=?")
         args.append(f["subject_id"])
@@ -60,11 +66,19 @@ def selection(f, *, labels=False):
     elif f.get("topic_id"):
         where.append("x.topic_id=?")
         args.append(f["topic_id"])
+    if f.get('activity') == 'project':
+        where.append('x.project_id IS NOT NULL')
+    elif f.get('activity') == 'study':
+        where.append('x.project_id IS NULL')
+    for field in ('project_id', 'step_id'):
+        if f.get(field):
+            where.append('x.' + field + '=?')
+            args.append(f[field])
     joins = "FROM session_days d JOIN study_sessions x ON x.id=d.session_id"
     if labels or f["course_id"]:
         joins += " LEFT JOIN subjects s ON s.id=x.subject_id"
     if labels:
-        joins += " LEFT JOIN courses c ON c.id=s.course_id"
+        joins += " LEFT JOIN courses c ON c.id=COALESCE(s.course_id,x.project_course_id)"
     return joins + " WHERE " + " AND ".join(where), args
 
 
@@ -105,12 +119,12 @@ def history_query(f):
         """
         + clause
         + """ GROUP BY x.id)
-        SELECT x.id,x.subject_id,x.topic_id,x.topic_name,x.session_kind,x.title,x.source,x.started_at,x.ended_at,x.local_date,x.note,
+        SELECT x.id,x.project_id,x.project_name,x.step_id,x.step_name,x.project_course_id,x.subject_id,x.topic_id,x.topic_name,x.session_kind,x.title,x.source,x.started_at,x.ended_at,x.local_date,x.note,
         x.correction_version,x.allocation_mode,c.name course_name,
         selected.effective_seconds,selected.break_seconds,selected.rest_seconds,selected.first_day,selected.last_day,
         x.effective_seconds total_effective_seconds,x.break_seconds total_break_seconds,x.rest_seconds total_rest_seconds
         FROM selected JOIN study_sessions x ON x.id=selected.id
-        LEFT JOIN subjects s ON s.id=x.subject_id LEFT JOIN courses c ON c.id=s.course_id
+        LEFT JOIN subjects s ON s.id=x.subject_id LEFT JOIN courses c ON c.id=COALESCE(s.course_id,x.project_course_id)
         ORDER BY selected.last_day DESC,COALESCE(x.started_at,x.local_date) DESC,x.id DESC""",
         args,
     )
@@ -151,7 +165,7 @@ def report(conn, values):
         c.name course_name,SUM(d.effective_seconds) effective_seconds
         """
             + clause
-            + " GROUP BY x.subject_id ORDER BY effective_seconds DESC,name COLLATE NOCASE,x.subject_id",
+            + " AND x.project_id IS NULL GROUP BY x.subject_id ORDER BY effective_seconds DESC,name COLLATE NOCASE,x.subject_id",
             args,
         )
     ]
@@ -169,10 +183,20 @@ def report(conn, values):
         for r in conn.execute(
             "SELECT x.topic_id,x.subject_id,COALESCE(x.topic_name,'Sem tópico informado') name,s.name subject_name,c.name course_name,SUM(d.effective_seconds) effective_seconds "
             + clause
-            + " GROUP BY x.topic_id,x.topic_name,x.subject_id ORDER BY effective_seconds DESC,name",
+            + " AND x.project_id IS NULL GROUP BY x.topic_id,x.topic_name,x.subject_id ORDER BY effective_seconds DESC,name",
             args,
         )
     ]
+    by_project = [dict(r) for r in conn.execute(
+        "SELECT x.project_id,COALESCE(p.name,x.project_name) name,SUM(d.effective_seconds) effective_seconds "
+        + clause.replace(' WHERE ', ' LEFT JOIN projects p ON p.id=x.project_id WHERE ', 1)
+        + " AND x.project_id IS NOT NULL GROUP BY x.project_id ORDER BY effective_seconds DESC,name", args)]
+    by_step = [dict(r) for r in conn.execute(
+        "SELECT x.project_id,x.step_id,COALESCE(st.name,x.step_name,'Sem etapa informada') name,p.name subject_name,SUM(d.effective_seconds) effective_seconds "
+        + clause.replace(' WHERE ', ' LEFT JOIN projects p ON p.id=x.project_id LEFT JOIN project_steps st ON st.id=x.step_id WHERE ', 1) + " AND x.project_id IS NOT NULL GROUP BY x.project_id,x.step_id ORDER BY effective_seconds DESC,name", args)]
+    by_activity = [dict(r) for r in conn.execute(
+        "SELECT x.project_id,x.subject_id,CASE WHEN x.project_id IS NOT NULL THEN 'Projeto · ' || COALESCE(p.name,x.project_name) WHEN x.subject_id IS NOT NULL THEN 'Disciplina · ' || s.name ELSE 'Estudo avulso' END name,CASE WHEN COUNT(DISTINCT COALESCE(c.id,0))=1 THEN MAX(c.name) ELSE 'Vínculos de curso diferentes' END course_name,SUM(d.effective_seconds) effective_seconds "
+        + clause.replace(' WHERE ', ' LEFT JOIN projects p ON p.id=x.project_id WHERE ', 1) + " GROUP BY x.project_id,x.subject_id ORDER BY effective_seconds DESC,name", args)]
     pages = max(1, (period["sessions"] + f["page_size"] - 1) // f["page_size"])
     f["page"] = min(f["page"], pages)
     sql, args = history_query(f)
@@ -186,6 +210,9 @@ def report(conn, values):
         "filters": f,
         "summary": summary,
         "by_day": by_day,
+        "by_activity": by_activity,
+        "by_project": by_project,
+        "by_step": by_step,
         "by_subject": by_subject,
         "by_course": by_course,
         "by_topic": by_topic,
@@ -238,6 +265,7 @@ def export_csv(conn, values):
             "Tópico",
             "Tipo de sessão",
             "Intervalos programados no período (s)",
+            "Atividade", "Projeto", "Etapa",
         ]
     )
     for row in conn.execute(sql, args):
@@ -263,6 +291,8 @@ def export_csv(conn, values):
                 safe_cell(row["topic_name"]),
                 row["session_kind"] or "",
                 row["rest_seconds"],
+                "Projeto" if row["project_id"] else "Estudo",
+                safe_cell(row["project_name"]),safe_cell(row["step_name"]),
             ]
         )
     return "\ufeff" + output.getvalue()

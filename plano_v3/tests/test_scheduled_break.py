@@ -88,7 +88,7 @@ class ScheduledBreak(unittest.TestCase):
         r = self.client.get('/api/analytics'+f).json['history']['rows'][0]
         self.assertEqual((r['effective_seconds'],r['break_seconds'],r['rest_seconds'],r['total_rest_seconds']), (60,0,60,120))
         rows = list(csv.reader(io.StringIO(self.client.get('/api/analytics/export.csv'+f).text.lstrip('\ufeff')), delimiter=';'))
-        self.assertEqual((rows[1][9],rows[1][10],rows[1][-1]), ('120','0','60'))
+        self.assertEqual((rows[1][9],rows[1][10],rows[1][19]), ('120','0','60'))
         keep = self.client.patch(f'/api/sessions/{ident}', json={'version':1,'operation_key':'keep','reason':'Nota','note':'Conferido'} )
         self.assertEqual(keep.status_code, 200, keep.json)
         self.assertEqual(keep.json['rest_seconds'], 120)
@@ -117,7 +117,7 @@ class ScheduledBreak(unittest.TestCase):
             conn.execute("INSERT INTO timer_intervals(timer_id,kind,started_at) VALUES (1,'break','2026-10-14T17:01:00+00:00')")
         result = upgrade(path, Path(self.tmp.name) / 'backups')
         self.assertTrue(result['existing_rows_preserved'])
-        self.assertEqual(result['applied'], ['0006_rest_time'])
+        self.assertEqual(result['applied'], ['0006_rest_time', '0007_projects'])
         with patch('tracker.timer.now', return_value='2026-10-14T17:10:00+00:00'):
             t = create_app(path).test_client().get('/api/timer').json
         self.assertEqual((t['effective_seconds'],t['break_seconds'],t['rest_seconds']), (60,0,540))

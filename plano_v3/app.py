@@ -66,6 +66,10 @@ def create_app(database_path=None):
     def subjects():
         return render_template("subjects.html", page="subjects", title="Disciplinas")
 
+    @app.get("/projects")
+    def projects():
+        return render_template("projects.html", page="projects", title="Projetos")
+
     @app.get("/analytics")
     def analytics():
         return render_template("analytics.html", page="analytics", title="Análises")

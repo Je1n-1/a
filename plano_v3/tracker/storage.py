@@ -109,7 +109,7 @@ def recover_copy(database: Path, upload) -> dict:
         ).fetchone()
         counts = {
             name: conn.execute(f'SELECT COUNT(*) FROM "{name}"').fetchone()[0]
-            for name in ("courses", "subjects", "topics")
+            for name in ("courses", "subjects", "topics", "projects", "project_steps")
         }
     return {
         "path": str(destination),

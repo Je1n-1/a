@@ -13,3 +13,5 @@ backups/
 *.last-backup.json
 *.last-backup.json.*.tmp
 recovered/
+/Plano.exe
+/desktop/build/

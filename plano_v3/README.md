@@ -4,14 +4,20 @@ Registro de estudos em Flask, Jinja, JavaScript e SQLite. As Fases 1 a 4 e a hom
 
 ## Abrir nesta máquina
 
-O ambiente e o banco V3 já foram preparados. No PowerShell:
+O ambiente e o banco V3 já foram preparados. Dê dois cliques no atalho **Plano** da área de trabalho. O executável inicia o servidor em segundo plano e abre o navegador, sem terminal. Também é possível abrir `Plano.exe` nesta pasta.
+
+O ícone do Plano perto do relógio do Windows permite abrir a página ou **Encerrar servidor do Plano**. Fechar o navegador não encerra o servidor nem pausa o cronômetro. Finalize ou pause o estudo antes de encerrar, conforme sua intenção.
+
+Mantenha o executável junto da pasta do site e do ambiente `.venv`: este é um iniciador para a instalação atual, não um pacote independente para outro computador. Ele usa o banco indicado em `config.local.json`, sem criar ou atualizar bancos. Veja [o guia do executável](docs/EXECUTAVEL.md).
+
+Alternativa pelo PowerShell:
 
 ```powershell
 Set-Location 'C:\Users\jeanm\OneDrive\Desktop\repositório_site_estudos\a\plano_v3'
 .\run.ps1
 ```
 
-Abra **http://127.0.0.1:5054** e mantenha o terminal aberto. Para encerrar, pressione Ctrl+C. O servidor usa somente o endereço local, com debug desligado.
+Nesse modo alternativo, abra **http://127.0.0.1:5054** e mantenha o terminal aberto. Para encerrar, pressione Ctrl+C. O servidor usa somente o endereço local, com debug desligado.
 
 O arquivo ignorado `config.local.json` aponta para o banco escolhido; `run.ps1` exibe esse caminho ao iniciar. No ambiente atual, o Windows resolveu o diretório de dados para:
 
@@ -215,3 +221,13 @@ andamento permanece no primeiro grupo mesmo com revisão pendente; uma concluíd
 com essa pendência entra em Para revisar. Cada disciplina aparece uma vez.
 A sugestão segue os grupos e os filtros de curso/busca; dentro do grupo, usa ordem
 alfabética. Selecioná-la prepara a sessão sem iniciar o relógio.
+
+
+### Projetos
+
+A aba **Projetos** permite cadastrar objetivo, curso opcional e etapas, acompanhar
+conclusão e consultar os registros de trabalho. **Trabalhar neste projeto** abre
+o relógio de Hoje; **Registrar tempo** permite lançar atividade manualmente.
+Em Análises, **Mostrar → Projetos** oferece filtros de projeto e etapa; **Tudo**
+soma estudo e trabalho sem duplicar horas. Consulte [Projetos](docs/PROJETOS.md)
+para detalhes de uso, histórico, backup e validação.
