@@ -39,11 +39,28 @@ Essas quantidades descrevem os arquivos, não os cursos completos anteriormente 
 
 ## Próximas etapas, em ordem
 
-1. **Concorrência e idempotência (F04/F08):** nova migration para versões de cursos/disciplinas e assinatura de pedidos; atualizar API, formulários e atualização por importação; testar duas abas e retries divergentes. Não alterar migrations já aplicadas.
+1. **Concorrência e idempotência (F04/F08): concluída em 30/10/2026.** Detalhes e evidências abaixo.
 2. **Segurança e armazenamento (R01/R02/R04/R05/R06):** testes de origem e cabeçalhos, política de diagnóstico, orçamento global do parser e comparação incremental de cópias.
 3. **Acessibilidade restante:** teclado completo, zoom, contraste, leitor de tela e gráficos; as verificações responsivas acima não equivalem a certificação WCAG.
 4. **Desempenho/automação:** benchmarks em bancos sintéticos grandes, logs sanitizados, dependências reproduzíveis e relatório vinculado à versão. A contagem de testes documentada é da execução datada, não uma garantia permanente.
 5. **Evolução de produto:** propostas G01–G14 são opcionais; priorizar conforme uso, mantendo planejamento inativo e sem expandir projetos indiscriminadamente.
 6. **Entrega final:** pacote limpo, instalação/upgrade em cópia, backup externo e reinício completo do Windows. Reinício não foi realizado automaticamente.
 
-Não são entregues neste lote sincronização, autenticação, backup automático, instalador portátil ou concorrência uniforme de todos os cadastros.
+Não são entregues neste lote sincronização, autenticação, backup automático, instalador portátil ou proteção de reenvios de todas as operações do sistema.
+
+## Etapa 2 entregue — concorrência e reenvios
+
+- Migration nova `0008_catalog_concurrency`; migrations 0001–0007 não foram editadas.
+- Cursos e disciplinas exigem `version` inteiro atual nas edições, no arquivamento e na restauração. Cada escrita incrementa a versão. Conflitos retornam 409 e a lista é recarregada; o formulário preserva o texto digitado e orienta fechar/reabrir para conferir.
+- Atualização por importação exige `expected_id` e `version` da disciplina identificada na prévia. Renomeações, arquivamentos ou edições posteriores impedem a sobrescrita; todo o lote é revertido em conflito.
+- Registro manual e correção guardam SHA-256 do JSON canônico do pedido, excluindo somente `operation_key`. Ordem das propriedades não importa; conteúdo diferente com a mesma chave retorna 409. Ausência de campo versus campo explícito são pedidos diferentes. Reenvio idêntico retorna o registro atual sem reaplicar a escrita ou desfazer correções posteriores.
+- Chaves antigas, anteriores à migration, não têm assinatura reconstruída: retornam conflito com orientação para conferir o histórico. Nenhum dado antigo foi inventado ou regravado.
+- Histórico de projetos/etapas renomeados ou arquivados continua preservando os nomes originais.
+
+Validação: **104 testes Python aprovados**, testes Edge com duas abas (curso, disciplina, arquivamento, situação rápida e importação) e regressão do relógio/recuperação/intervalos/mobile. Evidências: `C:\Users\jeanm\AppData\Local\Temp\plano-catalog-concurrency-Qi3bd1` e `C:\Users\jeanm\AppData\Local\Temp\plano-timer-controls-Oace5l`.
+
+Aplicação no banco pessoal: servidor conferido parado; upgrade fez backup, ensaio em cópia e comparação de todas as colunas/linhas anteriores. Preservados 3 cursos, 178 disciplinas, 11 sessões finalizadas, 17 relógios, 14 tópicos e 1 projeto. Integridade OK e nenhuma violação de chave estrangeira. Servidor reaberto pelo executável e API conferida no esquema 0008.
+
+Relatórios e backups: `C:\Users\jeanm\PlanoBackups\concorrencia-20261030-131546` (`migration.json`, `live-smoke.json`, backup anterior, cópia ensaiada e `apos-migration.db`). A tentativa inicial de encerramento foi bloqueada pela revisão automática; a aplicação ocorreu somente depois de constatar que o servidor já estava parado.
+
+Próxima etapa: segurança e confiabilidade do armazenamento (item 2 da lista acima). A auditoria integral permanece em andamento.

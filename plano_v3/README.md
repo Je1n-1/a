@@ -235,3 +235,5 @@ para detalhes de uso, histórico, backup e validação.
 ## Auditoria de 30/10/2026
 
 O primeiro lote de correções e suas pendências estão em [ACOMPANHAMENTO_AUDITORIA.md](docs/ACOMPANHAMENTO_AUDITORIA.md). A execução de 30/10/2026 aprovou 91 testes Python e a regressão atual de navegador. O Python utilizado nesta máquina é 3.13, indicado por `python_path` em `config.local.json`; `run.ps1` e o executável respeitam esse caminho. As datas e a ordem da grade são preservadas como texto nas observações, sem planejamento ou ordenação automática.
+
+A etapa de concorrência foi entregue em 30/10/2026 com a migration `0008_catalog_concurrency`, 104 testes Python aprovados e validação em duas abas. Atualize as abas antigas após a atualização; formulários antigos sem versão são recusados, preservando o cadastro. Consulte o acompanhamento para o contrato de reenvios e as etapas restantes.
