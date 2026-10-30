@@ -63,7 +63,7 @@ class StorageTests(unittest.TestCase):
         self.assertEqual(payload, saved.read_bytes())
         self.assertEqual(content(saved), before)
         restored = self.client.post(
-            "/api/backups/recover",
+            "/api/backups/recover", headers={"X-Plano-Request":"1"},
             data={"confirmed": "true", "file": (io.BytesIO(payload), "backup.db")},
         )
         self.assertEqual(restored.status_code, 200, restored.text)
@@ -86,7 +86,7 @@ class StorageTests(unittest.TestCase):
 
     def test_requires_confirmation_and_rejects_cross_origin(self):
         self.assertEqual(self.client.post("/api/backups", json={}).status_code, 400)
-        self.assertEqual(self.client.post("/api/backups/recover", data={}).status_code, 400)
+        self.assertEqual(self.client.post("/api/backups/recover", headers={"X-Plano-Request":"1"}, data={}).status_code, 400)
         self.assertEqual(
             self.client.post(
                 "/api/backups", json={"confirmed": True}, headers={"Origin": "https://example.org"}
@@ -108,7 +108,7 @@ class StorageTests(unittest.TestCase):
             conn.commit()
         for payload in (b"not sqlite", legacy.read_bytes(), broken.read_bytes()):
             response = self.client.post(
-                "/api/backups/recover",
+                "/api/backups/recover", headers={"X-Plano-Request":"1"},
                 data={"confirmed": "true", "file": (io.BytesIO(payload), "backup.db")},
             )
             self.assertEqual(response.status_code, 400, response.text)

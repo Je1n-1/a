@@ -272,7 +272,7 @@ class TopicFlows(unittest.TestCase):
         self.assertIsNone(previous["session_kind"])
         active_before = contents(self.path)
         response = self.client.post(
-            "/api/backups/recover",
+            "/api/backups/recover", headers={"X-Plano-Request":"1"},
             data={"confirmed": "true", "file": (io.BytesIO(old_bytes), "old.db")},
         )
         self.assertEqual(response.status_code, 200, response.text)

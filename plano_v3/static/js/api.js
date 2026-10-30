@@ -25,6 +25,7 @@ export async function api(path, options = {}) {
     response = await fetch('/api' + path, {
       ...options,
       headers: {
+        'X-Plano-Request': '1',
         ...(options.body instanceof FormData ? {} : {
           'Content-Type': 'application/json'
         }),

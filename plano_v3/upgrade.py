@@ -7,6 +7,8 @@ import argparse
 from contextlib import closing
 from datetime import datetime
 import json
+import hashlib
+import struct
 from pathlib import Path
 import shutil
 import sqlite3
@@ -17,8 +19,34 @@ def quote(name):
     return '"' + name.replace('"', '""') + '"'
 
 
+def fingerprint(conn, table, columns):
+    """Hash typed, length-delimited values in bounded batches, in stable row order."""
+    digest = hashlib.sha256()
+    count = 0
+    cursor = conn.execute('SELECT ' + ','.join(quote(c) for c in columns) + ' FROM ' + quote(table) + ' ORDER BY rowid')
+    while batch := cursor.fetchmany(128):
+        for row in batch:
+            digest.update(b'R')
+            for value in row:
+                if value is None:
+                    kind, raw = b'N', b''
+                elif isinstance(value, int):
+                    kind, raw = b'I', str(value).encode('ascii')
+                elif isinstance(value, float):
+                    kind, raw = b'F', struct.pack('!d', value)
+                elif isinstance(value, bytes):
+                    kind, raw = b'B', value
+                else:
+                    kind, raw = b'T', value.encode('utf-8')
+                digest.update(kind + struct.pack('!Q', len(raw)))
+                digest.update(raw)
+            count += 1
+    return {'count': count, 'sha256': digest.hexdigest()}
+
+
 def contents(path):
     with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as conn:
+        conn.execute('BEGIN')
         if (
             conn.execute("PRAGMA integrity_check").fetchall() != [("ok",)]
             or conn.execute("PRAGMA foreign_key_check").fetchall()
@@ -34,26 +62,19 @@ def contents(path):
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name!='v3_migrations'"
             )
         ]
-        return {
-            t: {
-                "columns": [r[1] for r in conn.execute("PRAGMA table_info(" + quote(t) + ")")],
-                "rows": conn.execute("SELECT * FROM " + quote(t) + " ORDER BY rowid").fetchall(),
-            }
-            for t in tables
-        }
+        result = {}
+        for table in tables:
+            columns = [r[1] for r in conn.execute('PRAGMA table_info(' + quote(table) + ')')]
+            result[table] = {'columns': columns, **fingerprint(conn, table, columns)}
+        return result
 
 
 def verify_preserved(path, before):
     with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as conn:
+        conn.execute('BEGIN')
         for table, saved in before.items():
-            rows = conn.execute(
-                "SELECT "
-                + ",".join(quote(c) for c in saved["columns"])
-                + " FROM "
-                + quote(table)
-                + " ORDER BY rowid"
-            ).fetchall()
-            if rows != saved["rows"]:
+            actual = fingerprint(conn, table, saved['columns'])
+            if actual != {key: saved[key] for key in ('count', 'sha256')}:
                 raise RuntimeError(
                     "Divergência na preservação de "
                     + table
@@ -98,7 +119,7 @@ def upgrade(database, backup_dir):
         "verified_copy": str(candidate),
         "applied": changed,
         "existing_rows_preserved": True,
-        "counts_before": {t: len(v["rows"]) for t, v in before.items()},
+        "counts_before": {t: v['count'] for t, v in before.items()},
         "diagnostics": db.diagnostics(source),
     }
 

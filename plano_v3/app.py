@@ -3,10 +3,10 @@
 import argparse
 import os
 from pathlib import Path
-from urllib.parse import urlsplit
 from flask import Flask, jsonify, render_template, request, url_for
 from werkzeug.exceptions import RequestEntityTooLarge
 from tracker import db
+from tracker.security import protect_request, protect_response
 from tracker.http import api
 from tracker.storage_http import api as storage_api
 
@@ -32,18 +32,13 @@ def create_app(database_path=None):
     app.config.update(DATABASE_PATH=path, MAX_CONTENT_LENGTH=65 * 1024 * 1024)
     app.register_blueprint(api)
     app.register_blueprint(storage_api)
+    app.after_request(protect_response)
 
     @app.before_request
     def local_requests():
-        if request.host.split(":")[0] not in ("localhost", "127.0.0.1"):
-            return jsonify(error="Aplicação disponível somente no endereço local."), 403
-        origin = request.headers.get("Origin")
-        if (
-            request.method not in ("GET", "HEAD", "OPTIONS")
-            and origin
-            and urlsplit(origin).netloc != request.host
-        ):
-            return jsonify(error="Abra o Plano no endereço local para continuar."), 403
+        rejection = protect_request()
+        if rejection is not None:
+            return rejection
         if (
             request.endpoint != "storage.recover"
             and (request.content_length or 0) > 6 * 1024 * 1024

@@ -173,5 +173,6 @@ document.addEventListener('change', async e => {
   }
 });
 load().catch(error => {
-  $('#catalog').innerHTML = `<div class="empty"><h2>Não foi possível carregar.</h2><p>${esc(error.message)}</p><button class="button" onclick="location.reload()">Tentar novamente</button></div>`;
+  $('#catalog').innerHTML = `<div class="empty"><h2>Não foi possível carregar.</h2><p>${esc(error.message)}</p><button class="button" data-retry>Tentar novamente</button></div>`;
+  $('[data-retry]').onclick = () => location.reload();
 });

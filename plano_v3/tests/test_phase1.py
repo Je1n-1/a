@@ -43,7 +43,7 @@ class PhaseOne(unittest.TestCase):
         r = self.client.post(
             f"/api/courses/{course}/import/preview",
             data={"file": (io.BytesIO(content), filename), **extra},
-            content_type="multipart/form-data",
+            content_type="multipart/form-data", headers={"X-Plano-Request":"1"},
         )
         self.assertEqual(r.status_code, status, r.get_data(as_text=True))
         result = r.get_json()
