@@ -8,7 +8,7 @@ O ambiente e o banco V3 já foram preparados. Dê dois cliques no atalho **Plano
 
 O ícone do Plano perto do relógio do Windows permite abrir a página ou **Encerrar servidor do Plano**. Fechar o navegador não encerra o servidor nem pausa o cronômetro. Finalize ou pause o estudo antes de encerrar, conforme sua intenção.
 
-Mantenha o executável junto da pasta do site e do ambiente `.venv`: este é um iniciador para a instalação atual, não um pacote independente para outro computador. Ele usa o banco indicado em `config.local.json`, sem criar ou atualizar bancos. Veja [o guia do executável](docs/EXECUTAVEL.md).
+Mantenha o executável junto da pasta do site e o Python configurado disponível: este é um iniciador para a instalação atual, não um pacote independente para outro computador. Ele usa o banco indicado em `config.local.json`, sem criar ou atualizar bancos. Veja [o guia do executável](docs/EXECUTAVEL.md).
 
 Alternativa pelo PowerShell:
 
@@ -22,10 +22,10 @@ Nesse modo alternativo, abra **http://127.0.0.1:5054** e mantenha o terminal abe
 O arquivo ignorado `config.local.json` aponta para o banco escolhido; `run.ps1` exibe esse caminho ao iniciar. No ambiente atual, o Windows resolveu o diretório de dados para:
 
 ```text
-C:\Users\jeanm\AppData\Local\Packages\OpenAI.Codex_2p2nqsd0c76g0\LocalCache\Local\PlanoV3\data\plano.db
+C:\Users\jeanm\PlanoDados\data\plano.db
 ```
 
-Esse banco está fora do OneDrive e conserva os seus cadastros. Os registros artificiais dos testes ficam em outra base. Não apague os dados locais do aplicativo Codex sem antes guardar uma cópia desse banco em outro diretório. A V2 e seu banco continuam separados.
+Esse banco está fora do OneDrive e conserva os seus cadastros. Os registros artificiais dos testes ficam em outra base. Em 30/10/2026 o banco foi copiado e conferido neste diretório dedicado, fora do cache do Codex. O original foi preservado e há backup validado em `C:\Users\jeanm\PlanoBackups`. A V2 e seu banco continuam separados.
 
 ## Primeiro uso
 
@@ -129,7 +129,7 @@ Para verificar uma cópia sem sobrescrever o banco principal, inicie outra inst�
 Get-ChildItem static/js/*.js | ForEach-Object { node --check $_.FullName }
 ```
 
-Resultado atual: 65 testes automatizados aprovados, incluindo concorrência, interrupção abrupta, rateio, correções auditáveis, contrato de Hoje e reconciliação dos gráficos/histórico/CSV com mais de 100 sessões. Fluxos validados no Edge em desktop e largura de 390 px. Veja [a homologação da Fase 5](docs/FASE_5_ENTREGA.md) e [a entrega da Fase 4](docs/FASE_4_ENTREGA.md), [a Fase 3](docs/FASE_3_ENTREGA.md), [a Fase 2](docs/FASE_2_ENTREGA.md) e [a Fase 1](docs/FASE_1_ENTREGA.md).
+Resultado da homologação histórica da Fase 5: 65 testes automatizados aprovados, incluindo concorrência, interrupção abrupta, rateio, correções auditáveis, contrato de Hoje e reconciliação dos gráficos/histórico/CSV com mais de 100 sessões. Fluxos validados no Edge em desktop e largura de 390 px. Veja [a homologação da Fase 5](docs/FASE_5_ENTREGA.md) e [a entrega da Fase 4](docs/FASE_4_ENTREGA.md), [a Fase 3](docs/FASE_3_ENTREGA.md), [a Fase 2](docs/FASE_2_ENTREGA.md) e [a Fase 1](docs/FASE_1_ENTREGA.md).
 
 O script `tests/browser_phase1.cjs` registra a reprodução realizada nesta máquina: usa o Playwright do runtime local e Edge, acessa a porta 5055 e exige um banco de teste recém-inicializado, sem cursos. Nunca execute esse script contra seus dados pessoais. A dependência de automação é apenas de verificação, não do site.
 
@@ -231,3 +231,7 @@ o relógio de Hoje; **Registrar tempo** permite lançar atividade manualmente.
 Em Análises, **Mostrar → Projetos** oferece filtros de projeto e etapa; **Tudo**
 soma estudo e trabalho sem duplicar horas. Consulte [Projetos](docs/PROJETOS.md)
 para detalhes de uso, histórico, backup e validação.
+
+## Auditoria de 30/10/2026
+
+O primeiro lote de correções e suas pendências estão em [ACOMPANHAMENTO_AUDITORIA.md](docs/ACOMPANHAMENTO_AUDITORIA.md). A execução de 30/10/2026 aprovou 91 testes Python e a regressão atual de navegador. O Python utilizado nesta máquina é 3.13, indicado por `python_path` em `config.local.json`; `run.ps1` e o executável respeitam esse caminho. As datas e a ordem da grade são preservadas como texto nas observações, sem planejamento ou ordenação automática.

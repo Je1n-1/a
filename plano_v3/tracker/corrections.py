@@ -2,7 +2,7 @@
 
 import json
 from datetime import date
-from . import sessions, topics, projects
+from . import sessions, topics, projects, requests
 from .domain import DomainError, LOCAL_ZONE, clean, get, now
 
 
@@ -43,12 +43,14 @@ def history(conn, ident):
 
 def correct(conn, ident, values):
     token = clean(values.get("operation_key"), "Identificador da operação", 80, required=True)
+    request_signature = requests.signature(values)
     repeat = conn.execute(
-        "SELECT session_id FROM session_corrections WHERE operation_key=?", (token,)
+        "SELECT session_id,request_signature FROM session_corrections WHERE operation_key=?", (token,)
     ).fetchone()
     if repeat:
         if repeat["session_id"] != ident:
             raise DomainError("Identificador já utilizado em outra sessão.", 409)
+        requests.check_repeat(repeat['request_signature'], request_signature)
         return sessions.detail(conn, ident)
     old = get(conn, "study_sessions", ident)
     if type(values.get("version")) is not int or values["version"] != old["correction_version"]:
@@ -160,8 +162,8 @@ def correct(conn, ident, values):
     )
     sessions.rebuild_days(conn, ident)
     conn.execute(
-        """INSERT INTO session_corrections(session_id,version,operation_key,reason,old_values,new_values,created_at)
-        VALUES (?,?,?,?,?,?,?)""",
+        """INSERT INTO session_corrections(session_id,version,operation_key,reason,old_values,new_values,created_at,request_signature)
+        VALUES (?,?,?,?,?,?,?,?)""",
         (
             ident,
             data["correction_version"],
@@ -170,6 +172,7 @@ def correct(conn, ident, values):
             json.dumps(old, ensure_ascii=False),
             json.dumps(data, ensure_ascii=False),
             stamp,
+            request_signature,
         ),
     )
     return sessions.detail(conn, ident)

@@ -21,13 +21,20 @@ def courses(conn, archived=False):
     ]
 
 
+def check_version(old, values):
+    if type(values.get('version')) is not int or values['version'] != old['version']:
+        raise DomainError('Este cadastro mudou em outra aba. Feche e reabra o formulário para conferir os dados atuais.', 409)
+
+
 def save_course(conn, values, ident=None):
     old = get(conn, "courses", ident) if ident else {}
+    if ident:
+        check_version(old, values)
     name = clean(values.get("name", old.get("name")), "Nome do curso", required=True)
     institution = clean(values.get("institution", old.get("institution")), "Instituição")
     if ident:
         conn.execute(
-            "UPDATE courses SET name=?,institution=? WHERE id=?", (name, institution, ident)
+            "UPDATE courses SET name=?,institution=?,version=version+1 WHERE id=?", (name, institution, ident)
         )
     else:
         ident = conn.execute(
@@ -91,6 +98,8 @@ def subject_values(values, old=None):
 
 def save_subject(conn, values, ident=None):
     old = get(conn, "subjects", ident) if ident else {}
+    if ident:
+        check_version(old, values)
     course_id = old.get("course_id") if ident else values.get("course_id")
     if not isinstance(course_id, int) or isinstance(course_id, bool):
         raise DomainError("Selecione um curso.")
@@ -107,7 +116,7 @@ def save_subject(conn, values, ident=None):
         )
     if ident:
         conn.execute(
-            "UPDATE subjects SET " + ",".join(f"{k}=?" for k in data) + " WHERE id=?",
+            "UPDATE subjects SET " + ",".join(f"{k}=?" for k in data) + ",version=version+1 WHERE id=?",
             (*data.values(), ident),
         )
     else:
@@ -123,11 +132,11 @@ def save_subject(conn, values, ident=None):
     return get(conn, "subjects", ident)
 
 
-def archive(conn, kind, ident, archived):
+def archive(conn, kind, ident, archived, values):
     table = {"course": "courses", "subject": "subjects"}[kind]
-    get(conn, table, ident)
+    check_version(get(conn, table, ident), values)
     # Arquivar não apaga estudos nem interrompe um timer existente.
     conn.execute(
-        f"UPDATE {table} SET archived_at=? WHERE id=?", (now() if archived else None, ident)
+        f"UPDATE {table} SET archived_at=?,version=version+1 WHERE id=?", (now() if archived else None, ident)
     )
     return get(conn, table, ident)

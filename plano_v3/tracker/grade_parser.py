@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import io
+import math
 import re
 import unicodedata
 import zipfile
@@ -19,6 +20,7 @@ ALLOWED = {"xlsx", "csv", "tsv", "txt", "docx", "pdf"}
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024
 MAX_XLSX_UNCOMPRESSED_BYTES = 25 * 1024 * 1024
 MAX_ROWS = 1000
+MAX_PDF_PAGES = 100
 MAX_COLUMNS = 30
 HEADER_SCAN_ROWS = 20
 PREFERRED_SHEET = "GRADE_PARA_IMPORTAR"
@@ -140,11 +142,13 @@ def _as_date(value, label):
 def _hours(value):
     if value in (None, ""):
         return None, None
-    text = _clean(value).lower().replace(",", ".")
+    text = str(value).strip().lower().replace(",", ".")
     match = re.fullmatch(r"(\d+(?:\.\d+)?)\s*(?:h|hs|hora|horas)?", text)
-    if not match or float(match.group(1)) <= 0:
+    if not match:
         return None, "Carga horária deve conter apenas um número positivo de horas."
     hours = float(match.group(1))
+    if not math.isfinite(hours) or hours > 10000 or not 1 <= round(hours * 60) <= 600000:
+        return None, "Carga horária: informe de 1 a 600.000 minutos (até 10.000 horas)."
     return int(hours) if hours.is_integer() else hours, None
 
 
@@ -152,10 +156,12 @@ def _minutes(value):
     if value in (None, ""):
         return None, None
     try:
+        if isinstance(value, bool) or not re.fullmatch(r"[0-9]+", str(value)):
+            raise ValueError()
         minutes = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None, "Carga em minutos deve ser um número inteiro positivo."
-    return (minutes, None) if minutes > 0 else (None, "Carga em minutos deve ser maior que zero.")
+    return (minutes, None) if 1 <= minutes <= 600000 else (None, "Carga em minutos deve ficar entre 1 e 600.000.")
 
 
 def _include(value):
@@ -273,6 +279,22 @@ def normalize_row(raw, source, source_index, default_order, warnings=None, confi
         "confidence": confidence,
         "duplicate_action": "skip",
     }
+    # Contract: planning dates/order are preview-only in the compact tracker.
+    if any(raw.get(field) not in (None, "") for field in ("sort_order", "start_date", "end_date")):
+        row_warnings.append("Ordem e datas serão guardadas nas observações, sem agendamento ou ordenação automática.")
+    metadata = []
+    if raw.get("sort_order") not in (None, ""):
+        metadata.append(f"Ordem na grade original: {sort_order}")
+    if start_date or end_date:
+        metadata.append(f"Datas da grade original: {start_date or '—'} a {end_date or '—'}")
+    item["notes"] = "\n".join(filter(None, [item["notes"], *metadata])) or None
+    from .catalog import subject_values
+    from .domain import DomainError
+    try:
+        subject_values(item)
+    except DomainError as error:
+        if str(error) not in errors:
+            errors.append(str(error))
     item["state"] = _state(item)
     return item
 
@@ -570,7 +592,7 @@ def _pdf_noise(line):
         or value.startswith("http")
         or "disciplina carga horaria" in value
         or bool(re.match(r"\d{2}/\d{2}/\d{4},", value))
-        or "pagina" in value
+        or bool(re.fullmatch(r"pagina\s+\d+(?:\s*(?:de|/)\s*\d+)?", value))
     )
 
 
@@ -720,8 +742,12 @@ def _preview_pdf(content):
 
     try:
         reader = PdfReader(io.BytesIO(content))
+        if len(reader.pages) > MAX_PDF_PAGES:
+            raise ValueError("O PDF excede 100 páginas. Divida o documento antes de importar.")
         page_texts = [page.extract_text() or "" for page in reader.pages]
         text = "\n".join(page_texts)
+    except ValueError:
+        raise
     except Exception as error:
         raise ValueError(
             "Não foi possível ler o PDF. Verifique se está válido e sem senha."
@@ -741,8 +767,28 @@ def _preview_pdf(content):
             raise ValueError(
                 "O OCR aceita PDFs de até 12 páginas. Divida o arquivo para continuar."
             )
-        text = extract(content)
+        missing = [i for i, value in enumerate(page_texts) if not value.strip() and reader.pages[i].get_contents() is not None]
+        if any(value.strip() for value in page_texts):
+            from pypdf import PdfWriter
+            from .pdf_ocr import extract_pages
+            subset = PdfWriter()
+            for index in missing:
+                subset.add_page(reader.pages[index])
+            buffer = io.BytesIO()
+            subset.write(buffer)
+            recognized = extract_pages(buffer.getvalue())
+            if len(recognized) != len(missing) or any(not value.strip() for value in recognized):
+                raise ValueError("Uma página do PDF misto não pôde ser reconhecida. Confira as imagens; nenhuma grade parcial foi preparada.")
+            for index, value in zip(missing, recognized):
+                page_texts[index] = value
+            text = "\n".join(page_texts)
+        else:
+            text = extract(content)
     result = _uninter_pdf(text) if "UCFC" in text.upper() else _schedule_pdf(text)
+    result["page_count"] = len(page_texts)
+    if used_ocr:
+        result["ocr_page_numbers"] = [index + 1 for index in missing]
+        result["warnings"].append("Páginas submetidas a OCR: " + ", ".join(str(index + 1) for index in missing) + ". Confira a cobertura da grade.")
     if used_ocr:
         unique, seen = [], set()
         for row in result["items"]:
@@ -835,6 +881,7 @@ def annotate_duplicates(result, existing_rows):
                 "kind": "existing",
                 "existing_id": row["id"],
                 "existing_name": row["name"],
+                "version": row.get("version"),
             }
             item["warnings"].append(
                 "Já existe uma disciplina com esse nome nesta formação; Ignorar é o padrão."

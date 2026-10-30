@@ -68,9 +68,19 @@ function drawRows() {
     <div class="catalog-footer">${rows.length} disciplina(s) · Carga da grade é uma referência, não tempo estudado.</div>` : `<div class="empty"><h2>${filter||status?'Nenhuma disciplina nesse filtro.':'Sua grade ainda está vazia.'}</h2><p>${filter||status?'Tente outro nome ou situação.':'Importe um PDF ou adicione a primeira disciplina. A prévia organiza os módulos antes de salvar.'}</p>${!filter&&!status&&!c.archived_at?'<button class="button primary" data-import>↓ Importar grade curricular</button>':''}</div>`;
 }
 
+async function saveCatalog(path, values, method = 'POST') {
+  try { return await send(path, values, method); }
+  catch (error) {
+    if (error.status === 409) {
+      try { await load(); } catch { /* Preserve the conflict message and unsaved form. */ }
+    }
+    throw error;
+  }
+}
+
 function courseEditor(c) {
   dialog(c ? 'Editar curso' : 'Novo curso', `<label>Nome do curso<input name="name" required maxlength="200" value="${esc(c?.name)}" placeholder="Ex.: Engenharia Elétrica"></label><label>Instituição <span class="muted">(opcional)</span><input name="institution" maxlength="200" value="${esc(c?.institution)}" placeholder="Onde você estuda?"></label>`, async values => {
-    const saved = await send('/courses' + (c ? '/' + c.id : ''), values, c ? 'PATCH' : 'POST');
+    const saved = await saveCatalog('/courses' + (c ? '/' + c.id : ''), {...values, ...(c?{version:c.version}:{})}, c ? 'PATCH' : 'POST');
     selectedId = saved.id;
     await load();
     toast(c ? 'Curso atualizado.' : 'Curso criado. Agora você pode importar a grade.');
@@ -83,9 +93,10 @@ function subjectEditor(s) {
     const minutes = values.hours === '' ? null : Math.round(Number(values.hours) * 60);
     if (minutes !== null && (!Number.isFinite(minutes) || minutes <= 0)) throw new Error('Informe uma carga positiva.');
     delete values.hours;
-    await send('/subjects' + (s ? '/' + s.id : ''), {
+    await saveCatalog('/subjects' + (s ? '/' + s.id : ''), {
       ...values,
       course_id: c.id,
+      ...(s?{version:s.version}:{}),
       workload_minutes: minutes
     }, s ? 'PATCH' : 'POST');
     await load();
@@ -96,8 +107,9 @@ function subjectEditor(s) {
 function archive(kind, row) {
   const restoring = !!row.archived_at;
   dialog(restoring ? 'Restaurar ' + (kind === 'course' ? 'curso' : 'disciplina') : 'Arquivar ' + (kind === 'course' ? 'curso' : 'disciplina'), `<p><strong>${esc(row.name)}</strong></p><p class="muted">${restoring?'Este item voltará à sua biblioteca.':'O item sai da lista ativa. Seus estudos e sessões continuam preservados.'}</p>`, async () => {
-    await send('/' + kind + '/' + row.id + '/archive', {
-      archived: !restoring
+    await saveCatalog('/' + kind + '/' + row.id + '/archive', {
+      archived: !restoring,
+      version: row.version
     });
     await load();
     toast(restoring ? 'Item restaurado.' : 'Item arquivado.');
@@ -145,8 +157,9 @@ document.addEventListener('change', async e => {
   const previous = subject.academic_status;
   input.disabled = true;
   try {
-    const saved = await send('/subjects/' + subject.id, {
-      academic_status: input.value
+    const saved = await saveCatalog('/subjects/' + subject.id, {
+      academic_status: input.value,
+      version: subject.version
     }, 'PATCH');
     if (saved.id !== subject.id || !labels[saved.academic_status]) throw new Error('Resposta inesperada ao salvar. Atualize a lista para conferir.');
     Object.assign(subject, saved);

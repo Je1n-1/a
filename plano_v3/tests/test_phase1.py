@@ -21,7 +21,7 @@ class PhaseOne(unittest.TestCase):
         self.path = Path(self.temp.name) / "test.db"
         self.assertEqual(
             db.initialize(self.path),
-            ["0001_tracker", "0002_timer_recovery", "0003_analytics", "0004_topics", "0005_scheduled_break", "0006_rest_time", "0007_projects"],
+            ["0001_tracker", "0002_timer_recovery", "0003_analytics", "0004_topics", "0005_scheduled_break", "0006_rest_time", "0007_projects", "0008_catalog_concurrency"],
         )
         self.client = create_app(self.path).test_client()
 
@@ -111,7 +111,8 @@ class PhaseOne(unittest.TestCase):
         repeat = self.confirm(a, [{"name": " calculo   i ", "workload_minutes": 120}])
         self.assertEqual(repeat["ignored"], 1)
         self.assertEqual(self.client.get("/api/subjects").json[0]["workload_minutes"], 60)
-        self.confirm(a, [{**row, "workload_minutes": 120, "duplicate_action": "update"}])
+        existing = self.client.get(f"/api/subjects?course_id={a}").json[0]
+        self.confirm(a, [{**row, "workload_minutes": 120, "duplicate_action": "update", "expected_id": existing["id"], "version": existing["version"]}])
         self.assertEqual(self.client.get("/api/subjects").json[0]["workload_minutes"], 120)
 
     def test_batch_rollback_on_invalid_selected_row(self):
@@ -233,7 +234,7 @@ class PhaseOne(unittest.TestCase):
             resumed = self.post(f"/timer/{focus['id']}/resume", {"version": paused["version"]})
             self.assertEqual(resumed["break_seconds"], 300)
             self.post(f"/timer/{focus['id']}/pause", {"version": 1}, 409)
-        self.post(f"/course/{c}/archive", {"archived": True})
+        self.post(f"/course/{c}/archive", {"archived": True, "version": 1})
         with patch("tracker.timer.now", return_value="2026-10-10T12:35:00+00:00"):
             finished = self.post(
                 f"/timer/{focus['id']}/finish", {"version": resumed["version"], "note": "Revisão"}
@@ -246,7 +247,7 @@ class PhaseOne(unittest.TestCase):
         self.assertEqual(self.client.get("/api/sessions/recent").json[0]["note"], "Revisão")
         self.assertEqual(self.client.get("/api/subjects").json, [])
         self.post("/timer", {"subject_id": s, "operation_key": "archived"}, 409)
-        self.post(f"/course/{c}/archive", {"archived": False})
+        self.post(f"/course/{c}/archive", {"archived": False, "version": 2})
         self.assertEqual(len(self.client.get("/api/subjects").json), 1)
 
     def test_cancel_and_free_study_do_not_require_course(self):
@@ -273,15 +274,15 @@ class PhaseOne(unittest.TestCase):
         subject = self.subject(course)
         edited = self.client.patch(
             f"/api/subjects/{subject}",
-            json={"name": "Circuitos II", "code": "002", "workload_minutes": 1800},
+            json={"version": 1, "name": "Circuitos II", "code": "002", "workload_minutes": 1800},
         )
         self.assertEqual(edited.status_code, 200)
         self.assertEqual(edited.json["name"], "Circuitos II")
-        self.post(f"/subject/{subject}/archive", {"archived": True})
+        self.post(f"/subject/{subject}/archive", {"archived": True, "version": 2})
         self.assertEqual(self.client.get("/api/subjects").json, [])
         self.assertEqual(len(self.client.get("/api/subjects?archived=1").json), 1)
         self.post("/subjects", {"course_id": course, "name": "circuitos ii"}, 409)
-        self.post(f"/subject/{subject}/archive", {"archived": False})
+        self.post(f"/subject/{subject}/archive", {"archived": False, "version": 3})
         row = self.client.get("/api/subjects").json[0]
         self.assertEqual((row["id"], row["code"], row["workload_minutes"]), (subject, "002", 1800))
         self.assertEqual(db.diagnostics(self.path)["integrity"], "ok")

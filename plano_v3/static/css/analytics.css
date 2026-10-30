@@ -1,4 +1,4 @@
-.analysis-filters{display:grid;grid-template-columns:1fr 1fr 1.4fr 1.5fr auto;gap:14px;align-items:end;padding:20px}
+.analysis-filters{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;align-items:end;padding:20px}
 .analysis-filters label{margin:0;min-width:0}.analysis-filters #reset-filters{grid-column:1/-1;justify-self:start;padding:0;min-height:28px}
 .analysis-metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin:24px 0 12px}
 .analysis-metrics article{display:flex;flex-direction:column;gap:10px;padding:22px}.analysis-metrics span{font-size:12px;color:var(--muted)}
@@ -17,4 +17,6 @@
 .day-value,.day-date,.subject-bar-label small,.history-table th,.page-size{font-size:12px}
 .day-column{flex-basis:34px}
 
-.analysis-filters{grid-template-columns:repeat(3,minmax(0,1fr))}.analysis-filters #reset-filters{grid-column:auto}.history-topic{color:var(--accent)!important}.history-table td:last-child{min-width:155px}.history-table td:last-child>.button{margin-bottom:8px}
+.history-topic{color:var(--accent)!important}.history-table td:last-child{min-width:155px}.history-table td:last-child>.button{margin-bottom:8px}
+
+@media(max-width:375px){.analysis-filters{grid-template-columns:minmax(0,1fr)}}

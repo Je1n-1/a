@@ -107,7 +107,7 @@ class PhaseThree(unittest.TestCase):
         self.manual(60, subject_id=None)
         self.manual(300, date="2026-10-10")
         self.manual(120, date="2026-10-02")
-        self.client.post(f"/api/course/{self.course}/archive", json={"archived": True})
+        self.client.post(f"/api/course/{self.course}/archive", json={"archived": True, "version": 1})
         data = self.reconcile(f"start=2026-10-09&end=2026-10-09&course_id={self.course}", 600, 1)
         self.assertEqual(data["summary"]["today"]["effective_seconds"], 300)
         self.assertEqual(data["summary"]["week"]["effective_seconds"], 900)
@@ -270,7 +270,7 @@ class PhaseThree(unittest.TestCase):
             )
             c.commit()
         result = upgrade(old, Path(self.temp.name) / "backup")
-        self.assertEqual(result["applied"], ["0003_analytics", "0004_topics", "0005_scheduled_break", "0006_rest_time", "0007_projects"])
+        self.assertEqual(result["applied"], ["0003_analytics", "0004_topics", "0005_scheduled_break", "0006_rest_time", "0007_projects", "0008_catalog_concurrency"])
         with db.read_transaction(old) as c:
             self.assertEqual(
                 [

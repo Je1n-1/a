@@ -14,7 +14,7 @@ def preview(conn, course_id, upload=None, text=None, sheet=None):
     catalog.active_course(conn, course_id)
     existing = [
         dict(r)
-        for r in conn.execute("SELECT id,name FROM subjects WHERE course_id=?", (course_id,))
+        for r in conn.execute("SELECT id,name,version FROM subjects WHERE course_id=?", (course_id,))
     ]
     return grade_parser.annotate_duplicates(result, existing)
 
@@ -48,7 +48,7 @@ def confirm(conn, course_id, values):
             continue
         seen.add(data["name_key"])
         old = conn.execute(
-            "SELECT id,archived_at FROM subjects WHERE course_id=? AND name_key=?",
+            "SELECT id,archived_at,version FROM subjects WHERE course_id=? AND name_key=?",
             (course_id, data["name_key"]),
         ).fetchone()
         if old:
@@ -59,9 +59,13 @@ def confirm(conn, course_id, values):
                 raise DomainError(
                     f"Linha {index}: restaure a disciplina arquivada antes de atualizá-la.", 409
                 )
-            catalog.save_subject(conn, data, old["id"])
+            if type(row.get('expected_id')) is not int or row['expected_id'] != old['id']:
+                raise DomainError(f'Linha {index}: a disciplina mudou desde a prévia. Leia a grade novamente.', 409)
+            catalog.save_subject(conn, {**data, 'version': row.get('version')}, old["id"])
             summary["updated"] += 1
         else:
+            if action == 'update' and row.get('expected_id') is not None:
+                raise DomainError(f'Linha {index}: o nome foi alterado desde a prévia. Leia a grade novamente.', 409)
             catalog.save_subject(conn, {**data, "course_id": course_id})
             summary["inserted"] += 1
     return summary

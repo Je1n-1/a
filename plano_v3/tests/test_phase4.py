@@ -23,8 +23,8 @@ class TodayOverview(unittest.TestCase):
                 for j in range(2):
                     topic = client.post('/api/topics', json={'subject_id':subject,'name':f'Tópico {j}'}).json
                     client.patch(f'/api/topics/{topic["id"]}', json={'version':topic['version'],'needs_review':True,'completed':True})
-            client.post(f'/api/subject/{ids[2]}/archive', json={'archived':True})
-            client.post(f'/api/course/{hidden_course}/archive', json={'archived':True})
+            client.post(f'/api/subject/{ids[2]}/archive', json={'archived':True,'version':1})
+            client.post(f'/api/course/{hidden_course}/archive', json={'archived':True,'version':1})
             data = client.get('/api/today').json
             self.assertEqual(data['review_subject_ids'], ids[:2])
             self.assertEqual(len(data['subjects']), 2)

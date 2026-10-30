@@ -71,7 +71,7 @@ function paint() {
   $('#timer-status').textContent = timer ? (timer.rest_active ? 'Em intervalo' : timer.status === 'paused' ? 'Em pausa curta' : timer.project_id ? 'Em trabalho' : 'Em estudo') : 'Pronto para começar';
   $('#timer-status').classList.toggle('green', timer?.status === 'running');
   $('#clock-hint').textContent = timer ? (timer.rest_active ? 'Descanso programado. Retome quando voltar.' : timer.status === 'paused' ? 'Pausa curta em andamento.' : 'Um minuto de cada vez.') : 'Seu próximo passo começa aqui.';
-  $('#active-title').innerHTML = timer ? `<strong>${timer.project_id?'Projeto · ':''}${esc(timer.title)}</strong>${(timer.topic_name||timer.step_name)?`<span class="active-topic">${esc(timer.topic_name||timer.step_name)} · ${timer.project_id?'Trabalho':timer.project_id?'Trabalho':r.session_kind==='review'?'Revisão':'Estudo'}</span>`:''}<small>${esc(timer.course_name||(timer.project_id?'Projeto independente':'Estudo avulso'))}</small>` : '';
+  $('#active-title').innerHTML = timer ? `<strong>${timer.project_id?'Projeto · ':''}${esc(timer.title)}</strong>${(timer.topic_name||timer.step_name)?`<span class="active-topic">${esc(timer.topic_name||timer.step_name)} · ${timer.project_id?'Trabalho':timer.session_kind==='review'?'Revisão':'Estudo'}</span>`:''}<small>${esc(timer.course_name||(timer.project_id?'Projeto independente':'Estudo avulso'))}</small>` : '';
   $('#selection-card').hidden = !!timer;
   const needsReview = timer?.recovery_required;
   $('#recovery-notice').hidden = !needsReview;

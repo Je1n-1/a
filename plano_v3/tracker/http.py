@@ -86,10 +86,11 @@ def edit_subject(conn, ident):
 def archive(conn, kind, ident):
     if kind not in ("course", "subject"):
         raise DomainError("Registro não encontrado.", 404)
-    value = body().get("archived")
+    values = body()
+    value = values.get("archived")
     if type(value) is not bool:
         raise DomainError("Informe arquivar ou restaurar.")
-    return catalog.archive(conn, kind, ident, value)
+    return catalog.archive(conn, kind, ident, value, values)
 
 
 @api.post("/courses/<int:ident>/import/preview")

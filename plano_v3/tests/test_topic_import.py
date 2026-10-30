@@ -54,7 +54,7 @@ class TopicImport(unittest.TestCase):
         self.assertEqual(len(self.client.get('/api/topics').json), 2)
         p = self.post(self.prefix+'preview', {'text':'Proteção\nNovo\nnovo'})
         self.assertEqual([r['duplicate'] for r in p['rows']], [True,False,True])
-        self.post(f'/subject/{self.subject}/archive', {'archived':True})
+        self.post(f'/subject/{self.subject}/archive', {'archived':True,'version':1})
         self.post(self.prefix+'confirm', {'names':['Outro']},409)
 
     def test_preview_keeps_long_text_for_manual_editing(self):

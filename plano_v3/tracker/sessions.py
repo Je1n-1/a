@@ -1,7 +1,7 @@
 """Registro manual e rateio de intervalos reais por dia em São Paulo."""
 
 from datetime import date, datetime, time, timedelta, timezone
-from . import catalog, topics, projects
+from . import catalog, topics, projects, requests
 from .domain import DomainError, LOCAL_ZONE, clean, get, now
 
 
@@ -92,10 +92,12 @@ def rebuild_days(conn, ident):
 
 def manual(conn, values):
     request_key = clean(values.get("operation_key"), "Identificador da operação", 80, required=True)
+    request_signature = requests.signature(values)
     previous = conn.execute(
-        "SELECT id FROM study_sessions WHERE request_key=?", (request_key,)
+        "SELECT id,request_signature FROM study_sessions WHERE request_key=?", (request_key,)
     ).fetchone()
     if previous:
+        requests.check_repeat(previous['request_signature'], request_signature)
         return detail(conn, previous["id"])
     subject_id = values.get("subject_id")
     if subject_id is not None:
@@ -150,5 +152,6 @@ def manual(conn, values):
         (topic["topic_id"], topic["topic_name"], topic["session_kind"], ident),
     )
     projects.attach(conn, "study_sessions", ident, project)
+    conn.execute('UPDATE study_sessions SET request_signature=? WHERE id=?', (request_signature, ident))
     rebuild_days(conn, ident)
     return detail(conn, ident)

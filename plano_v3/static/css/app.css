@@ -294,3 +294,5 @@ progress::-webkit-progress-bar{background:var(--border);border-radius:6px}progre
 .topic-import-row{border:1px solid var(--border);border-radius:10px;padding:14px;margin:12px 0}.topic-import-row label{margin-bottom:8px}.clock-meta{flex-wrap:wrap}
 
 .subject-suggestion{margin:16px 0;padding:14px;border:1px solid var(--border);border-radius:10px}.subject-suggestion .button{display:flex;flex-direction:column;align-items:flex-start;white-space:normal;text-align:left;margin:8px 0}.subject-suggestion small{display:block;color:var(--muted);font-size:11px}
+
+@media(max-width:375px){.sidebar{flex-wrap:wrap;gap:8px}.sidebar nav{width:100%;justify-content:space-between}}

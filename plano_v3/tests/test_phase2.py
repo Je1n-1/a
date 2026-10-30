@@ -272,7 +272,7 @@ class PhaseTwo(unittest.TestCase):
         s = self.client.post(
             "/api/subjects", json={"course_id": c["id"], "name": "Disciplina"}
         ).json
-        self.client.post(f"/api/subject/{s['id']}/archive", json={"archived": True})
+        self.client.post(f"/api/subject/{s['id']}/archive", json={"archived": True, "version": 1})
         self.at(
             "2026-10-10T12:00:00+00:00", "/sessions/manual", {**base, "subject_id": s["id"]}, 409
         )
@@ -293,7 +293,7 @@ class PhaseTwo(unittest.TestCase):
             c.commit()
         result = upgrade(legacy, Path(self.temp.name) / "backups")
         self.assertEqual(
-            result["applied"], ["0002_timer_recovery", "0003_analytics", "0004_topics", "0005_scheduled_break", "0006_rest_time", "0007_projects"]
+            result["applied"], ["0002_timer_recovery", "0003_analytics", "0004_topics", "0005_scheduled_break", "0006_rest_time", "0007_projects", "0008_catalog_concurrency"]
         )
         self.assertTrue(result["existing_rows_preserved"])
         with closing(sqlite3.connect(result["backup"])) as backup:

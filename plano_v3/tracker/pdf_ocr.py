@@ -23,6 +23,10 @@ def lines_from_words(words: list[dict]) -> list[str]:
 
 
 def extract(content: bytes) -> str:
+    return "\n".join(extract_pages(content))
+
+
+def extract_pages(content: bytes) -> list[str]:
     if os.name != "nt":
         raise ValueError(
             "Este PDF precisa de OCR. A leitura local de imagens requer Windows com OCR em português."
@@ -78,15 +82,15 @@ def extract(content: bytes) -> str:
             )
         try:
             data = json.loads(result.stdout.lstrip("\ufeff"))
-            text = "\n".join("\n".join(lines_from_words(page["words"])) for page in data["pages"])
+            pages = ["\n".join(lines_from_words(page["words"])) for page in data["pages"]]
         except (ValueError, KeyError, TypeError) as error:
             raise ValueError(
                 "O OCR retornou um resultado inválido. Tente ler a grade novamente."
             ) from error
-        if not text.strip():
+        if not pages or any(not page.strip() for page in pages):
             raise ValueError(
                 "O PDF não contém texto legível, mesmo após OCR. Use uma imagem mais nítida ou uma planilha."
             )
-        return text
+        return pages
     finally:
         _worker.release()

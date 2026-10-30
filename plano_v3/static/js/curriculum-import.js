@@ -87,10 +87,7 @@ export function openImport(course, onComplete) {
           $('.form-error', el).textContent = 'Há mais de uma planilha. Escolha uma e clique em Ler grade.';
           return;
         }
-        rows = data.items.map(r => ({
-          ...r,
-          notes: [r.notes, r.start_date || r.end_date ? `Datas da grade original: ${r.start_date||'—'} a ${r.end_date||'—'}` : ''].filter(Boolean).join('\n')
-        }));
+        rows = data.items.map(r => ({...r}));
         reviewForm(data);
       } catch (error) {
         setBusy(false);
@@ -172,7 +169,9 @@ export function openImport(course, onComplete) {
           workload_minutes: r.workload_minutes,
           academic_status: r.academic_status,
           notes: r.notes || '',
-          duplicate_action: r.duplicate_action || 'skip'
+          duplicate_action: r.duplicate_action || 'skip',
+          expected_id: r.duplicate?.existing_id,
+          version: r.duplicate?.version
         }));
         setBusy(true);
         const result = await send(`/courses/${course.id}/import/confirm`, {
