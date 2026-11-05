@@ -113,6 +113,10 @@ def diagnostics(path):
             "timer_recoveries",
             "session_days",
             "session_corrections",
+            "objectives",
+            "objective_stages",
+            "objective_tasks",
+            "objective_dependencies",
         }
         if not required.issubset(tables):
             raise RuntimeError("Banco V3 incompleto: faltam tabelas. Restaure uma cópia íntegra.")

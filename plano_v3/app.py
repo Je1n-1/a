@@ -9,6 +9,7 @@ from tracker import db
 from tracker.security import protect_request, protect_response
 from tracker.http import api
 from tracker.storage_http import api as storage_api
+from tracker.objectives_http import api as objectives_api
 
 ROOT = Path(__file__).resolve().parent
 
@@ -32,6 +33,7 @@ def create_app(database_path=None):
     app.config.update(DATABASE_PATH=path, MAX_CONTENT_LENGTH=65 * 1024 * 1024)
     app.register_blueprint(api)
     app.register_blueprint(storage_api)
+    app.register_blueprint(objectives_api)
     app.after_request(protect_response)
 
     @app.before_request
@@ -68,6 +70,10 @@ def create_app(database_path=None):
     @app.get("/analytics")
     def analytics():
         return render_template("analytics.html", page="analytics", title="Análises")
+
+    @app.get('/objectives')
+    def objectives():
+        return render_template('objectives.html', page='objectives', title='Objetivos')
 
     @app.errorhandler(413)
     def too_large(_):

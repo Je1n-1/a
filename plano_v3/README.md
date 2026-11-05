@@ -29,6 +29,8 @@ Esse banco está fora do OneDrive e conserva os seus cadastros. Os registros art
 
 ## Primeiro uso
 
+A aba **Objetivos** permite criar caminhos próprios com etapas, afazeres, estimativas e vínculos opcionais aos estudos existentes. O fluxo **Novo objetivo com IA** prepara um texto para uma IA externa e importa a proposta JSON com revisão antes de salvar. Consulte [o guia de Objetivos](docs/OBJETIVOS.md) para os critérios de progresso, tempo e recuperação.
+
 1. Abra **Disciplinas**, crie um curso e clique em **Importar grade**.
 2. Escolha XLSX, CSV, TSV, TXT, DOCX, PDF textual ou cole uma tabela. Quando houver várias planilhas, escolha a aba.
 3. Confira os nomes, códigos, períodos, cargas e classificações na prévia. Marque as linhas desejadas ou use a seleção em lote. A prévia ainda não grava dados.

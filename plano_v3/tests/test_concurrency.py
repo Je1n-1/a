@@ -146,7 +146,7 @@ class Concurrency(unittest.TestCase):
         with db.transaction(legacy) as conn:
             conn.execute("INSERT INTO courses(name,created_at) VALUES ('Existing','2026-10-15')")
         result=upgrade(legacy,Path(self.folder.name)/'backups')
-        self.assertEqual(result['applied'],['0008_catalog_concurrency'])
+        self.assertEqual(result['applied'],['0008_catalog_concurrency', '0009_objectives'])
         self.assertTrue(result['existing_rows_preserved'])
         with db.read_transaction(legacy) as conn:
             row=conn.execute('SELECT name,version FROM courses').fetchone()

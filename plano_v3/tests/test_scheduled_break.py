@@ -117,7 +117,7 @@ class ScheduledBreak(unittest.TestCase):
             conn.execute("INSERT INTO timer_intervals(timer_id,kind,started_at) VALUES (1,'break','2026-10-14T17:01:00+00:00')")
         result = upgrade(path, Path(self.tmp.name) / 'backups')
         self.assertTrue(result['existing_rows_preserved'])
-        self.assertEqual(result['applied'], ['0006_rest_time', '0007_projects', '0008_catalog_concurrency'])
+        self.assertEqual(result['applied'], ['0006_rest_time', '0007_projects', '0008_catalog_concurrency', '0009_objectives'])
         with patch('tracker.timer.now', return_value='2026-10-14T17:10:00+00:00'):
             t = create_app(path).test_client().get('/api/timer').json
         self.assertEqual((t['effective_seconds'],t['break_seconds'],t['rest_seconds']), (60,0,540))

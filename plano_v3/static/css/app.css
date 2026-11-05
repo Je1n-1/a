@@ -296,3 +296,16 @@ progress::-webkit-progress-bar{background:var(--border);border-radius:6px}progre
 .subject-suggestion{margin:16px 0;padding:14px;border:1px solid var(--border);border-radius:10px}.subject-suggestion .button{display:flex;flex-direction:column;align-items:flex-start;white-space:normal;text-align:left;margin:8px 0}.subject-suggestion small{display:block;color:var(--muted);font-size:11px}
 
 @media(max-width:375px){.sidebar{flex-wrap:wrap;gap:8px}.sidebar nav{width:100%;justify-content:space-between}}
+
+/* Shared navigation requested for Objectives; existing page controls stay intact. */
+.top-navigation .sidebar{position:relative;inset:auto;width:auto;max-width:1700px;margin:0 auto;border-right:0;border-bottom:1px solid var(--border);padding:15px 32px;display:flex;flex-direction:row;align-items:center;gap:30px;background:var(--bg)}
+.top-navigation .sidebar .brand{font-size:32px;flex-shrink:0}
+.top-navigation .sidebar nav{display:flex;gap:8px;flex-wrap:wrap;width:auto}
+.top-navigation .sidebar nav a{padding:10px 14px;gap:9px;font-size:13px}
+.top-navigation .sidebar-bottom{margin:0 0 0 auto;padding:0;font-size:11px;text-align:right}
+.top-navigation .sidebar-bottom .text-button{display:block;font-size:11px;padding:2px 0}
+.top-navigation main{margin:0 auto;padding:0 32px;min-height:calc(100vh - 78px)}
+.top-navigation .topbar{height:52px}
+@media(max-width:1050px){.top-navigation .sidebar-bottom{display:none}.top-navigation .sidebar{gap:20px}}
+@media(max-width:760px){.top-navigation .sidebar{padding:16px 18px;gap:16px;flex-wrap:wrap}.top-navigation .sidebar nav{width:100%;justify-content:flex-start;gap:5px}.top-navigation .sidebar nav a{padding:8px 10px;gap:6px}.top-navigation main{padding:0 18px}.top-navigation .sidebar .brand{font-size:30px}}
+@media(max-width:375px){.top-navigation .sidebar nav a{padding:7px 8px}.top-navigation .sidebar nav{gap:4px}.top-navigation .nav-icon{font-size:18px}}

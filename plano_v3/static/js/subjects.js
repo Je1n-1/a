@@ -15,6 +15,8 @@ let courses = [],
 let filter = '',
   status = '',
   lastImport = '';
+const linkedTarget = new URLSearchParams(location.search);
+if (linkedTarget.get('archived') === '1') $('#show-archived').checked = true;
 const selected = () => courses.find(c => c.id === selectedId);
 const options = value => Object.entries(labels).map(([key, label]) => `<option value="${key}" ${key===value?'selected':''}>${label}</option>`).join('');
 async function load() {
@@ -172,7 +174,27 @@ document.addEventListener('change', async e => {
     input.disabled = false;
   }
 });
-load().catch(error => {
+load().then(async () => {
+  const id = Number(linkedTarget.get('subject'));
+  if (!id) return;
+  const subject = subjects.find(s => s.id === id);
+  if (!subject) return;
+  const row = document.querySelector(`[data-status-id="${id}"], [data-archive-subject="${id}"]`)?.closest('tr');
+  row?.scrollIntoView({block:'center'});
+  if (row) { row.style.outline = '2px solid var(--accent)'; row.tabIndex = -1; row.focus({preventScroll:true}); }
+  if (linkedTarget.has('topic')) {
+    if (subject.archived_at || subject.course_archived_at) {
+      const rows = await api('/topics?archived=1&subject_id='+subject.id);
+      const topic = rows.find(t => t.id === Number(linkedTarget.get('topic')));
+      if (topic) dialog('Conteúdo arquivado · '+subject.name, `<h3>${esc(topic.name)}</h3><p>${topic.completed?'Concluído':'Não concluído'}${topic.needs_review?' · Revisão pendente':''}</p><p class="muted">Restaure o curso ou a disciplina para voltar a estudar este conteúdo.</p>`, null);
+      return;
+    }
+    await (await import('./topics.js')).openTopics(subject);
+    const target = document.querySelector(`[data-topic-id="${Number(linkedTarget.get('topic'))}"]`);
+    target?.scrollIntoView({block:'center'});
+    target?.focus({preventScroll:true});
+  }
+}).catch(error => {
   $('#catalog').innerHTML = `<div class="empty"><h2>Não foi possível carregar.</h2><p>${esc(error.message)}</p><button class="button" data-retry>Tentar novamente</button></div>`;
   $('[data-retry]').onclick = () => location.reload();
 });
