@@ -1,0 +1,12 @@
+locator.waitFor: Timeout 10000ms exceeded.
+Call log:
+  - waiting for locator('#objectives-overview') to be visible
+    23 × locator resolved to hidden <section hidden="" id="objectives-overview">…</section>
+
+    at C:\Users\jeanm\OneDrive\Desktop\repositório_site_estudos\a\plano_v3\tests\browser_objectives.cjs:136:46 {
+  log: [
+    "  - waiting for locator('#objectives-overview') to be visible",
+    '    23 × locator resolved to hidden <section hidden="" id="objectives-overview">…</section>'
+  ],
+  name: 'TimeoutError'
+}

@@ -117,6 +117,10 @@ def diagnostics(path):
             "objective_stages",
             "objective_tasks",
             "objective_dependencies",
+            "study_routes",
+            "study_route_modules",
+            "study_route_items",
+            "study_route_imports",
         }
         if not required.issubset(tables):
             raise RuntimeError("Banco V3 incompleto: faltam tabelas. Restaure uma cópia íntegra.")
@@ -143,6 +147,12 @@ def diagnostics(path):
             ).fetchone()
             if mismatch:
                 raise RuntimeError("Vínculo de tópico inconsistente com a disciplina.")
+        if conn.execute("""SELECT i.id FROM study_route_items i
+            JOIN study_route_modules m ON m.id=i.module_id
+            JOIN study_routes r ON r.id=m.route_id
+            JOIN topics t ON t.id=i.topic_id
+            WHERE t.subject_id!=r.subject_id LIMIT 1""").fetchone():
+            raise RuntimeError("Vínculo de roteiro inconsistente com a disciplina.")
         for table in ("timers", "study_sessions"):
             mismatch = conn.execute(f"""SELECT x.id FROM {table} x LEFT JOIN project_steps st ON st.id=x.step_id
                 WHERE (x.project_id IS NOT NULL AND (x.subject_id IS NOT NULL OR x.topic_id IS NOT NULL OR x.project_name IS NULL OR x.session_kind='review'))

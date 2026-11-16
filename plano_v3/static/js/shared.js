@@ -1,4 +1,5 @@
 import './active-session.js';
+import './theme.js';
 import {
   $,
   toast

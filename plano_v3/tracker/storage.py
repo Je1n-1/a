@@ -14,11 +14,48 @@ from .domain import DomainError
 MAX_BACKUP_BYTES = 64 * 1024 * 1024
 
 
+def _diagnostics_for_copy(path: Path) -> dict:
+    """Validate current V3 fully, or a recognized earlier V3 before migration."""
+    path = Path(path).resolve()
+    try:
+        current = db.diagnostics(path)
+        return current
+    except RuntimeError as latest_error:
+        # Older V3 databases are valid backup sources while the application is
+        # awaiting an explicit migration. Validate their recorded lineage and
+        # SQLite integrity without requiring tables from a newer migration.
+        with closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)) as conn:
+            tables = {row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )}
+            if "v3_migrations" not in tables:
+                raise latest_error
+            applied = dict(conn.execute("SELECT version,checksum FROM v3_migrations"))
+            expected = {version: checksum for version, checksum, _ in db.versions()}
+            if not applied or any(expected.get(version) != checksum for version, checksum in applied.items()):
+                raise latest_error
+            ordered = [version for version, _, _ in db.versions()]
+            applied_order = [version for version in ordered if version in applied]
+            if applied_order != ordered[:len(applied_order)] or len(applied_order) != len(applied):
+                raise latest_error
+            integrity = [row[0] for row in conn.execute("PRAGMA integrity_check")]
+            foreign_keys = conn.execute("PRAGMA foreign_key_check").fetchall()
+            if integrity != ["ok"] or foreign_keys:
+                raise RuntimeError("Falha na integridade do banco; backup interrompido.") from latest_error
+            return {
+                "path": str(path),
+                "schema": applied_order,
+                "integrity": "ok",
+                "foreign_key_violations": 0,
+                "last_backup": None,
+            }
+
+
 def copy_database(source: Path, target: Path) -> dict:
     source, target = Path(source).resolve(), Path(target).resolve()
-    db.diagnostics(source)
     if source == target:
         raise DomainError("Escolha um arquivo novo; o banco ativo será preservado.")
+    _diagnostics_for_copy(source)
     target.parent.mkdir(parents=True, exist_ok=True)
     # Reserva exclusiva: mesmo um destino criado entre a validação e a cópia é recusado.
     with target.open("xb"):
@@ -27,7 +64,7 @@ def copy_database(source: Path, target: Path) -> dict:
         with closing(sqlite3.connect(source.as_uri() + "?mode=ro", uri=True)) as src:
             with closing(sqlite3.connect(target)) as dst:
                 src.backup(dst)
-        return db.diagnostics(target)
+        return _diagnostics_for_copy(target)
     except Exception:
         target.unlink(missing_ok=True)  # Somente o arquivo que esta chamada acabou de criar.
         raise

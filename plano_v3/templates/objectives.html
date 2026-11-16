@@ -4,9 +4,9 @@
 <div id="objectives-app">
  <p id="objectives-error" class="form-error" role="alert"></p>
  <section id="objectives-overview">
-  <header class="page-heading"><div><p class="eyebrow">SEUS OBJETIVOS DE ESTUDO</p><h1>Objetivos<span>.</span></h1><p class="muted">O que você quer alcançar, e o caminho para chegar lá.</p></div><button class="button primary" data-action="new">＋ Novo objetivo com IA</button></header>
+  <div class="dashboard-heading"><header class="page-heading"><div><p class="eyebrow">SEUS OBJETIVOS DE ESTUDO</p><h1>Objetivos<span>.</span></h1><p class="muted">Defina, acompanhe e conclua objetivos de aprendizagem.</p></div><button class="button primary" data-action="new">{{ icon("plus") }} Novo objetivo com IA</button></header></div>
   <div id="objective-resume" class="objective-resume" hidden><span>Você tem uma proposta em rascunho.</span><button class="text-button" data-action="resume">Continuar de onde parei →</button><button class="text-button" data-action="discard-draft">Descartar rascunho</button></div>
-  <div class="objectives-layout"><aside class="objective-list"><div class="section-heading"><h2>Meus objetivos</h2><span id="objective-count" class="count"></span></div><div id="objective-cards">Carregando…</div><label class="objective-archive"><input type="checkbox" id="objectives-archived"> Ver arquivados</label></aside><section id="objective-selected" class="card"></section></div>
+  <div class="objectives-layout"><section class="card objective-list"><div class="section-heading"><h2>Meus objetivos</h2><span id="objective-count" class="count"></span></div><div id="objective-cards">Carregando…</div><label class="objective-archive"><input type="checkbox" id="objectives-archived"> Ver arquivados</label></section><section id="objective-selected" class="card"></section></div>
  </section>
  <section id="objective-detail" hidden></section>
  <section id="objective-create" hidden>

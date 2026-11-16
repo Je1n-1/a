@@ -1,0 +1,97 @@
+/* Shared import, recovery, topic and session controls. */
+.local-dot{display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--accent);margin-right:5px}
+.row-actions{display:flex;align-items:center;gap:5px;flex-wrap:wrap}
+.import-result{padding:13px 24px;background:var(--accent-bg);color:var(--accent-text);font-size:12px}
+.timer-actions{display:flex;justify-content:center;gap:10px;flex-wrap:wrap}
+.dialog-heading{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:25px}
+.dialog-heading h2{margin:0}
+.dialog-actions{display:flex;justify-content:flex-end;gap:10px;border-top:1px solid var(--border);padding-top:20px;margin-top:20px}
+.dialog-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 16px}
+.dialog-grid .wide{grid-column:1/-1}
+.diagnostic{font-size:12px}
+.diagnostic dt{color:var(--muted);margin-top:15px}
+.diagnostic dd{margin:3px 0;overflow-wrap:anywhere}
+.import-dialog{width:min(1130px,calc(100vw - 24px))}
+.import-dialog .dialog-heading{margin-bottom:12px}
+.tabs{display:flex;gap:8px;border-bottom:1px solid var(--border);padding-bottom:16px;margin-bottom:20px}
+.tabs button[aria-pressed=true]{background:var(--accent-bg);color:var(--accent-text)}
+.import-summary{display:flex;align-items:center;justify-content:space-between;gap:12px;background:var(--accent-bg);padding:14px 16px;border:1px solid var(--border);border-radius:8px;color:var(--accent-text);margin-bottom:16px}
+.import-summary p{margin:0;font-size:11px}
+.import-summary strong{font-size:15px}
+.import-summary .check-line{margin:0;color:var(--accent-text)}
+.import-rows{display:grid;gap:8px;max-height:49vh;overflow:auto;padding:3px}
+.import-row{border:1px solid var(--border);border-radius:8px;padding:12px 16px;background:var(--field);min-width:0}
+.import-row.unselected{border-style:dashed;opacity:.65}
+.import-row .check-line{margin:0 0 13px;color:var(--text);margin-bottom:4px}
+.import-fields{display:grid;grid-template-columns:2fr .75fr 1fr .7fr 1.1fr;gap:12px}
+.import-fields label{margin:0;font-size:12px}
+.import-fields input{font-size:12px;min-width:0;padding:8px}
+.import-fields select{font-size:12px;min-width:0;padding:8px}
+.import-row .row-warnings{font-size:13px;color:var(--warning);margin:8px 0 0}
+.import-row details{margin-top:10px;font-size:11px;color:var(--muted)}
+.import-row details textarea{min-height:70px}
+.import-duplicate{display:flex;gap:14px;align-items:center;margin-top:10px;font-size:11px;color:var(--warning)}
+.import-duplicate select{width:auto;font-size:12px;min-height:32px;margin:0}
+.storage-actions{display:flex;gap:10px;flex-wrap:wrap;margin:18px 0}
+.storage-confirm{display:flex;gap:10px;align-items:flex-start}
+.storage-confirm input{width:auto;flex-shrink:0;margin-top:4px}
+#common-dialog{overflow:hidden}
+#common-dialog form{display:flex;flex-direction:column;max-height:calc(90dvh - 50px)}
+#common-dialog .dialog-content{overflow-y:auto;min-height:0;padding:3px}
+#common-dialog .dialog-heading{flex-shrink:0}
+#common-dialog .dialog-actions{flex-shrink:0;margin-top:12px}
+#common-dialog .form-error{flex-shrink:0}
+.active-session{display:flex;align-items:center;gap:18px;padding:12px 16px;margin-top:18px;border:1px solid var(--border);border-radius:9px;background:var(--accent-bg);font-size:13px}
+.active-session>span:first-of-type{flex:1;overflow-wrap:anywhere}
+.active-session>strong{color:var(--accent-text)}
+.repeat-study{margin-right:14px}
+.active-topic{display:block;font-size:15px;margin:6px 0;color:var(--accent-text)}
+.topic-item{border-top:1px solid var(--border);padding:16px 0}
+.topic-item>small{display:block;color:var(--muted);font-size:13px}
+.topic-controls{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-top:12px}
+.topic-controls label{margin:0}
+.topic-create{display:flex;align-items:end;gap:12px;margin-bottom:18px}
+.topic-create label{flex:1;margin:0}
+.import-detail>summary{display:flex;align-items:center;gap:16px;cursor:pointer;color:var(--text);font-size:14px}
+.import-detail>summary strong{flex:1}
+.import-detail>summary span{font-size:13px;color:var(--muted)}
+.import-detail[open]>.import-fields{margin-top:16px}
+.import-module>header{padding:14px 16px;border:1px solid var(--border);border-radius:10px 10px 0 0;background:var(--accent-bg);display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap}
+.import-module h3{font-size:14px;margin:0}
+.import-module>header span{font-size:12px;color:var(--muted)}
+.import-module{margin-bottom:18px}
+.import-module .import-row{border-radius:0;margin:0;border-top:0}
+.topic-import-row{border:1px solid var(--border);border-radius:10px;padding:14px;margin:12px 0}
+.topic-import-row label{margin-bottom:8px}
+@media(max-width:1150px){
+.import-fields{grid-template-columns:2fr 1fr 1fr}
+}
+@media(max-width:600px){
+.import-fields{grid-template-columns:1fr 1fr}
+.import-fields label:first-child{grid-column:1/-1}
+.import-summary{align-items:flex-start;flex-direction:column}
+.import-dialog{padding:16px}
+.dialog-grid{grid-template-columns:1fr}
+.dialog-grid .wide{grid-column:auto}
+.import-rows{max-height:45vh}
+.dialog-heading h2{font-size:17px}
+.dialog-actions{gap:7px}
+.import-duplicate{flex-wrap:wrap}
+}
+@media(prefers-reduced-motion:reduce){
+*::before{transition:none!important;scroll-behavior:auto!important}
+*::after{transition:none!important;scroll-behavior:auto!important}
+}
+@media(max-width:700px){
+#common-dialog{padding:16px}
+#common-dialog form{max-height:calc(90dvh - 34px)}
+}
+/* Scheduled break reminder is shared by all pages. */
+.break-countdown{margin-top:20px;padding:20px;display:flex;align-items:center;gap:24px;flex-wrap:wrap;border-color:var(--accent-text)}
+.break-countdown>div:first-child{flex:1;min-width:240px}
+.break-countdown h2{font-size:19px;margin:8px 0}
+.break-countdown p{margin:5px 0}
+.break-countdown .actions{flex-wrap:wrap}
+.break-digits{font-size:34px;color:var(--accent-text);font-variant-numeric:tabular-nums}
+.break-expired{border-color:var(--warning);background:var(--warning-bg)}
+.break-expired .break-digits{color:var(--warning)}

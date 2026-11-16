@@ -1,0 +1,20 @@
+{
+  "passed": true,
+  "phase": "baseline",
+  "out": "C:\\Users\\jeanm\\AppData\\Local\\Temp\\plano-frontend-baseline-6ssH1X",
+  "frames": [
+    "today-dark-390.png",
+    "today-dark-1440.png",
+    "subjects-dark-390.png",
+    "subjects-dark-1440.png",
+    "objectives-dark-390.png",
+    "objectives-dark-1440.png",
+    "projects-dark-390.png",
+    "projects-dark-1440.png",
+    "analytics-dark-390.png",
+    "analytics-dark-1440.png"
+  ],
+  "errors": [],
+  "external": [],
+  "violations": []
+}

@@ -1,4 +1,5 @@
 import {$, esc, api, send, duration, dialog, toast} from './api.js';
+import {icon} from './icons.js';
 import {ObjectiveEditor} from './objective-editor.js';
 
 document.body.classList.add('objectives-page');
@@ -32,7 +33,7 @@ function navigate(view, id = current?.id, replace = false) {
 }
 function renderCards() {
   $('#objective-count').textContent = objectives.length;
-  $('#objective-cards').innerHTML = objectives.map(o => `<button class="objective-card" data-select="${o.id}" aria-pressed="${current?.id===o.id}"><strong>${esc(o.title)}</strong><small>${o.progress}% concluído</small>${progress(o.progress)}</button>`).join('') || '<p class="muted">'+($('#objectives-archived').checked?'Nenhum objetivo arquivado.':'Seus caminhos aparecerão aqui.')+'</p>';
+  $('#objective-cards').innerHTML = objectives.map(o => `<button class="objective-card" data-select="${o.id}" aria-pressed="${current?.id===o.id}"><span class="objective-card-icon" aria-hidden="true">${icon(o.progress===100?'check':'target')}</span><span class="objective-card-body"><strong>${esc(o.title)}</strong><span class="objective-card-description">${esc(o.description)}</span><span class="objective-card-meta">${o.completed}/${o.task_count} afazeres concluídos · ${hours(o.planned_minutes*60)} previstas</span>${progress(o.progress)}</span><span class="objective-card-percent">${o.progress}%</span></button>`).join('') || '<p class="muted">'+($('#objectives-archived').checked?'Nenhum objetivo arquivado.':'Seus caminhos aparecerão aqui.')+'</p>';
 }
 function nextTask(o) {
   const task = o.next_task;

@@ -1,7 +1,7 @@
 from functools import wraps
 import sqlite3
 from flask import Blueprint, Response, current_app, jsonify, request
-from . import catalog, db, imports, timer, sessions, analytics, corrections, today, storage, topics, projects
+from . import catalog, db, imports, timer, sessions, analytics, corrections, today, storage, topics, projects, study_routes
 from .domain import DomainError
 
 api = Blueprint("api", __name__, url_prefix="/api")
@@ -235,6 +235,25 @@ def topic_preview(conn, ident):
 @endpoint(True)
 def topic_confirm(conn, ident):
     return topics.create_many(conn, ident, body())
+
+
+@api.get("/subjects/<int:ident>/study-route")
+@endpoint()
+def study_route_get(conn, ident):
+    return study_routes.get_for_subject(conn, ident)
+
+
+@api.post("/subjects/<int:ident>/study-route/preview")
+@endpoint()
+def study_route_preview(conn, ident):
+    values = body()
+    return study_routes.preview(conn, ident, values.get("document"), values.get("decisions", {}))
+
+
+@api.post("/subjects/<int:ident>/study-route")
+@endpoint(True)
+def study_route_confirm(conn, ident):
+    return study_routes.confirm(conn, ident, body())
 
 
 @api.get('/projects')

@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block styles %}<link rel="stylesheet" href="{{ asset('css/projects.css') }}">{% endblock %}
 {% block content %}
-<header class="page-heading"><div><p class="eyebrow">DO PLANO À PRÁTICA</p><h1>Projetos<span>.</span></h1><p class="muted">Organize o que você está construindo e registre cada avanço.</p></div><button class="button primary" id="new-project">＋ Novo projeto</button></header>
+<div class="dashboard-heading"><header class="page-heading"><div><p class="eyebrow">DO PLANO À PRÁTICA</p><h1>Projetos<span>.</span></h1><p class="muted">Organize o que você está construindo e registre cada avanço.</p></div><button class="button primary" id="new-project">{{ icon("plus") }} Novo projeto</button></header><section id="project-metrics" class="metric-grid" aria-label="Resumo dos projetos não arquivados"></section></div>
 <p id="projects-error" class="form-error" role="alert"></p>
 <section id="projects-list-view"><div class="card project-filters"><label>Mostrar<select id="project-status"><option value="active">Em aberto</option><option value="completed">Concluídos</option><option value="all">Todos</option><option value="archived">Arquivados</option></select></label><label>Buscar projeto<input type="search" id="project-search" placeholder="Nome, objetivo ou curso"></label></div><div id="project-cards" class="project-cards" aria-live="polite">Carregando…</div></section>
 <section id="project-detail" hidden></section>

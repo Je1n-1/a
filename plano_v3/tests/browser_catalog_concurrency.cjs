@@ -56,6 +56,7 @@ app.run(host='127.0.0.1', port=int(sys.argv[2]), debug=False, use_reloader=False
     const modal=p=>p.locator('#common-dialog');
     const save=async p=>{await modal(p).locator('button[type=submit]').click();await modal(p).waitFor({state:'hidden'});};
     const close=async p=>modal(p).getByRole('button',{name:'Cancelar',exact:true}).click();
+    const subjectAction=async(p,selector)=>{const button=p.locator(selector).first();if(!await button.isVisible())await p.locator('.row-action-menu summary').first().click();await button.click();};
     await Promise.all([a.goto(base+'/subjects'),b.goto(base+'/subjects')]);
     await Promise.all([a.locator('[data-edit-course]').click(),b.locator('[data-edit-course]').click()]);
     await modal(a).locator('[name=name]').fill('Curso atualizado');await save(a);
@@ -66,18 +67,18 @@ app.run(host='127.0.0.1', port=int(sys.argv[2]), debug=False, use_reloader=False
     await close(b);await b.locator('[data-edit-course]').click();
     assert.equal(await modal(b).locator('[name=name]').inputValue(),'Curso atualizado');
     await close(b);
-    await Promise.all([a.locator('[data-edit-subject]').click(),b.locator('[data-edit-subject]').click()]);
+    await Promise.all([subjectAction(a,'[data-edit-subject]'),subjectAction(b,'[data-edit-subject]')]);
     await modal(a).locator('[name=notes]').fill('Atualização preservada');await save(a);
     await modal(b).locator('[name=notes]').fill('Não deve sobrescrever');
     await modal(b).locator('button[type=submit]').click();
     await modal(b).locator('.form-error').filter({hasText:'outra aba'}).waitFor();
     await pageShot(b,'conflict.png');await close(b);
-    await b.locator('[data-edit-subject]').click();
+    await subjectAction(b,'[data-edit-subject]');
     assert.equal(await modal(b).locator('[name=notes]').inputValue(),'Atualização preservada');await close(b);
     // Stale archive confirmation must not hide a more recently edited row.
-    await b.locator('[data-archive-subject]').click();
-    await a.locator('[data-status-id]').selectOption('completed');
-    await a.locator('#notifications').filter({hasText:'Situação salva'}).waitFor();
+    await subjectAction(b,'[data-archive-subject]');
+    await subjectAction(a,'[data-edit-subject]');
+    await modal(a).locator('[name=academic_status]').selectOption('completed');await save(a);
     await modal(b).locator('button[type=submit]').click();
     await modal(b).locator('.form-error').filter({hasText:'outra aba'}).waitFor();await close(b);
     const read=async route=>(await ctx.request.get(base+'/api'+route)).json();
@@ -92,14 +93,14 @@ app.run(host='127.0.0.1', port=int(sys.argv[2]), debug=False, use_reloader=False
       await d.locator('[data-field=duplicate_action]').selectOption('update');return d;
     }
     const d=await preview(b);
-    await a.locator('[data-edit-subject]').click();await modal(a).locator('[name=notes]').fill('Conservar até revisar importação');await save(a);
+    await subjectAction(a,'[data-edit-subject]');await modal(a).locator('[name=notes]').fill('Conservar até revisar importação');await save(a);
     await d.locator('#confirm-import').click();await d.locator('.form-error').filter({hasText:'outra aba'}).waitFor();
     assert.equal((await read('/subjects'))[0].notes,'Conservar até revisar importação');
     await d.locator('[data-close]').click();
     const fresh=await preview(b);await fresh.locator('#confirm-import').click();await fresh.waitFor({state:'hidden'});
     assert.equal((await read('/subjects'))[0].workload_minutes,5400);
     assert.deepEqual(errors,[]);
-    const result={passed:true,errors,checks:['two course editors','two subject editors','stale archive','quick status','stale import','fresh import'],artifacts:out};
+    const result={passed:true,errors,checks:['two course editors','two subject editors','stale archive','explicit status edit','stale import','fresh import'],artifacts:out};
     fs.writeFileSync(path.join(out,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result,null,2));
     async function pageShot(page,name){await page.screenshot({path:path.join(out,name),fullPage:true});}
   } finally {

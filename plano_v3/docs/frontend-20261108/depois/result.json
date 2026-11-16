@@ -1,0 +1,412 @@
+{
+  "passed": true,
+  "phase": "final",
+  "out": "C:\\Users\\jeanm\\AppData\\Local\\Temp\\plano-frontend-final-fzgG7a",
+  "frames": [
+    "today-dark-390.png",
+    "today-dark-1440.png",
+    "today-light-390.png",
+    "today-light-1440.png",
+    "subjects-dark-390.png",
+    "subjects-dark-1440.png",
+    "subjects-light-390.png",
+    "subjects-light-1440.png",
+    "objectives-dark-390.png",
+    "objectives-dark-1440.png",
+    "objectives-light-390.png",
+    "objectives-light-1440.png",
+    "projects-dark-390.png",
+    "projects-dark-1440.png",
+    "projects-light-390.png",
+    "projects-light-1440.png",
+    "analytics-dark-390.png",
+    "analytics-dark-1440.png",
+    "analytics-light-390.png",
+    "analytics-light-1440.png"
+  ],
+  "contrast": [
+    {
+      "name": "today",
+      "theme": "dark",
+      "pairs": [
+        {
+          "pair": "text/panel",
+          "ratio": 14.103646846206246
+        },
+        {
+          "pair": "muted/panel2",
+          "ratio": 6.791925605851758
+        },
+        {
+          "pair": "placeholder/field",
+          "ratio": 6.687391885629872
+        },
+        {
+          "pair": "accent-text/accent-bg",
+          "ratio": 6.569509925126592
+        },
+        {
+          "pair": "on-accent/action",
+          "ratio": 5.312972553490973
+        },
+        {
+          "pair": "success/success-bg",
+          "ratio": 7.431244938036476
+        },
+        {
+          "pair": "warning/warning-bg",
+          "ratio": 7.603516984245502
+        },
+        {
+          "pair": "danger/danger-bg",
+          "ratio": 7.417816573379723
+        }
+      ]
+    },
+    {
+      "name": "today",
+      "theme": "light",
+      "pairs": [
+        {
+          "pair": "text/panel",
+          "ratio": 16.40206775904015
+        },
+        {
+          "pair": "muted/panel2",
+          "ratio": 5.681812922780371
+        },
+        {
+          "pair": "placeholder/field",
+          "ratio": 4.8212426024551505
+        },
+        {
+          "pair": "accent-text/accent-bg",
+          "ratio": 5.406431639748797
+        },
+        {
+          "pair": "on-accent/action",
+          "ratio": 5.477296105949789
+        },
+        {
+          "pair": "success/success-bg",
+          "ratio": 5.032898917337972
+        },
+        {
+          "pair": "warning/warning-bg",
+          "ratio": 6.0947908016092756
+        },
+        {
+          "pair": "danger/danger-bg",
+          "ratio": 5.415814970336843
+        }
+      ]
+    },
+    {
+      "name": "subjects",
+      "theme": "dark",
+      "pairs": [
+        {
+          "pair": "text/panel",
+          "ratio": 14.103646846206246
+        },
+        {
+          "pair": "muted/panel2",
+          "ratio": 6.791925605851758
+        },
+        {
+          "pair": "placeholder/field",
+          "ratio": 6.687391885629872
+        },
+        {
+          "pair": "accent-text/accent-bg",
+          "ratio": 6.569509925126592
+        },
+        {
+          "pair": "on-accent/action",
+          "ratio": 5.312972553490973
+        },
+        {
+          "pair": "success/success-bg",
+          "ratio": 7.431244938036476
+        },
+        {
+          "pair": "warning/warning-bg",
+          "ratio": 7.603516984245502
+        },
+        {
+          "pair": "danger/danger-bg",
+          "ratio": 7.417816573379723
+        }
+      ]
+    },
+    {
+      "name": "subjects",
+      "theme": "light",
+      "pairs": [
+        {
+          "pair": "text/panel",
+          "ratio": 16.40206775904015
+        },
+        {
+          "pair": "muted/panel2",
+          "ratio": 5.681812922780371
+        },
+        {
+          "pair": "placeholder/field",
+          "ratio": 4.8212426024551505
+        },
+        {
+          "pair": "accent-text/accent-bg",
+          "ratio": 5.406431639748797
+        },
+        {
+          "pair": "on-accent/action",
+          "ratio": 5.477296105949789
+        },
+        {
+          "pair": "success/success-bg",
+          "ratio": 5.032898917337972
+        },
+        {
+          "pair": "warning/warning-bg",
+          "ratio": 6.0947908016092756
+        },
+        {
+          "pair": "danger/danger-bg",
+          "ratio": 5.415814970336843
+        }
+      ]
+    },
+    {
+      "name": "objectives",
+      "theme": "dark",
+      "pairs": [
+        {
+          "pair": "text/panel",
+          "ratio": 14.103646846206246
+        },
+        {
+          "pair": "muted/panel2",
+          "ratio": 6.791925605851758
+        },
+        {
+          "pair": "placeholder/field",
+          "ratio": 6.687391885629872
+        },
+        {
+          "pair": "accent-text/accent-bg",
+          "ratio": 6.569509925126592
+        },
+        {
+          "pair": "on-accent/action",
+          "ratio": 5.312972553490973
+        },
+        {
+          "pair": "success/success-bg",
+          "ratio": 7.431244938036476
+        },
+        {
+          "pair": "warning/warning-bg",
+          "ratio": 7.603516984245502
+        },
+        {
+          "pair": "danger/danger-bg",
+          "ratio": 7.417816573379723
+        }
+      ]
+    },
+    {
+      "name": "objectives",
+      "theme": "light",
+      "pairs": [
+        {
+          "pair": "text/panel",
+          "ratio": 16.40206775904015
+        },
+        {
+          "pair": "muted/panel2",
+          "ratio": 5.681812922780371
+        },
+        {
+          "pair": "placeholder/field",
+          "ratio": 4.8212426024551505
+        },
+        {
+          "pair": "accent-text/accent-bg",
+          "ratio": 5.406431639748797
+        },
+        {
+          "pair": "on-accent/action",
+          "ratio": 5.477296105949789
+        },
+        {
+          "pair": "success/success-bg",
+          "ratio": 5.032898917337972
+        },
+        {
+          "pair": "warning/warning-bg",
+          "ratio": 6.0947908016092756
+        },
+        {
+          "pair": "danger/danger-bg",
+          "ratio": 5.415814970336843
+        }
+      ]
+    },
+    {
+      "name": "projects",
+      "theme": "dark",
+      "pairs": [
+        {
+          "pair": "text/panel",
+          "ratio": 14.103646846206246
+        },
+        {
+          "pair": "muted/panel2",
+          "ratio": 6.791925605851758
+        },
+        {
+          "pair": "placeholder/field",
+          "ratio": 6.687391885629872
+        },
+        {
+          "pair": "accent-text/accent-bg",
+          "ratio": 6.569509925126592
+        },
+        {
+          "pair": "on-accent/action",
+          "ratio": 5.312972553490973
+        },
+        {
+          "pair": "success/success-bg",
+          "ratio": 7.431244938036476
+        },
+        {
+          "pair": "warning/warning-bg",
+          "ratio": 7.603516984245502
+        },
+        {
+          "pair": "danger/danger-bg",
+          "ratio": 7.417816573379723
+        }
+      ]
+    },
+    {
+      "name": "projects",
+      "theme": "light",
+      "pairs": [
+        {
+          "pair": "text/panel",
+          "ratio": 16.40206775904015
+        },
+        {
+          "pair": "muted/panel2",
+          "ratio": 5.681812922780371
+        },
+        {
+          "pair": "placeholder/field",
+          "ratio": 4.8212426024551505
+        },
+        {
+          "pair": "accent-text/accent-bg",
+          "ratio": 5.406431639748797
+        },
+        {
+          "pair": "on-accent/action",
+          "ratio": 5.477296105949789
+        },
+        {
+          "pair": "success/success-bg",
+          "ratio": 5.032898917337972
+        },
+        {
+          "pair": "warning/warning-bg",
+          "ratio": 6.0947908016092756
+        },
+        {
+          "pair": "danger/danger-bg",
+          "ratio": 5.415814970336843
+        }
+      ]
+    },
+    {
+      "name": "analytics",
+      "theme": "dark",
+      "pairs": [
+        {
+          "pair": "text/panel",
+          "ratio": 14.103646846206246
+        },
+        {
+          "pair": "muted/panel2",
+          "ratio": 6.791925605851758
+        },
+        {
+          "pair": "placeholder/field",
+          "ratio": 6.687391885629872
+        },
+        {
+          "pair": "accent-text/accent-bg",
+          "ratio": 6.569509925126592
+        },
+        {
+          "pair": "on-accent/action",
+          "ratio": 5.312972553490973
+        },
+        {
+          "pair": "success/success-bg",
+          "ratio": 7.431244938036476
+        },
+        {
+          "pair": "warning/warning-bg",
+          "ratio": 7.603516984245502
+        },
+        {
+          "pair": "danger/danger-bg",
+          "ratio": 7.417816573379723
+        }
+      ]
+    },
+    {
+      "name": "analytics",
+      "theme": "light",
+      "pairs": [
+        {
+          "pair": "text/panel",
+          "ratio": 16.40206775904015
+        },
+        {
+          "pair": "muted/panel2",
+          "ratio": 5.681812922780371
+        },
+        {
+          "pair": "placeholder/field",
+          "ratio": 4.8212426024551505
+        },
+        {
+          "pair": "accent-text/accent-bg",
+          "ratio": 5.406431639748797
+        },
+        {
+          "pair": "on-accent/action",
+          "ratio": 5.477296105949789
+        },
+        {
+          "pair": "success/success-bg",
+          "ratio": 5.032898917337972
+        },
+        {
+          "pair": "warning/warning-bg",
+          "ratio": 6.0947908016092756
+        },
+        {
+          "pair": "danger/danger-bg",
+          "ratio": 5.415814970336843
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "external": [],
+  "violations": []
+}

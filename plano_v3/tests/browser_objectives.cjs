@@ -132,7 +132,9 @@ const database=path.join(out,'test.db'),pause=ms=>new Promise(r=>setTimeout(r,ms
   await page.locator('#common-dialog button[type=submit]').click();
   await page.locator('#objectives-overview').waitFor({state:'visible'});
   // Back/forward returns to the objective screen rather than leaving the app.
-  await page.locator('[data-action="detail"]').click();await page.goBack();
+  await page.locator('[data-action="detail"]').click();
+  await page.locator('#objective-detail').waitFor({state:'visible'});
+  await page.waitForURL(/view=detail/);await page.goBack();
   await page.locator('#objectives-overview').waitFor({state:'visible'});
   for(const url of ['/','/subjects','/projects','/analytics']){
     await page.goto(base+url);await page.locator('nav').waitFor();

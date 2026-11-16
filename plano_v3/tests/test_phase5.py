@@ -141,6 +141,18 @@ class StorageTests(unittest.TestCase):
         metadata = json.loads(storage.metadata_path(self.path).read_text(encoding="utf-8"))
         self.assertEqual(metadata["database"], str(self.path.resolve()))
 
+    def test_backup_accepts_recognized_previous_v3_schema(self):
+        previous = self.root / "previous-v3.db"
+        known_versions = db.versions()
+        with patch("tracker.db.versions", return_value=known_versions[:-1]):
+            self.assertEqual(db.initialize(previous), [v[0] for v in known_versions[:-1]])
+        backup = self.root / "previous-v3-backup.db"
+        report = storage.copy_database(previous, backup)
+        self.assertEqual(report["schema"], [v[0] for v in known_versions[:-1]])
+        self.assertEqual(report["integrity"], "ok")
+        self.assertEqual(report["foreign_key_violations"], 0)
+        self.assertEqual(content(previous), content(backup))
+
 
 class ScheduleRegression(unittest.TestCase):
     def test_glued_pdf_rows_preserve_both_subjects_and_workloads(self):

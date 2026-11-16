@@ -1,0 +1,13 @@
+{
+  "passed": true,
+  "errors": [],
+  "checks": [
+    "two course editors",
+    "two subject editors",
+    "stale archive",
+    "quick status",
+    "stale import",
+    "fresh import"
+  ],
+  "artifacts": "C:\\Users\\jeanm\\AppData\\Local\\Temp\\plano-catalog-concurrency-PaLMlK"
+}

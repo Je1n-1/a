@@ -1,9 +1,10 @@
 import {projectPicker} from './project-picker.js';
-import {activityLink} from './activity-link.js';
+import {icon} from './icons.js';
 import {enableBreakSound} from './break-alarm.js';
 import {
   topicPicker
 } from './topics.js';
+import {loadStudyRoute} from './study-routes.js';
 import {
   publishTimer,
   notifySessionChange
@@ -31,6 +32,9 @@ let subjects = [],
   busy = false,
   operationKey = crypto.randomUUID(),
   generation = 0,
+  routeGeneration = 0,
+  routeContext = null,
+  routeSubjectId = null,
   loaded = false;
 const picker = topicPicker($('#start-topics'), {allowBulk: true});
 const workPicker = projectPicker($('#project-choice'));
@@ -40,7 +44,7 @@ function activityMode() {
   $('#project-choice').hidden = !isProject();
   $('#study-choice').querySelectorAll('input,select,button').forEach(x=>x.disabled=isProject());
   $('#project-choice').querySelectorAll('input,select').forEach(x=>x.disabled=!isProject());
-  $('#start-button').textContent = isProject()?'▶ Iniciar trabalho':'▶ Iniciar estudo';
+  $('#start-button').innerHTML = icon('play') + (isProject()?' Iniciar trabalho':' Iniciar estudo');
 }
 $('#activity-kind').onchange = async () => {activityMode();operationKey=crypto.randomUUID();if(isProject())await workPicker.load();else await prepareTopic();};
 activityMode();
@@ -113,21 +117,9 @@ function choices() {
   $('#free-label').hidden = $('#today-subject').value !== 'free';
   $('#start-button').disabled = false;
 }
-const dateLabel = r => r.started_at ? new Intl.DateTimeFormat('pt-BR', {
-  day: '2-digit',
-  month: 'short',
-  hour: '2-digit',
-  minute: '2-digit',
-  timeZone: 'America/Sao_Paulo'
-}).format(new Date(r.started_at)) : r.local_date.split('-').reverse().join('/');
-
-function paintRecent({
-  recent: rows,
-  summary: totals
-}) {
+function paintRecent({summary: totals}) {
   $('#today-total').textContent = clock(totals.today.effective_seconds);
   $('#week-total').textContent = clock(totals.week.effective_seconds);
-  $('#recent').innerHTML = rows.length ? rows.map(r => `<article class="recent-item"><div><strong>${r.project_id?'Projeto · ':''}${esc(r.title)}</strong><small>${esc(r.course_name||(r.project_id?'Projeto independente':'Estudo avulso'))} · ${esc(dateLabel(r))} · ${r.source==='manual'?(r.started_at?'Horários informados manualmente':'Duração informada manualmente'):'Cronômetro'}</small>${(r.topic_name||r.step_name)?`<p><strong>${esc(r.topic_name||r.step_name)}</strong> · ${r.project_id?'Trabalho':r.session_kind==='review'?'Revisão':'Estudo'}</p>`:''}${r.note?`<p>${esc(r.note)}</p>`:''}<a class="inline-link repeat-study" href="${activityLink(r)}">${r.project_id?'Trabalhar novamente':'Estudar novamente'}</a> <button class="inline-link" data-session="${r.id}">Ver divisão por dia</button></div><div class="recent-time">${duration(r.effective_seconds)}<small>${duration(r.break_seconds)} de pausa curta</small><small>${duration(r.rest_seconds)} de intervalo</small></div></article>`).join('') : '<div class="empty"><h3>Sua primeira sessão começa hoje.</h3><p>Ao finalizar o relógio, o tempo e suas anotações aparecem aqui.</p></div>';
 }
 async function recent() {
   paintRecent(await api('/today?catalog=0'));
@@ -165,8 +157,51 @@ $('#today-search').oninput = () => {
 };
 
 function prepareTopic() {
-  return picker.load($('#today-subject').value === 'free' ? null : $('#today-subject').value);
+  return prepareRouteTopics();
 }
+async function prepareRouteTopics(selectedTopic = '', sessionKind = 'study') {
+  const selected=$('#today-subject').value;
+  const wrap=$('#today-route-wrap'), routeSelect=$('#today-route'), help=$('#today-route-help');
+  if (!selected || selected==='free') {
+    wrap.hidden=true;help.hidden=true;routeContext=null;routeSubjectId=null;
+    return picker.load(null, selectedTopic, sessionKind);
+  }
+  const subjectId=Number(selected), request=++routeGeneration;
+  const subjectChanged=routeSubjectId!==subjectId;
+  try {
+    if (subjectChanged || !routeContext) {
+      const loadedContext=await loadStudyRoute(subjectId);
+      if (request!==routeGeneration) return;
+      routeContext=loadedContext;
+      routeSubjectId=subjectId;
+    }
+    if (request!==routeGeneration) return;
+    const route=routeContext.route;
+    if (!route) {
+      wrap.hidden=true;
+      help.hidden=false;
+      help.innerHTML=`Este curso ainda não tem roteiro. <a href="/subjects?course=${routeContext.subject.course_id}&subject=${subjectId}">Criar roteiro em Disciplinas</a>.`;
+      return picker.load(subjectId, selectedTopic, sessionKind);
+    }
+    wrap.hidden=false;help.hidden=true;
+    const previous=subjectChanged?'main':routeSelect.value;
+    routeSelect.innerHTML=`<option value="main">${esc(route.title)} · ${route.topic_count} tópico(s)</option><option value="all">Todos os tópicos da disciplina</option>`;
+    routeSelect.value=['main','all'].includes(previous)?previous:'main';
+    let groups=null;
+    if (routeSelect.value==='main') {
+      const routeIds=new Set(route.modules.flatMap(m=>m.topics.map(t=>t.id)));
+      if (selectedTopic && !routeIds.has(Number(selectedTopic))) routeSelect.value='all';
+      else groups=route.modules.map(m=>({label:m.title,topics:m.topics}));
+    }
+    return picker.load(subjectId, selectedTopic, sessionKind, groups);
+  } catch(error) {
+    if (request!==routeGeneration) return;
+    wrap.hidden=true;help.hidden=false;
+    help.textContent='Não foi possível carregar o roteiro; os tópicos da disciplina continuam disponíveis.';
+    return picker.load(subjectId, selectedTopic, sessionKind);
+  }
+}
+$('#today-route').onchange=()=>prepareRouteTopics();
 $('#today-subject').onchange = () => {
   $('#subject-suggestion').hidden = !!$('#today-subject').value;
   $('#free-label').hidden = $('#today-subject').value !== 'free';
@@ -316,7 +351,8 @@ $('#manual-session').onclick = async () => {
     toast(error.message);
   }
 };
-$('#recent').onclick = async e => {
+const recentHistory = $('#recent');
+if (recentHistory) recentHistory.onclick = async e => {
   const id = e.target.closest('[data-session]')?.dataset.session;
   if (!id) return;
   try {
@@ -358,7 +394,7 @@ async function init() {
         $('#free-title').value = params.get('title') || '';
         $('#free-label').hidden = wanted !== 'free';
       }
-      await picker.load(wanted && wanted !== 'free' ? wanted : null, params.get('topic'), params.get('kind') === 'review' ? 'review' : 'study');
+      await prepareRouteTopics(params.get('topic'), params.get('kind') === 'review' ? 'review' : 'study');
       init.prepared = true;
     }
     paint();

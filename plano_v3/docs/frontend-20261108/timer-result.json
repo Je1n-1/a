@@ -1,0 +1,15 @@
+{
+  "passed": true,
+  "errors": [],
+  "checks": [
+    "topic study and review",
+    "reload",
+    "overdue recovery with cutoff",
+    "pause/resume",
+    "scheduled break",
+    "finish",
+    "discard preserves history",
+    "mobile"
+  ],
+  "artifacts": "C:\\Users\\jeanm\\AppData\\Local\\Temp\\plano-timer-controls-KEOcdu"
+}

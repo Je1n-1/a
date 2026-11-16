@@ -270,7 +270,7 @@ class PhaseThree(unittest.TestCase):
             )
             c.commit()
         result = upgrade(old, Path(self.temp.name) / "backup")
-        self.assertEqual(result["applied"], ["0003_analytics", "0004_topics", "0005_scheduled_break", "0006_rest_time", "0007_projects", "0008_catalog_concurrency", "0009_objectives"])
+        self.assertEqual(result["applied"], ["0003_analytics", "0004_topics", "0005_scheduled_break", "0006_rest_time", "0007_projects", "0008_catalog_concurrency", "0009_objectives", "0010_study_routes"])
         with db.read_transaction(old) as c:
             self.assertEqual(
                 [

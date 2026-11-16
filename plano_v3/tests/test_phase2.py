@@ -293,7 +293,7 @@ class PhaseTwo(unittest.TestCase):
             c.commit()
         result = upgrade(legacy, Path(self.temp.name) / "backups")
         self.assertEqual(
-            result["applied"], ["0002_timer_recovery", "0003_analytics", "0004_topics", "0005_scheduled_break", "0006_rest_time", "0007_projects", "0008_catalog_concurrency", "0009_objectives"]
+            result["applied"], ["0002_timer_recovery", "0003_analytics", "0004_topics", "0005_scheduled_break", "0006_rest_time", "0007_projects", "0008_catalog_concurrency", "0009_objectives", "0010_study_routes"]
         )
         self.assertTrue(result["existing_rows_preserved"])
         with closing(sqlite3.connect(result["backup"])) as backup:

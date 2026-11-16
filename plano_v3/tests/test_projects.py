@@ -128,7 +128,7 @@ class ProjectFlows(unittest.TestCase):
         with db.transaction(old) as conn:
             conn.execute("INSERT INTO courses(name,created_at) VALUES ('Original','2026-10-15')")
         result=upgrade(old,self.root/'backups')
-        self.assertEqual(result['applied'],['0007_projects', '0008_catalog_concurrency', '0009_objectives'])
+        self.assertEqual(result['applied'],['0007_projects', '0008_catalog_concurrency', '0009_objectives', '0010_study_routes'])
         self.assertTrue(result['existing_rows_preserved'])
         self.manual('backup',project_id=self.project['id'],step_id=self.step['id'])
         target=self.root/'backup.db'

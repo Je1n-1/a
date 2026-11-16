@@ -34,7 +34,7 @@ export function topicPicker(container, {
   }
   select.onchange = changed;
   const picker = {
-    async load(subjectId, selected = '', sessionKind = legacy ? '' : 'study') {
+    async load(subjectId, selected = '', sessionKind = legacy ? '' : 'study', routeGroups = null) {
       subject = subjectId ? Number(subjectId) : null;
       const request = ++sequence;
       container.hidden = !subject;
@@ -51,7 +51,15 @@ export function topicPicker(container, {
         const rows = await api('/topics?archived=1&subject_id=' + subject);
         if (request !== sequence) return;
         if (!Array.isArray(rows)) throw new Error('Não foi possível ler os tópicos. Selecione a disciplina novamente.');
-        select.innerHTML += rows.map(t => `<option value="${t.id}">${esc(t.name)}${t.needs_review ? ' · Revisão necessária' : t.completed ? ' · Concluído' : ''}</option>`).join('') + (allowCreate ? '<option value="new">+ Criar tópico agora</option>' : '');
+        if (Array.isArray(routeGroups)) {
+          const allowed = new Set(routeGroups.flatMap(group => group.topics.map(t => t.id)));
+          const groups = routeGroups.map(group => `<optgroup label="${esc(group.label)}">${group.topics.map(t => `<option value="${t.id}">${esc(t.name)} · ${t.needs_review?'Revisão pendente':t.completed?'Concluído':t.effective_seconds>0?'Em andamento':'Não iniciado'}</option>`).join('')}</optgroup>`).join('');
+          const unlisted = rows.filter(t => !allowed.has(t.id));
+          const outside = unlisted.length ? `<optgroup label="Fora do roteiro">${unlisted.map(t => `<option value="${t.id}">${esc(t.name)} · ${t.needs_review?'Revisão pendente':t.completed?'Concluído':t.effective_seconds>0?'Em andamento':'Não iniciado'}</option>`).join('')}</optgroup>` : '';
+          select.innerHTML += groups + outside + (allowCreate ? '<option value="new">+ Criar tópico agora</option>' : '');
+        } else {
+          select.innerHTML += rows.map(t => `<option value="${t.id}">${esc(t.name)}${t.needs_review ? ' · Revisão necessária' : t.completed ? ' · Concluído' : ''}</option>`).join('') + (allowCreate ? '<option value="new">+ Criar tópico agora</option>' : '');
+        }
         select.value = selected ? String(selected) : '';
         kind.value = sessionKind || (legacy ? '' : 'study');
         if (selected && select.value !== String(selected)) throw new Error('O tópico não está disponível nesta disciplina. Selecione outro.');
