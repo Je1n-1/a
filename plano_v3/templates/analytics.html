@@ -2,6 +2,7 @@
 {% block styles %}<link rel="stylesheet" href="{{ asset('css/analytics.css') }}">{% endblock %}
 {% block content %}
 <header class="page-heading"><div><p class="eyebrow">SEU TEMPO EM PERSPECTIVA</p><h1>Análises do seu estudo<span>.</span></h1><p class="muted">Veja onde seu tempo foi investido e acompanhe cada sessão.</p></div><button class="button secondary" id="export-csv" disabled>{{ icon("download") }} Exportar CSV</button></header>
+<details class="analysis-disclosure analysis-filter-disclosure"><summary><strong>Filtros</strong><span id="filter-summary">Últimos 30 dias · todos os cursos e conteúdos</span></summary>
 <form id="analytics-filters" class="card analysis-filters">
  <label>Mostrar<select name="activity"><option value="all">Tudo</option><option value="study">Disciplinas e estudos avulsos</option><option value="project">Projetos</option></select></label>
  <label>De<input type="date" name="start" required></label><label>Até<input type="date" name="end" required></label>
@@ -11,20 +12,20 @@
  <label data-project-filter hidden>Projeto<select name="project_id" disabled><option value="">Todos os projetos</option></select></label>
  <label data-project-filter hidden>Etapa<select name="step_id" disabled><option value="">Todas as etapas</option></select></label>
  <button class="button primary" type="submit">Aplicar filtros</button><button class="button ghost" type="button" id="reset-filters">Últimos 30 dias</button>
-</form>
+</form></details>
 <p class="field-help" id="filter-context">Horários e dias em America/Sao_Paulo.</p><p id="analytics-error" class="form-error" role="alert"></p>
 <div id="analytics-results" aria-busy="true">
  <section class="analysis-metrics" aria-label="Indicadores de tempo"><article class="card">{{ icon("clock") }}<span>Hoje</span><strong id="metric-today">—</strong><small id="count-today">Carregando…</small></article><article class="card">{{ icon("calendar") }}<span>Esta semana</span><strong id="metric-week">—</strong><small id="count-week">Segunda-feira até hoje</small></article><article class="card">{{ icon("chart") }}<span>Este mês</span><strong id="metric-month">—</strong><small id="count-month">Primeiro dia até hoje</small></article><article class="card period-metric">{{ icon("target") }}<span>Período filtrado</span><strong id="metric-period">—</strong><small id="count-period">Carregando…</small></article></section>
- <p class="field-help">Somente sessões finalizadas, com pausas e intervalos descontados. Hoje, semana e mês usam suas próprias datas e respeitam os filtros de atividade escolhidos. Os gráficos, o histórico e o CSV usam o período filtrado.</p>
+ <p class="field-help" id="live-time-note">Pausas e intervalos programados não entram no tempo líquido. O relógio em andamento aparece temporariamente nos totais e gráficos; só vai para o histórico e CSV quando você finalizar.</p>
  <div id="analysis-empty" class="card empty" hidden><h2>Nenhum estudo neste período.</h2><p>Altere os filtros ou registre sua primeira sessão em Hoje.</p><a class="button secondary" href="/">Começar um estudo →</a></div>
- <section class="analysis-charts" aria-label="Gráficos do período">
+ <details class="analysis-disclosure"><summary><strong>Gráficos do período</strong><span>Tempo por dia · distribuição por curso, disciplina, projeto ou tópico</span></summary><section class="analysis-charts" aria-label="Gráficos do período">
   <figure class="card chart-card"><figcaption><p class="eyebrow">TEMPO LÍQUIDO</p><h2>Tempo por dia</h2><p class="muted">Minutos de atividade por dia, com pausas e intervalos descontados.</p></figcaption><div class="day-plot"><div id="day-axis" class="day-axis" aria-hidden="true"></div><div class="day-chart-scroll" tabindex="0" aria-label="Gráfico por dia, rolagem horizontal"><div id="day-chart" class="day-chart"></div></div></div><p class="chart-legend"><span></span> Tempo líquido, em minutos · datas no eixo horizontal</p></figure>
   <figure class="card chart-card"><figcaption><p class="eyebrow">DISTRIBUIÇÃO DO TEMPO</p><h2>Distribuição do tempo</h2><label>Agrupar por<select id="breakdown"><option value="activity">Disciplina / projeto</option><option value="subject">Disciplina</option><option value="project">Projeto</option><option value="step">Etapa</option><option value="course">Curso</option><option value="topic">Tópico</option></select></label><p class="muted">Tempo líquido registrado no período.</p></figcaption><div id="subject-chart" class="subject-chart"></div></figure>
- </section>
- <section class="history-section"><div class="section-heading"><div><p class="eyebrow">CADA SESSÃO CONTA</p><h2>Histórico de atividades</h2></div><label class="page-size">Por página<select id="page-size"><option>20</option><option>50</option><option>100</option></select></label></div>
+ </section></details>
+ <details class="analysis-disclosure"><summary><strong>Histórico de atividades</strong><span id="history-summary">Sessões finalizadas do período</span></summary><section class="history-section"><div class="section-heading"><div><p class="eyebrow">CADA SESSÃO CONTA</p><h2>Histórico de atividades</h2></div><label class="page-size">Por página<select id="page-size"><option>20</option><option>50</option><option>100</option></select></label></div>
  <p class="field-help">Bruto = estudo + pausas curtas + intervalos programados. Em sessões que cruzam as datas do filtro, a tabela e o CSV somam apenas o trecho dentro do período. Horários mostram a sessão inteira.</p>
  <div class="card history-card"><div class="history-scroll" tabindex="0" aria-label="Tabela do histórico, rolagem horizontal"><table class="history-table"><thead><tr><th>Data / horário</th><th>Atividade / conteúdo</th><th>Bruto</th><th>Pausas curtas</th><th>Intervalos</th><th>Líquido</th><th>Origem</th><th>Nota</th><th>Ações</th></tr></thead><tbody id="history-body"></tbody></table></div><div class="history-pagination"><span id="page-info" role="status">Carregando…</span><div><button class="button secondary small" id="previous-page" disabled>← Anterior</button><button class="button secondary small" id="next-page" disabled>Próxima →</button></div></div></div>
- </section>
+ </section></details>
 </div>
 {% endblock %}
 {% block scripts %}<script type="module" src="{{ asset('js/analytics.js') }}"></script>{% endblock %}

@@ -36,7 +36,7 @@ function topicOptions(selected = '') {
 
 function projectOptions(selected='') {
   // Include projects with historical sessions in a former course too; SQL filters the snapshot.
-  field('project_id').innerHTML='<option value="">Todos os projetos</option>'+projects.map(p=>`<option value="${p.id}">${esc(p.name)}${p.archived_at?' (arquivado)':''}</option>`).join('');
+  field('project_id').innerHTML='<option value="">Todos os projetos</option>'+projects.map(p=>`<option value="${p.id}">${esc(p.name)}${p.deleted_at?' (excluído)':p.archived_at?' (arquivado)':''}</option>`).join('');
   field('project_id').value=selected;
 }
 function stepOptions(selected='') {
@@ -75,10 +75,21 @@ function render(data) {
   current = data;
   for (const key of ['today', 'week', 'month', 'period']) {
     $('#metric-' + key).textContent = clock(data.summary[key].effective_seconds);
-    $('#count-' + key).textContent = `${data.summary[key].sessions} ${data.summary[key].sessions===1?'sessão':'sessões'}${key==='week'?' · segunda até hoje':key==='month'?' · dia 1 até hoje':''}`;
+    const activeSeconds = data.summary[key].active_seconds || 0;
+    $('#count-' + key).textContent = `${data.summary[key].sessions} concluída(s)${activeSeconds?' · relógio em andamento incluído':''}${key==='week'?' · segunda até hoje':key==='month'?' · dia 1 até hoje':''}`;
   }
-  $('#analysis-empty').hidden = data.history.total > 0;
-  $('#filter-context').textContent = `Período aplicado: ${date(data.filters.start)} a ${date(data.filters.end)} · America/Sao_Paulo · Tempos no formato horas:minutos:segundos.`;
+  $('#analysis-empty').hidden = data.history.total > 0 || data.summary.period.effective_seconds > 0;
+  const selected = [];
+  for (const [name, id] of [['course_id','course_id'],['subject_id','subject_id'],['topic_id','topic_id'],['project_id','project_id'],['step_id','step_id']]) {
+    if (data.filters[id]) selected.push(field(name).selectedOptions[0]?.textContent || name);
+  }
+  const range = `${date(data.filters.start)} a ${date(data.filters.end)}`;
+  $('#filter-summary').textContent = [range, ...selected].join(' · ');
+  $('#filter-context').textContent = `Período aplicado: ${range}${selected.length?' · '+selected.join(' · '):' · todos os cursos e conteúdos'} · America/Sao_Paulo.`;
+  $('#history-summary').textContent = `${data.history.total} sessão(ões) finalizada(s) · ${clock(data.summary.period.effective_seconds)} no período`;
+  $('#live-time-note').textContent = data.summary.period.active_seconds
+    ? `Inclui ${clock(data.summary.period.active_seconds)} do relógio em andamento. Pausas e intervalos programados não contam; o tempo só entra no histórico e no CSV quando você finalizar.`
+    : 'Pausas e intervalos programados não entram no tempo líquido. O relógio em andamento aparece temporariamente nos totais e gráficos; só vai para o histórico e CSV quando você finalizar.';
   charts(data);
   $('#history-body').innerHTML = data.history.rows.length ? data.history.rows.map(r => {
     const partial = r.effective_seconds !== r.total_effective_seconds || r.break_seconds !== r.total_break_seconds || r.rest_seconds !== r.total_rest_seconds;
@@ -127,6 +138,9 @@ field('subject_id').onchange = () => topicOptions();
 $('#breakdown').onchange = () => {
   if (current) charts(current);
 };
+document.querySelectorAll('.analysis-disclosure:not(.analysis-filter-disclosure)').forEach(details => details.addEventListener('toggle', () => {
+  if (details.open && current && details.querySelector('.analysis-charts')) charts(current);
+}));
 $('#reset-filters').onclick = () => {
   form.reset();
   field('start').value = '';
@@ -205,3 +219,18 @@ async function init() {
   }
 }
 init();
+let liveSignature = null, lastLiveRender = 0;
+setInterval(async () => {
+  if (document.hidden) return;
+  try {
+    const active = await api('/timer');
+    const signature = active ? `${active.id}:${active.status}:${active.version}:${active.rest_active}:${active.recovery_required}` : 'none';
+    const changed = signature !== liveSignature;
+    liveSignature = signature;
+    const ticking = active?.status === 'running' && !active.rest_active && !active.recovery_required;
+    if (current && (changed || ticking && performance.now() - lastLiveRender >= 10000)) {
+      lastLiveRender = performance.now();
+      await load(current.history.page);
+    }
+  } catch { /* Mantém o último resumo e tenta novamente no próximo ciclo. */ }
+}, 10000);

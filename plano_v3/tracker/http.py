@@ -286,6 +286,12 @@ def project_update(conn, ident):
     return projects.save(conn, body(), ident)
 
 
+@api.post('/projects/<int:ident>/delete')
+@endpoint(True)
+def project_delete(conn, ident):
+    return projects.delete(conn, ident, body())
+
+
 @api.post('/projects/<int:ident>/steps')
 @endpoint(True)
 def step_create(conn, ident):

@@ -12,7 +12,7 @@ def listing(conn, archived=False, ident=None):
         FROM projects p LEFT JOIN courses c ON c.id=p.course_id
         LEFT JOIN (SELECT project_id,COUNT(*) total,SUM(completed) done FROM project_steps GROUP BY project_id) t ON t.project_id=p.id
         LEFT JOIN (SELECT project_id,COUNT(*) total,SUM(effective_seconds) seconds FROM study_sessions GROUP BY project_id) x ON x.project_id=p.id
-        """ + ('WHERE p.id=? ' if ident is not None else '' if archived else 'WHERE p.archived_at IS NULL ') + 'ORDER BY p.id DESC', (ident,) if ident is not None else ())]
+        """ + ('WHERE p.id=? ' if ident is not None else '' if archived else 'WHERE p.archived_at IS NULL AND p.deleted_at IS NULL ') + 'ORDER BY p.id DESC', (ident,) if ident is not None else ())]
 
 
 def detail(conn, ident):
@@ -35,6 +35,8 @@ def save(conn, values, ident=None):
     old = get(conn, 'projects', ident) if ident else {}
     if ident:
         check_version(old, values)
+        if old.get('deleted_at') and values.get('deleted') is not False:
+            raise DomainError('Restaure o projeto antes de editá-lo.', 409)
     name = clean(values.get('name', old.get('name')), 'Nome do projeto', required=True)
     objective = clean(values.get('objective', old.get('objective')), 'Objetivo', 5000)
     status = values.get('status', old.get('status', 'not_started'))
@@ -51,15 +53,35 @@ def save(conn, values, ident=None):
         if type(values['archived']) is not bool:
             raise DomainError('Informe arquivar ou restaurar.')
         archived = (archived or now()) if values['archived'] else None
+    deleted = old.get('deleted_at')
+    if 'deleted' in values:
+        if type(values['deleted']) is not bool:
+            raise DomainError('Informe se deseja restaurar o projeto.')
+        if values['deleted']:
+            raise DomainError('Use a ação Excluir projeto para movê-lo à lixeira.')
+        deleted = None
     if ident:
-        conn.execute('UPDATE projects SET name=?,objective=?,course_id=?,status=?,archived_at=?,version=version+1 WHERE id=?', (name,objective,course,status,archived,ident))
+        conn.execute('UPDATE projects SET name=?,objective=?,course_id=?,status=?,archived_at=?,deleted_at=?,version=version+1 WHERE id=?', (name,objective,course,status,archived,deleted,ident))
     else:
         ident = conn.execute('INSERT INTO projects(name,objective,course_id,status,created_at) VALUES (?,?,?,?,?)', (name,objective,course,status,now())).lastrowid
     return detail(conn, ident)
 
 
+def delete(conn, ident, values):
+    project = get(conn, 'projects', ident)
+    check_version(project, values)
+    if project.get('deleted_at'):
+        return detail(conn, ident)
+    if conn.execute("SELECT 1 FROM timers WHERE project_id=? AND status IN ('running','paused') LIMIT 1", (ident,)).fetchone():
+        raise DomainError('Finalize ou descarte o relógio deste projeto antes de excluí-lo.', 409)
+    conn.execute('UPDATE projects SET deleted_at=?,version=version+1 WHERE id=?', (now(), ident))
+    return detail(conn, ident)
+
+
 def save_step(conn, project_id, values, ident=None):
     project = get(conn, 'projects', project_id)
+    if project.get('deleted_at'):
+        raise DomainError('Restaure o projeto antes de alterar suas etapas.', 409)
     if project['archived_at']:
         raise DomainError('Restaure o projeto antes de alterar suas etapas.', 409)
     old = get(conn, 'project_steps', ident) if ident else {}
@@ -90,6 +112,8 @@ def link(conn, values, *, active=True):
         raise DomainError('Escolha um projeto ou uma disciplina para esta sessão.')
     project = get(conn, 'projects', ident)
     if active:
+        if project.get('deleted_at'):
+            raise DomainError('Restaure o projeto antes de iniciar um trabalho.', 409)
         if project['archived_at']:
             raise DomainError('Restaure o projeto antes de trabalhar nele.',409)
         if project['course_id'] is not None:

@@ -15,7 +15,8 @@ let courses = [],
   selectedId = Number(new URLSearchParams(location.search).get('course')) || null;
 let filter = '',
   status = '',
-  lastImport = '';
+  lastImport = '',
+  moduleOpen = new Map();
 const linkedTarget = new URLSearchParams(location.search);
 if (linkedTarget.get('archived') === '1') $('#show-archived').checked = true;
 const selected = () => courses.find(c => c.id === selectedId);
@@ -80,7 +81,7 @@ function drawRows() {
     ['check',done,'Concluídas ou dispensadas'],
     ['layers',all.filter(s=>s.academic_status==='in_progress').length,'Em andamento']
   ].map(([symbol,value,label])=>`<article class="metric-card">${icon(symbol)}<div><strong>${value}</strong><span>${label}</span></div></article>`).join('');
-  const groups=moduleGroups(rows);
+  const groups=moduleGroups(rows).sort((a,b)=>Number(a.rows.every(finished))-Number(b.rows.every(finished)));
   const cards=groups.map((g,i)=>{
     const n=g.rows.filter(finished).length;
     return `<a class="module-card" href="#module-${i}"><strong>${esc(g.name)}</strong><progress max="${g.rows.length}" value="${n}" aria-label="${esc(g.name)}: ${n} de ${g.rows.length} concluídas ou dispensadas"></progress><small>${n}/${g.rows.length} concluídas ou dispensadas</small></a>`;
@@ -90,9 +91,20 @@ function drawRows() {
     <section class="course-progress"><div><strong>Progresso acadêmico</strong><span>${done}/${all.length} concluídas ou dispensadas · ${Math.round(done/all.length*100)}%</span></div><progress max="${all.length}" value="${done}" aria-label="Progresso acadêmico"></progress></section>
 
     <details class="module-navigation"><summary>Ir para um bloco da grade · ${groups.length} ${groups.length===1?'bloco':'blocos'}${filter||status?' neste filtro':''}</summary><div class="module-grid">${cards}</div></details>
-    ${groups.map((g,i)=>`<section class="subject-module" id="module-${i}"><header><h3>${esc(g.name)}</h3><span>${g.rows.length} componente(s) · ${new Intl.NumberFormat('pt-BR').format(g.rows.reduce((n,r)=>n+(r.workload_minutes||0),0)/60)} h de carga</span></header><div class="table-scroll"><table class="subjects-table"><thead><tr><th>Disciplina</th><th>Situação</th><th>Carga</th><th>Ações</th></tr></thead><tbody>${g.rows.map(row).join('')}</tbody></table></div></section>`).join('')}
+    ${groups.map((g,i)=>{const complete=g.rows.every(finished),open=moduleOpen.has(g.name)?moduleOpen.get(g.name):!complete;return `<details class="subject-module" id="module-${i}" data-module-name="${esc(g.name)}" ${open?'open':''}><summary><strong>${esc(g.name)}</strong><span>${g.rows.length} disciplina(s) · ${g.rows.filter(finished).length} concluída(s) · ${new Intl.NumberFormat('pt-BR').format(g.rows.reduce((n,r)=>n+(r.workload_minutes||0),0)/60)} h</span></summary><div class="subject-module-content"><div class="table-scroll"><table class="subjects-table"><thead><tr><th>Disciplina</th><th>Situação</th><th>Carga</th><th>Ações</th></tr></thead><tbody>${g.rows.map(row).join('')}</tbody></table></div></div></details>`;}).join('')}
     <div class="catalog-footer">${rows.length} disciplina(s) · Carga da grade é uma referência, não tempo estudado.</div>` : `<div class="empty"><h2>${filter||status?'Nenhuma disciplina nesse filtro.':'Sua grade ainda está vazia.'}</h2><p>${filter||status?'Tente outro nome ou situação.':'Importe um PDF ou adicione a primeira disciplina. A prévia organiza os módulos antes de salvar.'}</p>${!filter&&!status&&!c.archived_at?`<button class="button primary" data-import>${icon('download')} Importar grade curricular</button>`:''}</div>`;
 }
+
+document.addEventListener('toggle', e => {
+  const section = e.target.closest('details.subject-module');
+  if (section) moduleOpen.set(section.dataset.moduleName, section.open);
+}, true);
+document.addEventListener('click', e => {
+  const link = e.target.closest('.module-card');
+  if (!link) return;
+  const target = document.querySelector(link.getAttribute('href'));
+  if (target?.matches('details.subject-module')) target.open = true;
+});
 
 async function saveCatalog(path, values, method = 'POST') {
   try { return await send(path, values, method); }

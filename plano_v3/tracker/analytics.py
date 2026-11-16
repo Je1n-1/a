@@ -3,7 +3,9 @@
 import csv
 import io
 from datetime import date, datetime, timedelta
+from . import timer
 from .domain import DomainError, LOCAL_ZONE, now
+from .sessions import split_interval
 
 
 def number(value, label, default=None, maximum=2147483647):
@@ -94,19 +96,88 @@ def totals(conn, f):
     )
 
 
+def active_focus(conn, f):
+    """Return the active timer's provisional focus split by local date."""
+    row = conn.execute("""SELECT t.*,s.name subject_name,s.course_id subject_course_id,
+        c.name course_name FROM timers t
+        LEFT JOIN subjects s ON s.id=t.subject_id
+        LEFT JOIN courses c ON c.id=COALESCE(s.course_id,t.project_course_id)
+        WHERE t.status IN ('running','paused') ORDER BY t.id LIMIT 1""").fetchone()
+    if not row:
+        return None
+    item = dict(row)
+    item["course_id"] = item["project_course_id"] if item["project_id"] else item["subject_course_id"]
+    state = timer.snapshot(conn, item["id"])
+    days = {}
+    for interval in conn.execute(
+        "SELECT kind,is_rest,started_at,ended_at FROM timer_intervals WHERE timer_id=? ORDER BY id",
+        (item["id"],),
+    ):
+        if interval["kind"] != "focus" or interval["is_rest"]:
+            continue
+        if interval["ended_at"] is None and state["recovery_required"]:
+            continue
+        end = interval["ended_at"] or state["server_now"]
+        for day, seconds in split_interval(interval["started_at"], end):
+            days[day] = days.get(day, 0) + seconds
+    return {"timer": item, "days": days}
+
+
+def live_matches(active, f):
+    if not active:
+        return False
+    item = active["timer"]
+    if f["course_id"] and item["course_id"] != f["course_id"]:
+        return False
+    if f["subject_id"] == "free" and (item["subject_id"] is not None or item["project_id"] is not None):
+        return False
+    if isinstance(f["subject_id"], int) and item["subject_id"] != f["subject_id"]:
+        return False
+    if f["topic_id"] == "none" and item["topic_id"] is not None:
+        return False
+    if isinstance(f["topic_id"], int) and item["topic_id"] != f["topic_id"]:
+        return False
+    if f["activity"] == "project" and item["project_id"] is None:
+        return False
+    if f["activity"] == "study" and item["project_id"] is not None:
+        return False
+    if f["project_id"] and item["project_id"] != f["project_id"]:
+        return False
+    if f["step_id"] and item["step_id"] != f["step_id"]:
+        return False
+    return True
+
+
+def _add_live_total(target, days, start, end):
+    seconds = sum(value for day, value in days.items() if start <= day <= end)
+    target["effective_seconds"] += seconds
+    target["active_seconds"] = seconds
+
+
+def _merge_live(rows, key, live_key, value):
+    keys = key if isinstance(key, tuple) else (key,)
+    live_values = live_key if isinstance(live_key, tuple) else (live_key,)
+    existing = next((item for item in rows if tuple(item.get(field) for field in keys) == live_values), None)
+    if existing is None:
+        rows.append(value)
+    else:
+        existing["effective_seconds"] += value["effective_seconds"]
+        existing["active_seconds"] = existing.get("active_seconds", 0) + value["effective_seconds"]
+
+
 def quick_summary(conn):
     f = filters({})
     today = date.fromisoformat(f["today"])
+    summary_today = totals(conn, {**f, "start": today.isoformat(), "end": today.isoformat()})
+    week_start = (today - timedelta(days=today.weekday())).isoformat()
+    summary_week = totals(conn, {**f, "start": week_start, "end": today.isoformat()})
+    active = active_focus(conn, f)
+    days = active["days"] if live_matches(active, f) else {}
+    _add_live_total(summary_today, days, today.isoformat(), today.isoformat())
+    _add_live_total(summary_week, days, week_start, today.isoformat())
     return {
-        "today": totals(conn, {**f, "start": today.isoformat(), "end": today.isoformat()}),
-        "week": totals(
-            conn,
-            {
-                **f,
-                "start": (today - timedelta(days=today.weekday())).isoformat(),
-                "end": today.isoformat(),
-            },
-        ),
+        "today": summary_today,
+        "week": summary_week,
         "timezone": f["timezone"],
     }
 
@@ -134,6 +205,10 @@ def report(conn, values):
     f = filters(values)
     period = totals(conn, f)
     today = date.fromisoformat(f["today"])
+    active = active_focus(conn, f)
+    active_item = active["timer"] if live_matches(active, f) else None
+    active_days = active["days"] if active_item else {}
+    _add_live_total(period, active_days, f["start"], f["end"])
     summary = {"period": period}
     for label, start in [
         ("today", today),
@@ -141,6 +216,7 @@ def report(conn, values):
         ("month", today.replace(day=1)),
     ]:
         summary[label] = totals(conn, {**f, "start": start.isoformat(), "end": today.isoformat()})
+        _add_live_total(summary[label], active_days, start.isoformat(), today.isoformat())
     clause, args = selection(f)
     existing = {
         r["date"]: dict(r)
@@ -156,7 +232,10 @@ def report(conn, values):
     by_day = []
     for offset in range((end - start).days + 1):
         key = (start + timedelta(days=offset)).isoformat()
-        by_day.append(existing.get(key, {"date": key, "effective_seconds": 0}))
+        live_seconds = active_days.get(key, 0)
+        by_day.append({**existing.get(key, {"date": key, "effective_seconds": 0}),
+                       "effective_seconds": existing.get(key, {}).get("effective_seconds", 0) + live_seconds,
+                       "active_seconds": live_seconds})
     clause, args = selection(f, labels=True)
     by_subject = [
         dict(r)
@@ -197,6 +276,43 @@ def report(conn, values):
     by_activity = [dict(r) for r in conn.execute(
         "SELECT x.project_id,x.subject_id,CASE WHEN x.project_id IS NOT NULL THEN 'Projeto · ' || COALESCE(p.name,x.project_name) WHEN x.subject_id IS NOT NULL THEN 'Disciplina · ' || s.name ELSE 'Estudo avulso' END name,CASE WHEN COUNT(DISTINCT COALESCE(c.id,0))=1 THEN MAX(c.name) ELSE 'Vínculos de curso diferentes' END course_name,SUM(d.effective_seconds) effective_seconds "
         + clause.replace(' WHERE ', ' LEFT JOIN projects p ON p.id=x.project_id WHERE ', 1) + " GROUP BY x.project_id,x.subject_id ORDER BY effective_seconds DESC,name", args)]
+    live_seconds = sum(value for day, value in active_days.items() if f["start"] <= day <= f["end"])
+    if active_item and live_seconds:
+        is_project = active_item["project_id"] is not None
+        subject_id = active_item["subject_id"]
+        project_id = active_item["project_id"]
+        course_name = active_item["course_name"]
+        topic_name = active_item["topic_name"] or "Sem tópico informado"
+        _merge_live(by_activity, ("project_id", "subject_id"), (project_id, subject_id), {
+            "project_id": project_id, "subject_id": subject_id,
+            "name": ("Projeto · " + (active_item["project_name"] or active_item["title"])) if is_project else ("Disciplina · " + active_item["title"] if subject_id else "Estudo avulso"),
+            "course_name": course_name or "Estudo avulso", "effective_seconds": live_seconds,
+        })
+        _merge_live(by_course, "course_id", active_item["course_id"], {
+            "course_id": active_item["course_id"], "name": course_name or "Estudo avulso", "effective_seconds": live_seconds,
+        })
+        if is_project:
+            _merge_live(by_project, "project_id", project_id, {
+                "project_id": project_id, "name": active_item["project_name"] or active_item["title"], "effective_seconds": live_seconds,
+            })
+            _merge_live(by_step, ("project_id", "step_id"), (project_id, active_item["step_id"]), {
+                "project_id": project_id, "step_id": active_item["step_id"],
+                "name": active_item["step_name"] or "Sem etapa informada",
+                "subject_name": active_item["project_name"] or active_item["title"], "effective_seconds": live_seconds,
+            })
+        else:
+            _merge_live(by_subject, "subject_id", subject_id, {
+                "subject_id": subject_id, "name": active_item["subject_name"] or "Estudo avulso",
+                "course_name": course_name, "effective_seconds": live_seconds,
+            })
+            topic_key = (active_item["topic_id"], topic_name, subject_id)
+            existing_topic = next((item for item in by_topic if (item.get("topic_id"), item["name"], item.get("subject_id")) == topic_key), None)
+            if existing_topic is None:
+                by_topic.append({"topic_id": active_item["topic_id"], "subject_id": subject_id,
+                    "name": topic_name, "subject_name": active_item["subject_name"],
+                    "course_name": course_name, "effective_seconds": live_seconds})
+            else:
+                existing_topic["effective_seconds"] += live_seconds
     pages = max(1, (period["sessions"] + f["page_size"] - 1) // f["page_size"])
     f["page"] = min(f["page"], pages)
     sql, args = history_query(f)

@@ -35,6 +35,8 @@ let subjects = [],
   routeGeneration = 0,
   routeContext = null,
   routeSubjectId = null,
+  summaryBase = {today: {effective_seconds: 0}, week: {effective_seconds: 0}},
+  summaryReceived = performance.now(),
   loaded = false;
 const picker = topicPicker($('#start-topics'), {allowBulk: true});
 const workPicker = projectPicker($('#project-choice'));
@@ -68,6 +70,16 @@ function tick() {
   $('#breaks').textContent = duration(pauses());
   $('#rests').textContent = duration(rests());
   $('#clock-progress').style.strokeDashoffset = String(898.5 * (1 - (seconds % 3600) / 3600));
+  paintLiveTotals();
+}
+
+function paintLiveTotals() {
+  const addsFocus = timer?.status === 'running' && !timer.rest_active && !timer.recovery_required && timer.open_interval?.kind === 'focus';
+  const extra = addsFocus ? Math.max(0, Math.floor((performance.now() - summaryReceived) / 1000)) : 0;
+  $('#today-total').textContent = clock(summaryBase.today.effective_seconds + extra);
+  $('#week-total').textContent = clock(summaryBase.week.effective_seconds + extra);
+  $('#today-total-note').textContent = summaryBase.today.active_seconds || extra ? 'Inclui relógio em andamento' : 'Tempo líquido concluído';
+  $('#week-total-note').textContent = summaryBase.week.active_seconds || extra ? 'Inclui relógio em andamento' : 'Segunda-feira até hoje';
 }
 
 function paint() {
@@ -118,8 +130,9 @@ function choices() {
   $('#start-button').disabled = false;
 }
 function paintRecent({summary: totals}) {
-  $('#today-total').textContent = clock(totals.today.effective_seconds);
-  $('#week-total').textContent = clock(totals.week.effective_seconds);
+  summaryBase = totals;
+  summaryReceived = performance.now();
+  paintLiveTotals();
 }
 async function recent() {
   paintRecent(await api('/today?catalog=0'));
@@ -136,11 +149,11 @@ async function refresh() {
     received = performance.now();
     if (changed) {
       paint();
-      await recent();
     } else {
       tick();
       publishTimer(timer);
     }
+    await recent();
     $('#connection-error').textContent = timer?.clock_error ? 'O horário do computador voltou no tempo. Corrija o relógio do sistema antes de continuar.' : '';
   } catch (error) {
     if (sequence === generation) $('#connection-error').textContent = error.message + ' O contador exibido é uma estimativa até reconectar.';
@@ -232,6 +245,7 @@ $('#start-form').onsubmit = async e => {
     }));
     operationKey = crypto.randomUUID();
     notifySessionChange();
+    await recent();
   } catch (error) {
     $('#timer-error').textContent = error.message;
     busy = false;
@@ -258,7 +272,7 @@ async function action(target, verb, values = {}) {
     if (verb === 'finish') toast('Sessão salva. Seu tempo ficou registrado.');
     if (verb === 'cancel') toast('Relógio descartado. Nenhum tempo somado ao histórico.');
     if (verb === 'recover') toast('Período confirmado. O relógio está pausado.');
-    if (verb === 'finish') await recent();
+    await recent();
   } catch (error) {
     if (error.status === 409) error.message += ' Se este formulário estiver aberto, feche-o e abra novamente com o estado atual.';
     $('#timer-error').textContent = error.message;
