@@ -103,15 +103,16 @@ export function topicPicker(container, {
   return picker;
 }
 
-export async function openTopics(subject = null, courseId = null) {
+export async function openTopics(subject = null, courseId = null, inlineRoot = null) {
   const query = subject ? 'subject_id=' + subject.id : 'review=1';
-  const el = dialog(subject ? 'Tópicos · ' + subject.name : 'Tópicos para revisão', '<div data-topic-list>Carregando…</div>', null);
-  const root = $('[data-topic-list]', el);
+  const el = inlineRoot ? null : dialog(subject ? 'Tópicos · ' + subject.name : 'Tópicos para revisão', '<div data-topic-list>Carregando…</div>', null);
+  const root = inlineRoot || $('[data-topic-list]', el);
   async function draw() {
     const rows = (await api('/topics?' + query)).filter(t => !courseId || t.course_id === courseId);
-    root.innerHTML = `${subject ? '<div data-add-topic class="topic-create"><label>Novo tópico<input name="name" required placeholder="Conteúdo a estudar"></label><button type="button" class="button secondary" data-create-topic>Adicionar</button></div><button type="button" class="button secondary" data-import-topics>Colar conteúdo para separar</button>' : ''}<p class="field-help">Concluir e precisar de revisão são escolhas independentes. Os tempos abaixo incluem apenas sessões finalizadas.</p><p data-error class="form-error" role="alert"></p>${rows.length ? rows.map(t => `<article class="topic-item"><strong>${esc(t.name)}</strong>${!subject ? `<small>${esc(t.subject_name)} · ${esc(t.course_name)}</small>` : ''}<small>${clock(t.effective_seconds)} registrados · ${t.sessions} sessão(ões)</small><div class="topic-controls"><label class="check-line"><input type="checkbox" data-topic-id="${t.id}" data-field="completed" ${t.completed ? 'checked' : ''}> Concluído</label><label class="check-line"><input type="checkbox" data-topic-id="${t.id}" data-field="needs_review" ${t.needs_review ? 'checked' : ''}> Precisa de revisão</label><a class="button secondary small" href="/?subject=${t.subject_id}&topic=${t.id}&kind=${t.needs_review ? 'review' : 'study'}">${t.needs_review ? 'Revisar' : 'Estudar'}</a>${subject?`<button type="button" class="inline-link" data-split-topic="${t.id}">Separar este texto</button>`: ''}</div></article>`).join('') : '<p>Nenhum tópico nesta lista.</p>'}`;
+    root.innerHTML = `${subject ? `<header class="topic-manager-head"><div><h3>Tópicos de estudo</h3><p class="field-help">Adicione conteúdo individual ou importe o cronograma do PDF para revisar antes de salvar.</p></div><button type="button" class="button secondary" data-import-topics>Importar tópicos / PDF</button></header><div data-add-topic class="topic-create"><label>Novo tópico<input name="name" required maxlength="200" placeholder="Conteúdo a estudar"></label><button type="button" class="button primary" data-create-topic>Adicionar tópico</button></div>` : ''}<div data-topic-workspace>${subject ? '<p class="field-help">Concluir e precisar de revisão são escolhas independentes. Os tempos abaixo incluem apenas sessões finalizadas.</p>' : ''}<p data-error class="form-error" role="alert"></p>${rows.length ? rows.map(t => `<article class="topic-item"><strong>${esc(t.name)}</strong>${!subject ? `<small>${esc(t.subject_name)} · ${esc(t.course_name)}</small>` : ''}<small>${clock(t.effective_seconds)} registrados · ${t.sessions} sessão(ões)</small><div class="topic-controls"><label class="check-line"><input type="checkbox" data-topic-id="${t.id}" data-field="completed" ${t.completed ? 'checked' : ''}> Concluído</label><label class="check-line"><input type="checkbox" data-topic-id="${t.id}" data-field="needs_review" ${t.needs_review ? 'checked' : ''}> Precisa de revisão</label><a class="button secondary small" href="/?subject=${t.subject_id}&topic=${t.id}&kind=${t.needs_review ? 'review' : 'study'}">${t.needs_review ? 'Revisar' : 'Estudar'}</a>${subject?`<button type="button" class="inline-link" data-split-topic="${t.id}">Separar este texto</button>`: ''}</div></article>`).join('') : '<p class="muted">Nenhum tópico cadastrado para esta disciplina.</p>'}</div>`;
+    const workspace = $('[data-topic-workspace]', root);
     function split(text = '') {
-      topicImport(root, subject.id, {text, onBack: draw, onSaved: draw});
+      topicImport(workspace, subject.id, {text, onBack: draw, onSaved: draw});
     }
     $('[data-import-topics]', root)?.addEventListener('click', () => split());
     root.querySelectorAll('[data-split-topic]').forEach(button => {
@@ -125,22 +126,22 @@ export async function openTopics(subject = null, courseId = null) {
       try {
         await send('/topics', {
           subject_id: subject.id,
-          name: $('[data-add-topic] input', root).value
+          name: $('[data-add-topic] input', root).value.trim()
         });
         await draw();
         toast('Tópico disponível.');
       } catch (error) {
-        $('[data-error]', root).textContent = error.message;
+        $('[data-error]', workspace).textContent = error.message;
         button.disabled = false;
       }
     });
-    root.onchange = async e => {
+    workspace.onchange = async e => {
       const input = e.target.closest('[data-topic-id]');
       if (!input) return;
       const topic = rows.find(t => t.id === Number(input.dataset.topicId));
       const field = input.dataset.field,
         desired = input.checked;
-      root.querySelectorAll('input,button').forEach(x => x.disabled = true);
+      workspace.querySelectorAll('input,button').forEach(x => x.disabled = true);
       try {
         const saved = await send('/topics/' + topic.id, {
           version: topic.version,
@@ -151,8 +152,8 @@ export async function openTopics(subject = null, courseId = null) {
         toast('Tópico atualizado.');
       } catch (error) {
         input.checked = !!topic[field];
-        $('[data-error]', root).textContent = error.message;
-        root.querySelectorAll('input,button').forEach(x => x.disabled = false);
+        $('[data-error]', workspace).textContent = error.message;
+        workspace.querySelectorAll('input,button').forEach(x => x.disabled = false);
       }
     };
   }
@@ -161,4 +162,5 @@ export async function openTopics(subject = null, courseId = null) {
   } catch (error) {
     root.textContent = error.message;
   }
+  return el;
 }

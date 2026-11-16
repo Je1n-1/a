@@ -1,4 +1,11 @@
 /* Curriculum groups remain intact; course selection is local to the library. */
+.subject-topic-section{margin-top:28px;padding-top:22px;border-top:1px solid var(--border)}
+.topic-manager-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:14px}
+.topic-manager-head h3{margin:0 0 5px;font-size:18px}
+.topic-manager-head p{margin:0}
+.subject-topic-section .topic-create{padding:14px;background:var(--panel2);border:1px solid var(--border);border-radius:10px}
+.subject-topic-section [data-topic-workspace]{margin-top:16px}
+.subject-topic-section .topic-import-row{background:var(--panel)}
 .subject-name-link{display:block;padding:0;border:0;background:none;color:var(--text);font-weight:650;text-align:left;cursor:pointer}.subject-name-link:hover{color:var(--accent-text);text-decoration:underline;text-underline-offset:3px}.subject-detail{padding:24px}.subject-detail-head{display:grid;gap:8px}.subject-detail-head h2{font-size:28px;margin:0}.subject-detail-head .eyebrow{margin:10px 0 0}.subject-detail-facts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin:24px 0;padding:18px 0;border-block:1px solid var(--border)}.subject-detail-facts small{display:block;color:var(--muted);font-size:11px;margin-bottom:5px}.subject-detail-facts strong{font-size:15px}.subject-detail-notes{padding:14px;background:var(--panel2);border-radius:8px;white-space:pre-wrap}.subject-detail .actions{margin-top:20px}
 .page-subjects .dashboard-heading #subject-metrics{display:none}
 .page-subjects .dashboard-heading{display:block;margin:8px 0 28px}
@@ -24,5 +31,6 @@
 @media(max-width:800px){.subjects-table,.subjects-table tbody,.subjects-table tr,.subjects-table td{display:block;width:100%}.subjects-table thead{display:none}.subjects-table tr{border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:12px;background:var(--panel2)}.subjects-table td{border:0!important;border-radius:0!important;min-width:0!important;padding:10px 16px}.subjects-table td:first-child{width:100%;padding-top:18px}.subjects-table td:last-child{padding-bottom:16px}.subjects-table td[data-label]{display:flex;align-items:center;gap:16px}.subjects-table td[data-label]::before{content:attr(data-label);color:var(--muted);font-size:12px;min-width:105px}.subjects-table .quick-status{width:auto;flex:1}.catalog-toolbar input{flex-basis:100%}.catalog-toolbar select{flex:1}.catalog-header,#subject-results{padding-inline:18px}.catalog-toolbar{padding:16px 18px}}
 @media(max-width:400px){.catalog-header .actions{gap:6px}.catalog-toolbar .button{width:100%}}
 @media(max-width:600px){.subject-detail{padding:18px}.subject-detail-facts{grid-template-columns:1fr;gap:10px}}
+@media(max-width:600px){.topic-manager-head{flex-direction:column}.subject-topic-section .topic-create{align-items:stretch;flex-direction:column}.subject-topic-section .topic-create .button{width:100%}}
 .subject-module>summary{align-items:flex-start}.subject-module>summary span{max-width:62%}
 .row-action-menu{position:static}.row-action-menu>div{position:static;min-width:140px;margin-top:6px;padding:8px;background:var(--panel);border:1px solid var(--border);border-radius:8px}

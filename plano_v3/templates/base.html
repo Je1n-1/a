@@ -20,7 +20,7 @@
   <div class="header-tools"><button class="icon-button" id="theme-toggle" type="button" aria-label="Ativar tema claro" title="Ativar tema claro" aria-pressed="false">{{ icon('sun') }}</button><button class="icon-button" id="diagnostics" type="button" aria-label="Backup e armazenamento" title="Backup e armazenamento">{{ icon('database') }}</button></div>
  </div></header>
  <main id="main" tabindex="-1"><div class="topbar"><span class="date-context">{{ icon('calendar') }}<span id="date-label"></span></span><span class="quiet">Seu tempo, com intenção.</span></div>{% block content %}{% endblock %}
- <footer><a class="footer-brand" href="/">plano<span>.</span></a><button type="button" class="text-button" data-storage>Backup e armazenamento</button><span>Dados neste computador.</span></footer></main>
+ </main>
  <div id="notifications" role="status" aria-live="polite"></div><dialog id="common-dialog"></dialog>
  <script type="module" src="{{ asset('js/shared.js') }}"></script>{% block scripts %}{% endblock %}
 </body></html>

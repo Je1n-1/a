@@ -63,6 +63,13 @@
 .import-module .import-row{border-radius:0;margin:0;border-top:0}
 .topic-import-row{border:1px solid var(--border);border-radius:10px;padding:14px;margin:12px 0}
 .topic-import-row label{margin-bottom:8px}
+.topic-import-source{display:grid;grid-template-columns:minmax(0,1fr) minmax(220px,.7fr);gap:12px;align-items:end;border:1px solid var(--border);border-radius:10px;padding:14px;margin:14px 0;background:var(--panel)}
+.topic-import-source>div:first-child{grid-column:1/-1}
+.topic-import-source h3,.topic-import-source p{margin:0 0 5px}
+.topic-import-source .actions{margin:0;align-self:end}
+.topic-import-source details{grid-column:1/-1}
+.topic-import-source summary{cursor:pointer;color:var(--accent-text)}
+.topic-import-source pre{white-space:pre-wrap;max-height:220px;overflow:auto;padding:12px;background:var(--field);border:1px solid var(--border);border-radius:8px;color:var(--text);font:inherit;font-size:.9rem}
 @media(max-width:1150px){
 .import-fields{grid-template-columns:2fr 1fr 1fr}
 }
@@ -71,6 +78,9 @@
 .import-fields label:first-child{grid-column:1/-1}
 .import-summary{align-items:flex-start;flex-direction:column}
 .import-dialog{padding:16px}
+.topic-import-source{grid-template-columns:1fr}
+.topic-import-source>div:first-child,.topic-import-source details{grid-column:auto}
+.topic-import-source .actions{flex-wrap:wrap}
 .dialog-grid{grid-template-columns:1fr}
 .dialog-grid .wide{grid-column:auto}
 .import-rows{max-height:45vh}

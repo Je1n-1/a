@@ -35,21 +35,32 @@ let subjects = [],
   routeGeneration = 0,
   routeContext = null,
   routeSubjectId = null,
+  queueOpen = new Map(),
   summaryBase = {today: {effective_seconds: 0}, week: {effective_seconds: 0}},
   summaryReceived = performance.now(),
   loaded = false;
 const picker = topicPicker($('#start-topics'), {allowBulk: true});
 const workPicker = projectPicker($('#project-choice'));
 const isProject = () => $('#activity-kind').value === 'project';
+function updateStartAvailability() {
+  if (isProject()) {
+    const project = $('#project-choice [data-project]');
+    $('#start-button').disabled = !project?.value || !!project?.disabled;
+  } else {
+    $('#start-button').disabled = !$('#today-subject').value;
+  }
+}
 function activityMode() {
   $('#study-choice').hidden = isProject();
   $('#project-choice').hidden = !isProject();
   $('#study-choice').querySelectorAll('input,select,button').forEach(x=>x.disabled=isProject());
   $('#project-choice').querySelectorAll('input,select').forEach(x=>x.disabled=!isProject());
   $('#start-button').innerHTML = icon('play') + (isProject()?' Iniciar trabalho':' Iniciar estudo');
+  updateStartAvailability();
 }
-$('#activity-kind').onchange = async () => {activityMode();operationKey=crypto.randomUUID();if(isProject())await workPicker.load();else await prepareTopic();};
+$('#activity-kind').onchange = async () => {activityMode();operationKey=crypto.randomUUID();if(isProject())await workPicker.load();else await prepareTopic();updateStartAvailability();};
 activityMode();
+$('#project-choice').addEventListener('change',updateStartAvailability);
 const liveSeconds = () => Math.max(0, Math.floor((performance.now() - received) / 1000));
 const elapsed = () => timer ? timer.effective_seconds + (timer.status === 'running' ? liveSeconds() : 0) : 0;
 const pauses = () => timer ? timer.break_seconds + (timer.status === 'paused' && !timer.rest_active ? liveSeconds() : 0) : 0;
@@ -107,27 +118,38 @@ function choices() {
   const course = $('#today-course').value,
     previous = $('#today-subject').value;
   const q = $('#today-search').value.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
-  const rows = subjects.filter(s => (!course || s.course_id === Number(course)) && (s.name + ' ' + s.course_name).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().includes(q));
+  const rows = subjects.filter(s => (!course || s.course_id === Number(course)) && [s.name,s.code,s.period,s.course_name].join(' ').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().includes(q));
   const groups = [
-    {label: 'Em andamento', rows: []},
-    {label: 'Para revisar', rows: []},
-    {label: 'Concluídas', rows: []},
-    {label: 'Outras disciplinas', rows: []}
+    {key:'in_progress', label:'Em andamento', rows:[]},
+    {key:'review', label:'Para revisar', rows:[]},
+    {key:'not_started', label:'Não iniciadas', rows:[]},
+    {key:'completed', label:'Concluídas', rows:[]}
   ];
   for (const s of rows) {
-    const group = s.academic_status === 'in_progress' ? 0 : reviewSubjects.has(s.id) ? 1 : s.academic_status === 'completed' ? 2 : 3;
-    groups[group].rows.push(s);
+    const index = s.academic_status === 'in_progress' ? 0
+      : reviewSubjects.has(s.id) ? 1
+      : ['completed','exempted'].includes(s.academic_status) ? 3 : 2;
+    groups[index].rows.push(s);
   }
   for (const group of groups) group.rows.sort((a,b) => a.name.localeCompare(b.name, 'pt-BR') || a.course_name.localeCompare(b.course_name, 'pt-BR') || a.id-b.id);
-  $('#today-subject').innerHTML = '<option value="">Selecione uma disciplina</option>' + groups.filter(g => g.rows.length).map(g => `<optgroup label="${g.label} (${g.rows.length})">${g.rows.map(s => `<option value="${s.id}">${esc(s.name)}${!course?' · '+esc(s.course_name):''}${g.label==='Outras disciplinas'?' · '+esc(labels[s.academic_status]):''}${reviewSubjects.has(s.id)?(s.academic_status==='completed'?' · Concluída, revisão pendente':' · Revisão pendente'):''}</option>`).join('')}</optgroup>`).join('') + '<option value="free">Estudo avulso</option>';
-  if ([...$('#today-subject').options].some(o => o.value === previous)) $('#today-subject').value = previous;
-  const suggestion = groups.find(g => g.rows.length);
-  const best = suggestion?.rows[0];
-  $('#subject-suggestion').hidden = !best || !!$('#today-subject').value;
-  $('#subject-suggestion').innerHTML = best ? `<span class="eyebrow">SUGESTÃO · ${esc(suggestion.label)}</span><button type="button" class="button secondary full" data-suggest="${best.id}">${esc(best.name)}${!course?`<small>${esc(best.course_name)}</small>`:''}</button><small>Selecionar prepara o estudo. O relógio só começa ao clicar em Iniciar estudo.</small>` : '';
-  $('#subject-choice-help').textContent = rows.length ? 'Prioridade: em andamento → revisão pendente → concluídas. As demais ficam em Outras disciplinas.' : 'Nenhuma disciplina corresponde à busca. Altere os filtros ou escolha Estudo avulso.';
+  $('#today-subject').innerHTML = '<option value="">Escolha uma disciplina</option>' + subjects.map(s=>`<option value="${s.id}">${esc(s.name)} · ${esc(s.course_name)}</option>`).join('') + '<option value="free">Estudo avulso</option>';
+  $('#today-subject').value = previous;
+  const currentSubject=subjects.find(s=>s.id===Number(previous));
+  if(previous&&previous!=='free'&&(!currentSubject||(course&&currentSubject.course_id!==Number(course))))$('#today-subject').value='';
+  const selected = subjects.find(s=>s.id===Number($('#today-subject').value));
+  $('#selected-subject-name').textContent = selected?.name || ($('#today-subject').value==='free'?'Estudo avulso':'Nenhuma disciplina');
+  $('#selected-subject-course').textContent = selected?.course_name || ($('#today-subject').value==='free'?'Sessão sem vínculo com disciplina':'Escolha uma disciplina na fila abaixo.');
+  $('#subject-queue').innerHTML = (rows.length ? groups.filter(g=>g.rows.length).map((g,index)=>{
+    const open=queueOpen.has(g.key)?queueOpen.get(g.key):index===0;
+    return `<details class="queue-group" data-queue-group="${g.key}" ${open?'open':''}><summary><span>${esc(g.label)}</span><small>${g.rows.length} ${g.rows.length===1?'disciplina':'disciplinas'}</small></summary><div class="queue-items">${g.rows.map(s=>`<button type="button" class="queue-subject ${Number($('#today-subject').value)===s.id?'selected':''}" data-queue-subject="${s.id}" aria-pressed="${Number($('#today-subject').value)===s.id}"><strong>${esc(s.name)}</strong><span>${esc(s.course_name)}${s.period?' · '+esc(s.period):''}</span>${g.key==='review'||reviewSubjects.has(s.id)?'<small>Revisão pendente</small>':g.key==='not_started'||g.key==='completed'?`<small>${esc(labels[s.academic_status]||'Não iniciada')}</small>`:''}</button>`).join('')}</div></details>`;
+  }).join('') : `<p class="queue-empty">Nenhuma disciplina encontrada. Ajuste a busca ou o curso selecionado.</p>`) + `<button type="button" class="queue-subject queue-free ${$('#today-subject').value==='free'?'selected':''}" data-queue-free aria-pressed="${$('#today-subject').value==='free'}"><strong>Estudo avulso</strong><span>Registrar tempo sem vínculo com uma disciplina</span></button>`;
+  $('#subject-choice-help').textContent = $('#today-subject').value==='free'
+    ? 'Estudo avulso selecionado. O nome é opcional; clique em Iniciar estudo para começar a contar.'
+    : selected
+      ? 'Foco pronto. Se quiser, escolha um tópico ou roteiro; depois clique em Iniciar estudo.'
+      : 'Escolha uma disciplina na fila para habilitar o início do relógio.';
   $('#free-label').hidden = $('#today-subject').value !== 'free';
-  $('#start-button').disabled = false;
+  updateStartAvailability();
 }
 function paintRecent({summary: totals}) {
   summaryBase = totals;
@@ -216,15 +238,20 @@ async function prepareRouteTopics(selectedTopic = '', sessionKind = 'study') {
 }
 $('#today-route').onchange=()=>prepareRouteTopics();
 $('#today-subject').onchange = () => {
-  $('#subject-suggestion').hidden = !!$('#today-subject').value;
+  choices();
   $('#free-label').hidden = $('#today-subject').value !== 'free';
   operationKey = crypto.randomUUID();
   prepareTopic();
 };
-$('#subject-suggestion').onclick = e => {
-  const id = e.target.closest('[data-suggest]')?.dataset.suggest;
-  if (!id) return;
-  $('#today-subject').value = id;
+$('#subject-queue').addEventListener('toggle', e=>{
+  const group=e.target.closest('details.queue-group');
+  if(group)queueOpen.set(group.dataset.queueGroup,group.open);
+},true);
+$('#subject-queue').onclick = e => {
+  const button=e.target.closest('[data-queue-subject]');
+  if(button)$('#today-subject').value=button.dataset.queueSubject;
+  else if(e.target.closest('[data-queue-free]'))$('#today-subject').value='free';
+  else return;
   $('#today-subject').dispatchEvent(new Event('change'));
 };
 $('#start-form').onsubmit = async e => {
@@ -404,9 +431,9 @@ async function init() {
       }
       if (wanted && [...$('#today-subject').options].some(o => o.value === wanted)) {
         $('#today-subject').value = wanted;
-        $('#subject-suggestion').hidden = true;
         $('#free-title').value = params.get('title') || '';
         $('#free-label').hidden = wanted !== 'free';
+        choices();
       }
       await prepareRouteTopics(params.get('topic'), params.get('kind') === 'review' ? 'review' : 'study');
       init.prepared = true;

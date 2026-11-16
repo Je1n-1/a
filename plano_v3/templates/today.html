@@ -1,7 +1,7 @@
 {% extends 'base.html' %}
 {% block content %}
 <section class="today-hero">
- <header class="page-heading"><div><p class="eyebrow">SEU ESPAÇO DE ESTUDO</p><h1>Bom estudo<span>.</span></h1><p class="muted">Escolha seu foco. Registre o tempo que você dedica a aprender.</p></div><button class="button secondary" id="manual-session">{{ icon('plus') }} Registrar estudo</button></header>
+ <header class="page-heading"><div><p class="eyebrow">SEU ESPAÇO DE ESTUDO</p><h1>Bom estudo<span>.</span></h1><p class="muted">Escolha seu foco. Registre o tempo que você dedica a aprender.</p></div><button class="button secondary" id="manual-session">{{ icon('plus') }} Registrar tempo passado</button></header>
  <div class="today-totals" aria-label="Tempo de estudo concluído">
   <article class="metric-card">{{ icon('clock') }}<div><span>Registrado hoje</span><strong id="today-total">—</strong><small id="today-total-note">Tempo líquido</small></div></article>
   <article class="metric-card">{{ icon('chart') }}<div><span>Nesta semana</span><strong id="week-total">—</strong><small id="week-total-note">Segunda-feira até hoje</small></div></article>
@@ -26,9 +26,10 @@
     <div id="project-choice" hidden></div>
     <div id="study-choice">
      <label>Curso<select id="today-course"><option value="">Todos os cursos</option></select></label>
-     <label>Buscar disciplina<input id="today-search" type="search" placeholder="Nome da disciplina ou curso"></label>
-     <div id="subject-suggestion" class="subject-suggestion" hidden></div>
-     <label class="subject-choice-label">Disciplina<select id="today-subject" required aria-describedby="subject-choice-help"><option value="">Carregando…</option></select></label>
+     <label>Buscar disciplina<input id="today-search" type="search" placeholder="Nome, código ou curso"></label>
+     <div class="subject-selected" aria-live="polite"><span>Foco selecionado</span><strong id="selected-subject-name">Nenhuma disciplina</strong><small id="selected-subject-course">Escolha uma opção na fila abaixo.</small></div>
+     <select id="today-subject" class="visually-hidden" tabindex="-1" aria-hidden="true"><option value="">Escolha uma disciplina na fila</option></select>
+     <div id="subject-queue" class="subject-queue" aria-label="Disciplinas organizadas por prioridade" aria-live="polite"></div>
      <p id="subject-choice-help" class="field-help"></p>
      <label id="today-route-wrap" hidden>Roteiro<select id="today-route" aria-label="Roteiro de estudo"></select></label>
      <p id="today-route-help" class="field-help" hidden></p>

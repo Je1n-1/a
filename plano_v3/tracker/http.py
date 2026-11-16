@@ -231,6 +231,15 @@ def topic_preview(conn, ident):
     return topics.preview(conn, ident, body())
 
 
+@api.post("/subjects/<int:ident>/topics/pdf-preview")
+@endpoint()
+def topic_pdf_preview(conn, ident):
+    upload = request.files.get("file")
+    if not upload or not upload.filename:
+        raise DomainError("Escolha o PDF da disciplina.")
+    return topics.preview_pdf(conn, ident, upload.filename, upload.read())
+
+
 @api.post("/subjects/<int:ident>/topics/confirm")
 @endpoint(True)
 def topic_confirm(conn, ident):
